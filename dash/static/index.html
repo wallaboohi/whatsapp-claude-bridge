@@ -16,7 +16,7 @@
     <h1 data-en="WhatsApp ↔ Claude">ווצאפ ↔ Claude</h1>
     <span class="ver-chip" id="verChip" title="">v—</span>
   </div>
-  <div class="sys-chips" id="sysChips" aria-label="מצב המערכת"></div>
+  <div class="sys-chips" id="sysChips" aria-label="מצב המערכת" data-en-aria="System status"></div>
   <div class="top-actions">
     <div class="pop-wrap">
       <button class="schip mode-chip" id="modeBtn" aria-expanded="false" aria-controls="modePop"><span id="modeBadge">📝 טיוטות בלבד</span> ▾</button>
@@ -27,36 +27,33 @@
       </div>
     </div>
     <div class="search-wrap">
-      <button class="icon-btn" id="searchBtn" aria-label="חיפוש בכל ההיסטוריה" aria-expanded="false" aria-controls="searchBox" title="חיפוש בכל ההיסטוריה (Ctrl+K)">
+      <button class="icon-btn" id="searchBtn" aria-label="חיפוש בכל ההיסטוריה" data-en-aria="Search all history" aria-expanded="false" aria-controls="searchBox" title="חיפוש בכל ההיסטוריה (Ctrl+K)" data-en-title="Search all history (Ctrl+K)">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2a8 8 0 1 0 4.9 14.3l5.4 5.4 1.4-1.4-5.4-5.4A8 8 0 0 0 10 2zm0 2a6 6 0 1 1 0 12 6 6 0 0 1 0-12z"/></svg>
       </button>
       <div class="search-box" id="searchBox" hidden>
         <input id="searchInp" type="search" role="combobox" aria-expanded="false" aria-controls="searchList" aria-autocomplete="list" autocomplete="off"
-               placeholder="חפש בכל השיחות: מילה, שם, חלק ממילה…" aria-label="חיפוש">
-        <ul id="searchList" role="listbox" aria-label="תוצאות חיפוש"></ul>
+               placeholder="חפש בכל השיחות: מילה, שם, חלק ממילה…" data-en-ph="Search all chats: word, name, part of a word…" aria-label="חיפוש" data-en-aria="Search">
+        <ul id="searchList" role="listbox" aria-label="תוצאות חיפוש" data-en-aria="Search results"></ul>
       </div>
     </div>
     <span class="stamp" id="updated" aria-live="polite"></span>
-    <button class="icon-btn lang-btn" id="langBtn" aria-label="Language / שפה" title="English / עברית">EN</button>
-    <button class="icon-btn" id="themeBtn" aria-label="החלף ערכת צבעים" title="בהיר / כהה">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/></svg>
-    </button>
+    <button class="btn small set-open" id="settingsBtn" aria-haspopup="dialog" aria-controls="settings"><span aria-hidden="true">⚙️</span> <span data-en="Settings">הגדרות</span></button>
   </div>
 </header>
 
-<nav class="tabbar" id="tabbar" aria-label="שיחות עם Claude">
-  <div class="tabs" id="tabs" role="tablist" aria-label="שיחות"></div>
+<nav class="tabbar" id="tabbar" aria-label="שיחות עם Claude" data-en-aria="Conversations with Claude">
+  <div class="tabs" id="tabs" role="tablist" aria-label="שיחות" data-en-aria="Conversations"></div>
   <button class="tab add" id="tabAdd" aria-haspopup="dialog" aria-controls="addPop">➕ חבר קבוצה</button>
   <span class="presence" id="presence" aria-live="polite"></span>
-  <div class="addpop" id="addPop" hidden role="dialog" aria-label="חיבור קבוצה">
-    <h3>חבר האזנה לקבוצת ווצאפ</h3>
-    <p class="note tight">בחר קבוצה קיימת או צור חדשה. לכל קבוצה יהיו סשן, הוראות, מודל ותקרה משלה. אני אענה רק להודעות שלך בה.</p>
-    <div class="row tight"><label for="addPurpose">מטרה:</label>
-      <select id="addPurpose" class="btn small sel"><option value="dev">פיתוח הגשר והכלי</option><option value="general" selected>כללית</option><option value="4m">עבודת 4M</option></select></div>
-    <ul class="avail" id="availList" aria-label="קבוצות זמינות"></ul>
-    <div class="row tight"><input id="newGrpName" type="text" maxlength="100" placeholder="או: שם לקבוצה חדשה (רק אתה בה)" aria-label="שם לקבוצה חדשה" style="flex:1">
-      <button class="btn small primary" id="newGrpBtn">➕ צור וחבר</button></div>
-    <div class="row tight"><button class="btn small ghost" id="addClose">סגור</button></div>
+  <div class="addpop" id="addPop" hidden role="dialog" aria-label="חיבור קבוצה" data-en-aria="Connect a group">
+    <h3 data-en="Listen to a WhatsApp group">חבר האזנה לקבוצת ווצאפ</h3>
+    <p class="note tight" data-en="Pick an existing group or create a new one. Each group gets its own session, instructions, model and cap. I answer only your messages there.">בחר קבוצה קיימת או צור חדשה. לכל קבוצה יהיו סשן, הוראות, מודל ותקרה משלה. אני אענה רק להודעות שלך בה.</p>
+    <div class="row tight"><label for="addPurpose" data-en="Purpose:">מטרה:</label>
+      <select id="addPurpose" class="btn small sel"><option value="dev" data-en="Developing the bridge">פיתוח הגשר והכלי</option><option value="general" selected data-en="General">כללית</option><option value="4m" data-en="4M work">עבודת 4M</option></select></div>
+    <ul class="avail" id="availList" aria-label="קבוצות זמינות" data-en-aria="Available groups"></ul>
+    <div class="row tight"><input id="newGrpName" type="text" maxlength="100" placeholder="או: שם לקבוצה חדשה (רק אתה בה)" data-en-ph="Or: a name for a new group (only you in it)" aria-label="שם לקבוצה חדשה" style="flex:1">
+      <button class="btn small primary" id="newGrpBtn" data-en="➕ Create & connect">➕ צור וחבר</button></div>
+    <div class="row tight"><button class="btn small ghost" id="addClose" data-en="Close">סגור</button></div>
   </div>
 </nav>
 
@@ -73,7 +70,7 @@
     <div class="tl-wrap">
       <div class="timeline" id="timeline" role="img" aria-label="זמינות החיבור ב-24 השעות האחרונות"></div>
       <div class="tl-axis" id="tlAxis"></div>
-      <div class="tl-legend"><span><i class="lg on"></i>מחובר</span><span><i class="lg off"></i>מנותק</span><span><i class="lg na"></i>אין נתונים</span><span>24 שעות אחרונות · רחף מעל מקטע לפרטים</span></div>
+      <div class="tl-legend"><span><i class="lg on"></i><span data-en="Connected">מחובר</span></span><span><i class="lg off"></i><span data-en="Disconnected">מנותק</span></span><span><i class="lg na"></i><span data-en="No data">אין נתונים</span></span><span data-en="Last 24 hours · hover a segment for details">24 שעות אחרונות · רחף מעל מקטע לפרטים</span></div>
     </div>
     <div class="tl-tip" id="tlTip" role="tooltip" hidden></div>
   </section>
@@ -101,102 +98,37 @@
       </div>
       <div class="attach-row" id="attachRow" hidden></div>
       <form class="composer" id="composer" autocomplete="off">
-        <textarea id="say" rows="1" placeholder="המשך את השיחה עם הכלי… (Enter לשליחה, Shift+Enter לשורה חדשה)" aria-label="הודעה לכלי"></textarea>
+        <textarea id="say" rows="1" placeholder="המשך את השיחה עם הכלי… (Enter לשליחה, Shift+Enter לשורה חדשה)" aria-label="הודעה לכלי" data-en-aria="Message to the tool"></textarea>
         <button class="btn primary" id="sayBtn" type="submit" data-en="Send">שלח</button>
       </form>
       <div class="composer-opts" id="composerOpts">
-        <button type="button" class="btn small" id="attachBtn" title="צרף קובץ או תמונה (אפשר גם להדביק Ctrl+V או לגרור)">📎 צרף</button>
+        <button type="button" class="btn small" id="attachBtn" title="צרף קובץ או תמונה (אפשר גם להדביק Ctrl+V או לגרור)" data-en-title="Attach a file or image (or paste Ctrl+V / drag)" data-en="📎 Attach">📎 צרף</button>
         <input type="file" id="fileInp" multiple hidden>
-        <label class="chk" id="syncLbl" title="כשמסומן, ההודעה והתשובה נשלחות גם לקבוצה בווצאפ (ובנייד תראה אותן). כשלא — הכול נשאר כאן, והשיחה ממשיכה מהנייד מאותה נקודה."><input type="checkbox" id="syncChk"> שלח גם לווצאפ</label>
-        <button type="button" class="btn small danger-soft" id="stopBtn" hidden>⛔ עצור</button>
+        <label class="chk" id="syncLbl" title="כשמסומן, ההודעה והתשובה נשלחות גם לקבוצה בווצאפ (ובנייד תראה אותן). כשלא — הכול נשאר כאן, והשיחה ממשיכה מהנייד מאותה נקודה." data-en-title="When checked, the message and answer also go to the WhatsApp group. Otherwise everything stays here and the phone continues from the same point."><input type="checkbox" id="syncChk"> <span data-en="Also send to WhatsApp">שלח גם לווצאפ</span></label>
+        <button type="button" class="btn small danger-soft" id="stopBtn" hidden data-en="⛔ Stop">⛔ עצור</button>
         <span class="note" id="sendHint"></span>
       </div>
     </section>
 
-    <!-- side rail: compact tools -->
-    <aside class="rail" aria-label="כלים">
-      <section class="card compact" aria-labelledby="h-machines">
-        <div class="card-head"><h2 id="h-machines" data-en="Computers">מחשבים</h2></div>
-        <div id="machines" class="machines"><p class="note tight">…</p></div>
+    <!-- side rail: only what is used every day -->
+    <aside class="rail" aria-label="כלים" data-en-aria="Tools">
+      <section class="card compact model-box" id="modelBox" aria-labelledby="h-model">
+        <div class="card-head"><h2 id="h-model" data-en="Claude model">מודל Claude</h2><button class="mb-toggle" id="mbToggle" aria-expanded="true" title="מזער / הרחב" data-en-title="Minimize / expand">▾ מזער</button></div>
+        <p class="note tight" id="modelNow"></p>
+        <select id="modelSel" class="btn sel" aria-label="בחירת מודל" data-en-aria="Choose model"></select>
+        <p class="note tight" id="modelTip"></p>
+        <p class="note tight" id="modelRec"></p>
       </section>
 
-      <section class="card compact" aria-labelledby="h-ctl">
-        <div class="card-head"><h2 id="h-ctl" data-en="Control">שליטה</h2><span class="chip warn-chip" id="pausedChip" hidden>⏸</span></div>
-        <div class="row tight">
-          <button class="btn small" id="listenAllBtn">⏸ השהה האזנה (הכול)</button>
-        </div>
+      <section class="card compact" aria-labelledby="h-status">
+        <div class="card-head"><h2 id="h-status" data-en="Status">מצב</h2><span class="chip warn-chip" id="pausedChip" hidden>⏸</span></div>
+        <button type="button" class="mach-line" id="machLine" title="פתח הגדרות ← מחשבים וחיבור" data-en-title="Open Settings → Computers"></button>
         <p class="note tight" id="ctlMeta"></p>
         <div class="row tight">
-          <button class="btn small" id="listenOneBtn">⏸ השהה שיחה זו</button>
-          <button class="btn small" id="sessNewBtn" title="סוגר את הסשן של השיחה הזו עם סיכום; ההודעה הבאה פותחת סשן חדש">🔄 סשן חדש</button>
+          <button class="btn small" data-detail="queue" data-en="📋 Queue">📋 תור פקודות</button>
+          <button class="btn small" data-detail="sched" data-en="🕗 Scheduled">🕗 מתוזמן</button>
+          <button class="btn small" data-settings="general" data-en="⚙️ Settings">⚙️ הגדרות</button>
         </div>
-        <div class="row tight">
-          <button class="btn small" data-detail="queue">📋 תור פקודות</button>
-          <button class="btn small" data-detail="sched">🕗 מתוזמן</button>
-          <button class="btn small" data-detail="settings">⚙️ הגדרות</button>
-        </div>
-      </section>
-
-      <section class="card compact" aria-labelledby="h-grp">
-        <div class="card-head"><h2 id="h-grp" data-en="This conversation">השיחה הנוכחית</h2></div>
-        <p class="note tight"><strong id="grpName">—</strong></p>
-        <p class="note tight" id="grpMeta"></p>
-        <div id="grpEdit">
-          <div class="row tight"><input id="grpInput" type="text" maxlength="100" placeholder="שם חדש לקבוצה" aria-label="שם חדש לקבוצה" style="flex:1;min-width:120px"></div>
-          <div class="row tight">
-            <button class="btn small" id="grpRename" title="משנה את שם הקבוצה בווצאפ" data-en="Rename">✏️ שנה שם</button>
-            <button class="btn small" id="grpBudget" title="תקרת עלות יומית לשיחה הזו">💲 תקרה</button>
-            <button class="btn small danger-soft" id="grpOff" title="הסוכן יפסיק להאזין לקבוצה (הקבוצה נשארת בווצאפ)">נתק האזנה</button>
-          </div>
-        </div>
-      </section>
-
-      <section class="card compact" aria-labelledby="h-sys">
-        <div class="card-head"><h2 id="h-sys" data-en="System">מערכת</h2></div>
-        <dl class="kv" id="sys"></dl>
-        <div class="row tight">
-          <button class="btn small" data-restart="bridge" data-en="↻ Bridge">↻ גשר</button>
-          <button class="btn small" data-restart="agent" data-en="↻ Agent">↻ סוכן</button>
-          <button class="btn small" id="backupBtn" data-en="💾 Backup">💾 גיבוי</button>
-        </div>
-        <button class="btn small wide danger-soft" data-restart="all" title="מפעיל מחדש את הגשר ואת הסוכן (כ-30 שניות, ווצאפ מתנתק לרגע)" data-en="↻ Restart everything (bridge + agent)">↻ הפעל הכול מחדש (גשר + סוכן)</button>
-        <details class="more">
-          <summary data-en="Updates & release">עדכונים ופרסום</summary>
-          <p class="note tight"><span data-en="Tool version:">גרסת הכלי:</span> <strong id="toolVer">—</strong></p>
-          <div class="row tight"><button class="btn small" id="toolUpdBtn" data-en="Check tool update">בדוק עדכון לכלי</button><span class="note" id="toolUpdNote"></span></div>
-          <div class="row tight"><button class="btn small" id="updBtn" data-en="Check dashboard update">בדוק עדכון ללוח</button><span class="note" id="updNote"></span></div>
-          <div id="pubBox" hidden>
-            <hr>
-            <p class="note tight" id="gitInfo">—</p>
-            <div class="row tight"><input id="pubNotes" type="text" placeholder="מה השתנה? (משפט קצר)" aria-label="מה השתנה" style="flex:1;min-width:140px"></div>
-            <div class="row tight"><button class="btn small" id="gitCommitBtn">💾 שמור בגיט</button>
-              <input id="pubVer" type="text" size="6" aria-label="מספר גרסה" style="max-width:70px">
-              <button class="btn small primary" id="releaseBtn">🚀 שחרר</button></div>
-          </div>
-        </details>
-      </section>
-        <section class="card compact model-box" id="modelBox" aria-labelledby="h-model">
-          <div class="card-head"><h2 id="h-model" data-en="Claude model">מודל Claude</h2><button class="mb-toggle" id="mbToggle" aria-expanded="true" title="מזער / הרחב">▾ מזער</button></div>
-          <p class="note tight" id="modelNow"></p>
-          <select id="modelSel" class="btn sel" aria-label="בחירת מודל"></select>
-          <p class="note tight" id="modelTip"></p>
-          <p class="note tight" id="modelRec"></p>
-        </section>
-
-      <section class="card compact" aria-labelledby="h-view">
-        <div class="card-head"><h2 id="h-view" data-en="Display">תצוגה</h2><button class="btn small ghost" id="viewReset" title="חזרה לברירת המחדל" data-en="Reset">איפוס</button></div>
-        <div class="view-row"><span data-en="Chat text">כתב השיחה</span>
-          <span class="stepper"><button class="btn small" data-step="chat" data-d="-1" aria-label="הקטן כתב שיחה">A−</button><output id="chatFsOut">100%</output><button class="btn small" data-step="chat" data-d="1" aria-label="הגדל כתב שיחה">A+</button></span></div>
-        <div class="view-row"><span data-en="Interface size">גודל הממשק</span>
-          <span class="stepper"><button class="btn small" data-step="ui" data-d="-1" aria-label="הקטן ממשק">A−</button><output id="uiFsOut">100%</output><button class="btn small" data-step="ui" data-d="1" aria-label="הגדל ממשק">A+</button></span></div>
-        <div class="view-row"><label for="fontSel" data-en="Font">גופן</label>
-          <select id="fontSel" class="btn small sel">
-            <option value="">Heebo (ברירת מחדל)</option><option value="Arial">Arial</option><option value="'Segoe UI'">Segoe UI</option>
-            <option value="Tahoma">Tahoma</option><option value="Gisha">Gisha</option><option value="David">David</option></select></div>
-        <div class="view-row"><label for="bgSel" data-en="Chat background">רקע השיחה</label>
-          <select id="bgSel" class="btn small sel">
-            <option value="">ברירת מחדל</option><option value="wa">ווצאפ (בז')</option><option value="white">לבן</option>
-            <option value="mint">ירקרק</option><option value="navy">כחול 4M</option><option value="dots">נקודות</option></select></div>
       </section>
     </aside>
   </div>
@@ -212,23 +144,147 @@
   <p class="foot" data-en="Data is read from this computer only · works offline">הנתונים נקראים מהמחשב שלך בלבד · עובד גם בלי אינטרנט</p>
 </main>
 
+<!-- ⚙️ settings window: every option in one place, by topic -->
+<div class="set-scrim" id="setScrim" hidden></div>
+<section class="settings" id="settings" role="dialog" aria-modal="true" aria-labelledby="setTitle" hidden>
+  <header class="set-head">
+    <h2 id="setTitle"><span aria-hidden="true">⚙️</span> <span data-en="Settings">הגדרות</span></h2>
+    <span class="note" id="setMachine"></span>
+    <button class="icon-btn" id="setClose" aria-label="סגור" data-en-aria="Close">✕</button>
+  </header>
+  <div class="set-wrap">
+    <nav class="set-tabs" id="setTabs" role="tablist" aria-label="נושאים" data-en-aria="Topics">
+      <button role="tab" data-tab="general" data-en="🌐 General">🌐 כללי</button>
+      <button role="tab" data-tab="voice" data-en="🎙️ Voice & transcription">🎙️ קול ותמלול</button>
+      <button role="tab" data-tab="models" data-en="🧠 Models & sessions">🧠 מודלים וסשן</button>
+      <button role="tab" data-tab="cost" data-en="💲 Cost">💲 עלות</button>
+      <button role="tab" data-tab="groups" data-en="👥 Groups">👥 קבוצות</button>
+      <button role="tab" data-tab="send" data-en="📝 Sending & drafts">📝 שליחה וטיוטות</button>
+      <button role="tab" data-tab="sched" data-en="🕗 Schedules & updates">🕗 תזמונים ועדכונים</button>
+      <button role="tab" data-tab="machines" data-en="🖥️ Computers & connection">🖥️ מחשבים וחיבור</button>
+      <button role="tab" data-tab="plugins" data-en="🧩 Plugins & git">🧩 תוספים וגיט</button>
+    </nav>
+    <div class="set-panes" id="setPanes">
+      <div class="set-pane" data-pane="general" role="tabpanel">
+        <details class="item set-sec" open><summary><strong data-en="Language and look">שפה ומראה</strong></summary>
+          <label class="set-row"><span><span data-en="Dashboard language">שפת הלוח</span><small class="help" data-en="Switches this dashboard between Hebrew (right-to-left) and English. Saved on this computer.">מחליף את הלוח בין עברית (מימין לשמאל) לאנגלית. נשמר במחשב הזה.</small></span>
+            <select id="uiLangSel" class="btn small sel"><option value="he">עברית</option><option value="en">English</option></select></label>
+          <label class="set-row"><span><span data-en="Colours">ערכת צבעים</span><small class="help" data-en="Light, dark, or follow Windows.">בהיר, כהה, או לפי Windows.</small></span>
+            <select id="themeSel" class="btn small sel"><option value="auto" data-en="Like Windows">לפי Windows</option><option value="light" data-en="Light">בהיר</option><option value="dark" data-en="Dark">כהה</option></select></label>
+          <div class="view-row"><span><span data-en="Chat text">כתב השיחה</span><small class="help" data-en="Size of the conversation text.">גודל הטקסט בשיחה.</small></span>
+            <span class="stepper"><button class="btn small" data-step="chat" data-d="-1" aria-label="הקטן כתב שיחה" data-en-aria="Smaller chat text">A−</button><output id="chatFsOut">100%</output><button class="btn small" data-step="chat" data-d="1" aria-label="הגדל כתב שיחה" data-en-aria="Bigger chat text">A+</button></span></div>
+          <div class="view-row"><span><span data-en="Interface size">גודל הממשק</span><small class="help" data-en="Size of everything else.">גודל כל השאר.</small></span>
+            <span class="stepper"><button class="btn small" data-step="ui" data-d="-1" aria-label="הקטן ממשק" data-en-aria="Smaller interface">A−</button><output id="uiFsOut">100%</output><button class="btn small" data-step="ui" data-d="1" aria-label="הגדל ממשק" data-en-aria="Bigger interface">A+</button></span></div>
+          <div class="view-row"><label for="fontSel" data-en="Font">גופן</label>
+            <select id="fontSel" class="btn small sel">
+              <option value="" data-en="Heebo (default)">Heebo (ברירת מחדל)</option><option value="Arial">Arial</option><option value="'Segoe UI'">Segoe UI</option>
+              <option value="Tahoma">Tahoma</option><option value="Gisha">Gisha</option><option value="David">David</option></select></div>
+          <div class="view-row"><label for="bgSel" data-en="Chat background">רקע השיחה</label>
+            <select id="bgSel" class="btn small sel">
+              <option value="" data-en="Default">ברירת מחדל</option><option value="wa" data-en="WhatsApp (beige)">ווצאפ (בז')</option><option value="white" data-en="White">לבן</option>
+              <option value="mint" data-en="Mint">ירקרק</option><option value="navy" data-en="4M navy">כחול 4M</option><option value="dots" data-en="Dots">נקודות</option></select></div>
+          <div class="row tight"><button class="btn small ghost" id="viewReset" data-en="Reset look">איפוס מראה</button></div>
+        </details>
+        <div id="dyn-general"></div>
+      </div>
+      <div class="set-pane" data-pane="voice" role="tabpanel"><div id="dyn-voice"></div></div>
+      <div class="set-pane" data-pane="models" role="tabpanel"><div id="dyn-models"></div>
+        <details class="item set-sec" open><summary><strong data-en="This conversation's session">הסשן של השיחה הנוכחית</strong></summary>
+          <p class="note tight" id="sessMeta"></p>
+          <div class="row tight"><button class="btn small" id="sessNewBtn" data-en="🔄 New session">🔄 סשן חדש</button></div>
+          <p class="note tight help" data-en="Closes this conversation's session with a summary; the next message starts a new one. The model of each conversation is chosen in the model box next to the chat.">סוגר את הסשן של השיחה הזו עם סיכום; ההודעה הבאה פותחת סשן חדש. את המודל של כל שיחה בוחרים בקופסת המודל שליד השיחה.</p>
+        </details>
+      </div>
+      <div class="set-pane" data-pane="cost" role="tabpanel"><div id="dyn-cost"></div></div>
+      <div class="set-pane" data-pane="groups" role="tabpanel">
+        <details class="item set-sec" open><summary><strong data-en="Listening">האזנה</strong></summary>
+          <div class="row tight"><button class="btn small" id="listenAllBtn">⏸ השהה האזנה (הכול)</button><button class="btn small" id="listenOneBtn">⏸ השהה שיחה זו</button></div>
+          <p class="note tight help" data-en="Paused = I don't answer; your messages wait in the queue and are handled on resume. Nothing is lost.">מושהה = אני לא עונה; ההודעות שלך מחכות בתור ומטופלות בחידוש. שום דבר לא הולך לאיבוד.</p>
+        </details>
+        <details class="item set-sec" open><summary><strong data-en="This conversation">השיחה הנוכחית</strong></summary>
+          <p class="note tight"><strong id="grpName">—</strong></p>
+          <p class="note tight" id="grpMeta"></p>
+          <div id="grpEdit">
+            <div class="row tight"><input id="grpInput" type="text" maxlength="100" placeholder="שם חדש לקבוצה" data-en-ph="New group name" aria-label="שם חדש לקבוצה" style="flex:1;min-width:120px"></div>
+            <div class="row tight">
+              <button class="btn small" id="grpRename" title="משנה את שם הקבוצה בווצאפ" data-en="✏️ Rename">✏️ שנה שם</button>
+              <button class="btn small" id="grpBudget" title="תקרת עלות יומית לשיחה הזו" data-en="💲 Cap">💲 תקרה</button>
+              <button class="btn small danger-soft" id="grpOff" title="הסוכן יפסיק להאזין לקבוצה (הקבוצה נשארת בווצאפ)" data-en="Stop listening">נתק האזנה</button>
+            </div>
+            <p class="note tight help" data-en="Disconnect = I stop listening to the group (it stays in WhatsApp). Turn it back on below under 'Switched-off groups' or with ➕.">ניתוק = אני מפסיק להאזין לקבוצה (היא נשארת בווצאפ). להחזרה: למטה ב"קבוצות כבויות" או ב-➕.</p>
+          </div>
+        </details>
+        <div class="row tight"><button class="btn small primary" id="setConnect" data-en="➕ Connect a group">➕ חבר קבוצה</button></div>
+        <div id="dyn-groups"></div>
+      </div>
+      <div class="set-pane" data-pane="send" role="tabpanel">
+        <details class="item set-sec" open><summary><strong data-en="Sending to other people">שליחה לאנשים אחרים</strong></summary>
+          <p class="note tight" id="sendMode"></p>
+          <div class="row tight"><button class="btn small" id="sendPause" data-en="⏸ Pause sending 6h">⏸ השהה שליחה 6 שעות</button><button class="btn small" id="sendResume" data-en="▶ Resume sending">▶ חדש שליחה</button></div>
+          <p class="note tight help" data-en="Every message to someone else is a draft card: ✅ on the card sends exactly one message, ❌ cancels. Reply to a card with a time (08:00) to schedule it.">כל הודעה לאחר היא כרטיס טיוטה: ✅ על הכרטיס שולח הודעה אחת בדיוק, ❌ מבטל. תשובה לכרטיס עם שעה (08:00) מתזמנת אותה.</p>
+          <div class="row tight"><button class="btn small" data-detail="drafts" data-en="📝 Drafts">📝 טיוטות</button></div>
+        </details>
+        <div id="dyn-send"></div>
+      </div>
+      <div class="set-pane" data-pane="sched" role="tabpanel"><div id="dyn-sched"></div>
+        <details class="item set-sec" open><summary><strong data-en="Updates">עדכונים</strong></summary>
+          <p class="note tight"><span data-en="Tool version:">גרסת הכלי:</span> <strong id="toolVer">—</strong></p>
+          <div class="row tight"><button class="btn small" id="toolUpdBtn" data-en="Check tool update">בדוק עדכון לכלי</button><span class="note" id="toolUpdNote"></span></div>
+          <div class="row tight"><button class="btn small" id="updBtn" data-en="Check dashboard update">בדוק עדכון ללוח</button><span class="note" id="updNote"></span></div>
+        </details>
+      </div>
+      <div class="set-pane" data-pane="machines" role="tabpanel">
+        <details class="item set-sec" open><summary><strong data-en="Computers">מחשבים</strong></summary>
+          <div id="machines" class="machines"><p class="note tight">…</p></div>
+          <p class="note tight help" data-en="Stop = it stays down until you start it. Restart = back in about 20 seconds.">עצירה = נשאר כבוי עד שתפעיל. הפעלה מחדש = חוזר תוך כ-20 שניות.</p>
+        </details>
+        <details class="item set-sec" open><summary><strong data-en="This computer">המחשב הזה</strong></summary>
+          <dl class="kv" id="sys"></dl>
+          <div class="row tight">
+            <button class="btn small" data-restart="bridge" data-en="↻ Bridge">↻ גשר</button>
+            <button class="btn small" data-restart="agent" data-en="↻ Agent">↻ סוכן</button>
+            <button class="btn small" id="backupBtn" data-en="💾 Backup">💾 גיבוי</button>
+          </div>
+          <button class="btn small wide danger-soft" data-restart="all" data-en="↻ Restart everything (bridge + agent)">↻ הפעל הכול מחדש (גשר + סוכן)</button>
+        </details>
+        <div id="dyn-machines"></div>
+      </div>
+      <div class="set-pane" data-pane="plugins" role="tabpanel"><div id="dyn-plugins"></div>
+        <details class="item set-sec" id="pubBox" hidden open><summary><strong data-en="Git & release (maintainer)">גיט ושחרור (מפתח)</strong></summary>
+          <p class="note tight" id="gitInfo">—</p>
+          <div class="row tight"><input id="pubNotes" type="text" placeholder="מה השתנה? (משפט קצר)" data-en-ph="What changed? (short sentence)" aria-label="מה השתנה" style="flex:1;min-width:140px"></div>
+          <div class="row tight"><button class="btn small" id="gitCommitBtn" data-en="💾 Save to git">💾 שמור בגיט</button>
+            <input id="pubVer" type="text" size="6" aria-label="מספר גרסה" style="max-width:70px">
+            <button class="btn small primary" id="releaseBtn" data-en="🚀 Release">🚀 שחרר</button></div>
+          <p class="note tight help" data-en="Normally not needed: changes are released automatically every night at 23:30 (Schedules tab).">בדרך כלל לא צריך: השינויים משוחררים אוטומטית כל לילה ב-23:30 (לשונית תזמונים).</p>
+        </details>
+      </div>
+    </div>
+  </div>
+  <footer class="set-foot">
+    <span class="note" id="setDirtyNote"></span>
+    <button type="button" class="btn small" id="setSave" data-en="💾 Save">💾 שמור</button>
+    <button type="button" class="btn small primary" id="setSaveRestart" data-en="💾 Save & restart the agent">💾 שמור והפעל מחדש את הסוכן</button>
+  </footer>
+</section>
+
 <!-- detail drawer -->
 <div class="scrim" id="scrim" hidden></div>
 <aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle" hidden>
-  <header class="drawer-head"><h2 id="drawerTitle"></h2><button class="icon-btn" id="drawerClose" aria-label="סגור">✕</button></header>
+  <header class="drawer-head"><h2 id="drawerTitle"></h2><button class="icon-btn" id="drawerClose" aria-label="סגור" data-en-aria="Close">✕</button></header>
   <div class="drawer-tabs" id="drawerTabs" role="tablist"></div>
   <div class="drawer-body" id="drawerBody"></div>
 </aside>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script src="chart.umd.min.js"></script>
 <div class="ctx" id="ctx" role="menu" hidden>
-  <button role="menuitem" data-cmd="copy">📋 העתק</button>
-  <button role="menuitem" data-cmd="cut">✂️ גזור</button>
-  <button role="menuitem" data-cmd="paste">📥 הדבק</button>
-  <button role="menuitem" data-cmd="selectall">🔲 בחר הכול</button>
+  <button role="menuitem" data-cmd="copy" data-en="📋 Copy">📋 העתק</button>
+  <button role="menuitem" data-cmd="cut" data-en="✂️ Cut">✂️ גזור</button>
+  <button role="menuitem" data-cmd="paste" data-en="📥 Paste">📥 הדבק</button>
+  <button role="menuitem" data-cmd="selectall" data-en="🔲 Select all">🔲 בחר הכול</button>
   <hr>
-  <button role="menuitem" data-cmd="copymsg">📄 העתק את כל ההודעה</button>
-  <button role="menuitem" data-cmd="quote">↩️ העבר לשורת הכתיבה</button>
+  <button role="menuitem" data-cmd="copymsg" data-en="📄 Copy the whole message">📄 העתק את כל ההודעה</button>
+  <button role="menuitem" data-cmd="quote" data-en="↩️ Move to the input box">↩️ העבר לשורת הכתיבה</button>
 </div>
 <script src="app.js"></script>
 </body>

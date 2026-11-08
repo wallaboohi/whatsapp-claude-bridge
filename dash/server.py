@@ -264,6 +264,7 @@ SETTINGS = {
     "peer_watch": ("bool", True, None), "peer_alert_minutes": ("int", 10, (1, 1440)), "peer_offline_minutes": ("int", 30, (1, 10080)),
     "peer_backup": ("bool", True, None), "peer_backup_max_mb": ("int", 2048, (0, 200000)),
     "host_label": ("opt", "", None), "claude_account": ("opt", "", None),
+    "language": ("choice", "he", ["he", "en"]),
 }
 
 
@@ -278,6 +279,7 @@ def settings_view():
     if vals.get("total_daily_budget_usd") is None:
         vals["total_daily_budget_usd"] = 2 * float(c.get("daily_budget_usd", 20))
     return {"values": vals, "types": {k: t for k, (t, d, x) in SETTINGS.items()}, "models": models, "perm_modes": PERM_MODES, "voices": VOICES,
+            "choices": {k: x for k, (t, d, x) in SETTINGS.items() if t == "choice"},
             "plugins": [{"path": x, "name": os.path.basename(x), "on": True} for x in c.get("plugins", [])] +
                        [{"path": x, "name": os.path.basename(x), "on": False} for x in c.get("plugins_disabled", [])],
             "peers": c.get("peers", [])}
