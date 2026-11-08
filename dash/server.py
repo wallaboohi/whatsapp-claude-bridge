@@ -596,6 +596,7 @@ def data(chat=None):
         "log": open(p["log"], encoding="utf-8").read().splitlines()[-60:] if os.path.exists(p["log"]) else [],
         "machine": socket.gethostname(),
         "listen_paused": kv("listen_paused") or "",
+        "read_all": {j: bool(kv(K("read_all", j))) for j in conversations()},
         "limit_until": kv("limit_until") or "", "signin_ends": kv("signin_ends") or "",
         "queue": rows(p["agent"], "SELECT id, substr(text, 1, 240) AS text, at, status, coalesce(chat_jid, ?) AS chat, source, retry_at, attempts "
                                   "FROM commands WHERE status IN ('pending','running','waiting_limit','interrupted') ORDER BY id DESC LIMIT 60",
@@ -967,6 +968,12 @@ def action(a):
         finally:
             con.close()
         return {"ok": True} if n else {"error": "not found"}
+    if kind == "read_all":  # 🛞 permanent read-aloud for one conversation (same as /🛞 in WhatsApp)
+        chat = a.get("chat") or primary()
+        if chat not in conversations():
+            return {"error": "unknown conversation"}
+        kv_put(K("read_all", chat), "1" if a.get("on") else "")
+        return {"ok": True, "on": bool(a.get("on"))}
     if kind == "session_new":  # the agent closes the session locally (summary to handoff), like "/סשן חדש" in WhatsApp
         chat = a.get("chat") or primary()
         if chat not in conversations():

@@ -871,6 +871,7 @@ function settingsPanes(d) {
   return {
     general: sec(L("הסוכן", "The agent"), ["language", "reply_italic", "quote_replies", "strict_mcp"].map(row).join("")),
     voice: sec(L("קול", "Voice"), ["voice_replies", "voice_name", "voice_style"].map(row).join("") +
+        `<label class="set-row"><span>🛞 ${L("הקראה קבועה בשיחה הנוכחית (כל תשובה גם קולית; בווצאפ: /🛞)", "Read every answer aloud in this conversation (WhatsApp: /🛞)")}</span><input type="checkbox" data-readall="1"${(d.read_all || {})[curChat || Object.keys(d.read_all || {})[0]] ? " checked" : ""}></label>` +
         `<p class="note tight help">🛞 ${L("הקראה: שלח 🛞 בקבוצה (מקריא את התשובה האחרונה שלי) או הגב 🛞 על כל הודעה (מקריא אותה). לא מפעיל את Claude ועובד גם כשהתשובה הקולית כבויה.", "Read-aloud: send 🛞 (reads my last answer) or react 🛞 on any message (reads it). No Claude run; works even with voice replies off.")}</p>`) +
       sec(L("תמלול", "Transcription"), ["transcribe", "transcribe_all_chats"].map(row).join("") + trGapHtml(d)),
     models: sec(L("מודלים וסשן", "Models & sessions"), ["light_model", "claude_model", "deep_model", "group_name_model", "fresh_sessions", "session_max_runs", "claude_timeout_minutes", "permission_mode"].map(row).join("")),
@@ -979,4 +980,10 @@ document.addEventListener("click", async e => {
     const j = await post({ do: "voice_test", voice: sel ? sel.value : "" });
     if (j.url) new Audio(j.url).play(); else alert(j.error || "error");
   } finally { b.disabled = false; }
+});
+
+// 🛞 permanent read-aloud toggle (per conversation)
+document.addEventListener("change", e => {
+  const c = e.target.closest && e.target.closest("[data-readall]");
+  if (c) post({ do: "read_all", chat: curChat || "", on: c.checked });
 });

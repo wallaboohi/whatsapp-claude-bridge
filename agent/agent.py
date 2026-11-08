@@ -1472,6 +1472,12 @@ def owner_command(text, chat=None):
     """Slash commands answered locally (no Claude run, no cost), for this conversation. Returns reply text or None."""
     if re.match(r"^/(מחכים|waiting)\s*$", text.strip()):
         return waiting_now()
+    if text.strip() in ("/🛞", "/ 🛞"):
+        key = K("read_all", chat or PRIMARY)
+        on = not kv_get(key)
+        kv_set(key, "1" if on else "")
+        return ("🛞 *הקראה קבועה: פועלת* — כל תשובה בשיחה הזו תגיע גם כהודעה קולית. לביטול: /🛞" if on else
+                "🛞 *הקראה קבועה: כבויה* — תשובות בטקסט בלבד (🛞 על הודעה עדיין מקריא אותה). להפעלה: /🛞")
     if re.match(r"^/(הפעל מחדש|אתחל|restart)\s*$", text.strip()):
         RESTART_REQ.set()
         return "🔄 מפעיל את הסוכן מחדש. אכתוב כאן כשאעלה (בערך 20 שניות)."
@@ -1701,8 +1707,11 @@ def run_command(row):
                     if LANG == "he" else "\n\n💡 For deep analysis start the message with !! (strongest model for one message).")
         reply(out, quoted=mid if (CFG.get("quote_replies", True) and src == "wa") else None)
         send_outbox(started)
-        if answer and not stopped and text.startswith(T["voice"]) and src == "wa" and not pc_only():
-            voice_reply(chat, out)
+        if answer and not stopped and src == "wa" and not pc_only():
+            if kv_get(K("read_all", chat)):  # /🛞 mode: every answer is also read aloud
+                read_text(chat, out)
+            elif text.startswith(T["voice"]):
+                voice_reply(chat, out)
         react(mid, "✅" if answer else "❌")
     except Exception:
         log("command error", traceback.format_exc())
@@ -1803,6 +1812,18 @@ def read_aloud(chat, mid=None):
         send(chat, "", media=path)
     except Exception as e:
         log("read_aloud failed", e)
+
+
+def read_text(chat, text):
+    """A voice note of `text` in this chat (🛞 modes) — independent of the voice_replies setting."""
+    t = tts_clean(text)
+    if len(t) < 2:
+        return
+    try:
+        os.makedirs(VOICE_DIR, exist_ok=True)
+        send(chat, "", media=tts_ogg(t, os.path.join(VOICE_DIR, f"read_{int(time.time() * 1000)}.ogg")))
+    except Exception as e:
+        log("read_text failed", e)
 
 
 def voice_reply(chat, text):

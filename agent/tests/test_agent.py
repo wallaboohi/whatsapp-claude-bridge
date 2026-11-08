@@ -855,3 +855,11 @@ def test_sunglasses_reads_last_answer(agent, monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "mdb", lambda: FakeDB())
     mod.read_aloud(mod.PRIMARY)
     assert spoken and "hello there" in spoken[0] and sent and sent[0][1]
+
+
+def test_wheel_command_toggles_read_all(agent):
+    mod, _ = agent
+    a = mod.owner_command("/\U0001f6de", mod.PRIMARY)
+    assert mod.kv_get(mod.K("read_all", mod.PRIMARY)) == "1" and a
+    b = mod.owner_command("/\U0001f6de", mod.PRIMARY)
+    assert not mod.kv_get(mod.K("read_all", mod.PRIMARY)) and b != a
