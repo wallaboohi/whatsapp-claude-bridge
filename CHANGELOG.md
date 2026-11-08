@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.11 — 2026-11-08
+- Dashboard: one ⚙️ Settings window with 9 topic tabs (general, voice, models, cost, groups, sending, schedules, computers, plugins/git), a help line for every se
+- Voices: Thalita default (multilingual voices speak Hebrew), 8 voices in the dashboard + voice style normal/soft
+- Nightly auto-release (auto_release_time 23:30, maintainer machine only): everything new in the shared repo becomes the next patch version; daytime changes go on
+- 😎 = voice note reading the bot's last answer (message) or the reacted message (reaction); bridge publishes the owner's reactions
+- Group names follow the model in every connected group (גשר אופוס ווצאפ): on model change in WhatsApp/dashboard and per run in auto; toggle group_name_model
+- agent: daily sync before the midnight session change (day_sync_time 23:40): save the day's tracked changes if tests pass, pull/push hub, rebuild the bridge and 
+- Voices: Hila (female) is the default; dashboard voice selector with names + ▶ preview; agent.py tts CLI
+- Status icons: ⬛ command (cmd), 🌐 network git vs 🗂️ local git, robot flips 🤖/🦾 with the hourglass; cost cap message: 🔒 + how to bypass (!, !!!, dashboard)
+- agent: bridge health alerts (Windows notification here, reason in the other machine's alert), stage reactions on the owner's message (✅/❌ at the end), /מחכים + 
+- Per-conversation time limit (groups.json timeout_minutes / claude_timeout_minutes, editable) with a clear 'stopped after N minutes' reply; dashboard accepts htt
+- bridge: connection health (keep-alive timeout -> forced reconnect, outdated client, connect failures, stream errors) in /api/status + conn_log; delivery/read re
+- Status message: hourglass flips ⏳/⌛ on every edit, edited every 5 s (status_edit_seconds)
+- Peer watch alerts, mutual nightly backup, start agent on the other machine, transcription backfill after off-time, cost per machine/account, on-demand history s
+
 ## 1.0.10 — 2026-11-08
 - עדכון אוטומטי כל לילה ב-23:50: הודעה, עדכון, הפעלה מחדש של הגשר והסוכן, ובדיקה — חוזר לגרסה הקודמת אם משהו נכשל
 - לוח בקרה לכמה מחשבים: שיחות המחשב השני כלשוניות, כרטיס "מחשבים" עם עצירה/הפעלה לכל מחשב (חיבור SSH שהסוכן שומר)
