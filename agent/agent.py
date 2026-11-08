@@ -1678,6 +1678,44 @@ def tts_ogg(text, path, voice=None):
     return path
 
 
+READ_ALOUD = "😎"
+
+
+def read_aloud(chat, mid=None):
+    """Owner request 08.11: 😎 (as a message, or as a reaction on one of the bot's messages) → a voice note that reads the
+    bot's last answer in this chat (or the reacted message). Local, no Claude run; works even if voice_replies is off."""
+    prefix = CFG["reply_prefix"].strip()
+    try:
+        with mdb() as db:
+            if mid:
+                r = db.execute("SELECT content FROM messages WHERE id = ? AND chat_jid = ?", (mid, chat)).fetchone()
+            else:
+                r = db.execute("SELECT content FROM messages WHERE chat_jid = ? AND is_from_me = 1 AND content LIKE ? "
+                               "AND content NOT LIKE ? AND content NOT LIKE ? AND content NOT LIKE ? ORDER BY timestamp DESC LIMIT 1",
+                               (chat, prefix + "%", "%סיימתי ·%", prefix + " _⏳%", prefix + " _⌛%")).fetchone()
+    except sqlite3.Error as e:
+        log("read_aloud db", e)
+        r = None
+    text = (r[0] if r else "") or ""
+    for p in (prefix, "🦾"):
+        if text.startswith(p):
+            text = text[len(p):].strip()
+    t = tts_clean(text)
+    if len(t) < 2:
+        _ctx.chat = chat
+        try:
+            reply("😎 אין הודעה שלי להקריא כאן." if LANG == "he" else "😎 Nothing of mine to read here.")
+        finally:
+            _ctx.chat = None
+        return
+    try:
+        os.makedirs(VOICE_DIR, exist_ok=True)
+        path = tts_ogg(t, os.path.join(VOICE_DIR, f"read_{int(time.time() * 1000)}.ogg"))
+        send(chat, "", media=path)
+    except Exception as e:
+        log("read_aloud failed", e)
+
+
 def voice_reply(chat, text):
     """The owner spoke: the answer also goes back as a voice note (config voice_replies). Failure = skipped, logged."""
     if not CFG.get("voice_replies", True):
@@ -2448,6 +2486,9 @@ def handle(row):
             return  # our own reply
         if sent_special(mid):
             return  # an event / poll / location the tool itself sent (has no reply prefix)
+        if content == READ_ALOUD:  # 😎 = read my last answer aloud (no Claude run)
+            work.put(lambda: read_aloud(cj))
+            return
         try:
             kv_set(K("last_owner_msg", cj), json.dumps({"ts": ts[:19], "text": content[:300] or f"[{mtype}]"}, ensure_ascii=False))
         except Exception as e:
@@ -2506,6 +2547,14 @@ def event_listener():
                 for line in resp:
                     if line.startswith(b"data:"):
                         _wake.set()
+                        if b'"reaction"' in line:
+                            try:
+                                ev = json.loads(line[5:].decode("utf-8", "replace"))
+                                cj = ev.get("chat_jid", "")
+                                if ev.get("emoji") == READ_ALOUD and (cj == PRIMARY or cj in load_groups()):
+                                    work.put(lambda cj=cj, m=ev.get("message_id"): read_aloud(cj, m))
+                            except Exception as e:
+                                log("reaction event", e)
         except Exception:
             time.sleep(5)
 

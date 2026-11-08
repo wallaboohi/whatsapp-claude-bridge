@@ -23,6 +23,8 @@ func handleReaction(client *whatsmeow.Client, msg *events.Message) bool {
 	if !msg.Info.IsFromMe || globalStore == nil { // only the owner's own reactions count
 		return true
 	}
+	publish(map[string]any{"type": "reaction", "chat_jid": normalizeChat(client, msg.Info.Chat).String(),
+		"message_id": r.GetKey().GetID(), "emoji": r.GetText()})
 	policyMu.Lock()
 	control := loadPolicy().ControlGroup
 	policyMu.Unlock()

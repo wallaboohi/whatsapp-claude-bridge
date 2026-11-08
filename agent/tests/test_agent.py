@@ -835,3 +835,22 @@ def test_group_name_follows_model(agent, monkeypatch):
     mod.kv_set(mod.K("name_set_at", mod.PRIMARY), "0")
     mod.sync_group_name(mod.PRIMARY, "sonnet")
     assert [b["name"] for p, b in calls if p == "/set_group"][-1].split()[1] == "\u05e1\u05d5\u05e0\u05d8"  # סונט
+
+
+def test_sunglasses_reads_last_answer(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    import sqlite3 as _sq
+    db = _sq.connect(mod.MSG_DB if hasattr(mod, "MSG_DB") else ":memory:")
+    spoken, sent = [], []
+    monkeypatch.setattr(mod, "tts_ogg", lambda text, path, voice=None: (spoken.append(text), path)[1])
+    monkeypatch.setattr(mod, "send", lambda chat, text, media=None, **k: sent.append((chat, media)))
+    class FakeDB:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def execute(self, q, args):
+            class R:
+                def fetchone(_s): return (mod.CFG["reply_prefix"] + "_hello there_",)
+            return R()
+    monkeypatch.setattr(mod, "mdb", lambda: FakeDB())
+    mod.read_aloud(mod.PRIMARY)
+    assert spoken and "hello there" in spoken[0] and sent and sent[0][1]
