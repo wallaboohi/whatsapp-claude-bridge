@@ -244,6 +244,7 @@ def svc_start(name):
 
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 PERM_MODES = ["default", "acceptEdits", "auto", "bypassPermissions", "plan"]
+VOICES = ["he-IL-HilaNeural", "he-IL-AvriNeural", "en-US-JennyNeural", "en-US-GuyNeural"]
 # every setting the agent reads from config.json that the owner may want to change: key -> (type, default, extra)
 SETTINGS = {
     "backup_time": ("time", "03:00", None), "update_check_time": ("time", "09:00", None), "group_check_time": ("time", "10:00", None),
@@ -256,7 +257,7 @@ SETTINGS = {
     "session_max_runs": ("int", 60, (1, 1000)), "claude_timeout_minutes": ("int", 15, (1, 240)), "disconnect_alert_minutes": ("int", 10, (1, 1440)),
     "backup_keep_days": ("int", 14, (1, 365)), "backup_media_days": ("int", 90, (0, 3650)), "reconnect_settle_seconds": ("int", 45, (0, 600)),
     "light_model": ("model", "haiku", None), "claude_model": ("model", "sonnet", None), "deep_model": ("model", "opus", None),
-    "permission_mode": ("choice", "auto", PERM_MODES), "voice_name": ("text", "he-IL-AvriNeural", None),
+    "permission_mode": ("choice", "auto", PERM_MODES), "voice_name": ("voice", "he-IL-HilaNeural", VOICES),
     "peer_watch": ("bool", True, None), "peer_alert_minutes": ("int", 10, (1, 1440)), "peer_offline_minutes": ("int", 30, (1, 10080)),
     "peer_backup": ("bool", True, None), "peer_backup_max_mb": ("int", 2048, (0, 200000)),
     "host_label": ("opt", "", None), "claude_account": ("opt", "", None),
@@ -273,7 +274,7 @@ def settings_view():
     vals = {k: c.get(k, d) for k, (t, d, x) in SETTINGS.items()}
     if vals.get("total_daily_budget_usd") is None:
         vals["total_daily_budget_usd"] = 2 * float(c.get("daily_budget_usd", 20))
-    return {"values": vals, "types": {k: t for k, (t, d, x) in SETTINGS.items()}, "models": models, "perm_modes": PERM_MODES,
+    return {"values": vals, "types": {k: t for k, (t, d, x) in SETTINGS.items()}, "models": models, "perm_modes": PERM_MODES, "voices": VOICES,
             "plugins": [{"path": x, "name": os.path.basename(x), "on": True} for x in c.get("plugins", [])] +
                        [{"path": x, "name": os.path.basename(x), "on": False} for x in c.get("plugins_disabled", [])],
             "peers": c.get("peers", [])}
@@ -295,7 +296,7 @@ def validate_setting(k, v):
         if not x[0] <= n <= x[1]:
             raise ValueError(f"{k}: בין {x[0]} ל-{x[1]}")
         return n
-    if t == "choice":
+    if t in ("choice", "voice"):
         if v not in x:
             raise ValueError(f"{k}: אחד מ-{', '.join(x)}")
         return v
@@ -1130,6 +1131,24 @@ def action(a):
             return {"ok": True}
         kill({"bridge": "whatsapp-bridge.exe", "agent": "agent.py"}[a["what"]])
         return {"ok": True}
+    if kind == "voice_test":
+        voice = a.get("voice") if a.get("voice") in VOICES else VOICES[0]
+        lf = os.path.join(ROOT, "agent", "home", "local_files")
+        os.makedirs(lf, exist_ok=True)
+        name = f"voice_test_{int(dt.datetime.now().timestamp())}.ogg"
+        txt = os.path.join(lf, name + ".txt")
+        open(txt, "w", encoding="utf-8").write(a.get("text") or ("שלום, זה הקול שלי בתשובות הקוליות." if voice.startswith("he") else "Hello, this is my voice for voice replies."))
+        py = os.path.join(ROOT, "agent", ".venv", "Scripts", "python.exe")
+        r = subprocess.run([py if os.path.exists(py) else sys.executable, "-X", "utf8", os.path.join(ROOT, "agent", "agent.py"), "tts", voice,
+                            os.path.join(lf, name), txt], cwd=os.path.join(ROOT, "agent"), capture_output=True, text=True, timeout=90,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        try:
+            os.remove(txt)
+        except OSError:
+            pass
+        if not os.path.exists(os.path.join(lf, name)):
+            return {"error": (r.stderr or r.stdout or "tts failed")[-300:]}
+        return {"ok": True, "url": "/lf/" + name}
     if kind == "tool_update_check":
         import time
         cache = os.path.join(ROOT, "agent", "update_check.json")

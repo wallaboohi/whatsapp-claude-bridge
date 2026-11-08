@@ -1457,13 +1457,17 @@ def tts_clean(text, limit=800):
     return t
 
 
-def tts_ogg(text, path):
-    """Hebrew speech → .ogg (Opus) voice note: edge-tts (free, online) + PyAV. Raises if unavailable."""
+VOICES = {"he-IL-HilaNeural": "הילה (אישה)", "he-IL-AvriNeural": "אבי (גבר)",
+          "en-US-JennyNeural": "Jenny (English)", "en-US-GuyNeural": "Guy (English)"}
+
+
+def tts_ogg(text, path, voice=None):
+    """Speech → .ogg (Opus) voice note: edge-tts (free, online) + PyAV. Raises if unavailable. Default voice: Hila."""
     import asyncio
     import av
     import edge_tts
     mp3 = path[:-4] + ".mp3"
-    voice = CFG.get("voice_name") or ("he-IL-AvriNeural" if LANG == "he" else "en-US-GuyNeural")
+    voice = voice or CFG.get("voice_name") or ("he-IL-HilaNeural" if LANG == "he" else "en-US-JennyNeural")
     asyncio.run(edge_tts.Communicate(text, voice).save(mp3))
     inp, out = av.open(mp3), av.open(path, "w", format="ogg")
     try:
@@ -2725,6 +2729,9 @@ if __name__ == "__main__":
         os.makedirs(d, exist_ok=True)
     adb().close()
     load_plugins()
+    if len(sys.argv) > 1 and sys.argv[1] == "tts":  # agent.py tts <voice> <out.ogg> <utf8 text file> (dashboard preview)
+        tts_ogg(tts_clean(open(sys.argv[4], encoding="utf-8").read()), sys.argv[3], voice=sys.argv[2])
+        sys.exit()
     if len(sys.argv) > 1:  # manual runs: agent.py backup | <plugin job>
         _manual[sys.argv[1]]()
         sys.exit()

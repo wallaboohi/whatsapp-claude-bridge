@@ -763,11 +763,15 @@ function peerBackupHtml(d) {
 
 function settingsContent(d) {
   const S = d.settings || {}, v = S.values || {}, t = S.types || {}, lab = SET_LABEL(), jobs = d.jobs || {};
+  const VOICE_NAMES = { "he-IL-HilaNeural": L("הילה (אישה)", "Hila (female, Hebrew)"), "he-IL-AvriNeural": L("אבי (גבר)", "Avri (male, Hebrew)"),
+    "en-US-JennyNeural": "Jenny (English)", "en-US-GuyNeural": "Guy (English)" };
   const inp = k => {
     const ty = t[k], val = v[k];
     if (ty === "bool") return `<input type="checkbox" data-set="${k}"${val ? " checked" : ""} aria-label="${esc(lab[k] || k)}">`;
     if (ty === "time") return `<input type="time" data-set="${k}" value="${esc(val)}" aria-label="${esc(lab[k] || k)}">`;
     if (ty === "model") return `<select class="btn small sel" data-set="${k}" aria-label="${esc(lab[k] || k)}">${(S.models || []).map(m => `<option${m === val ? " selected" : ""}>${esc(m)}</option>`).join("")}</select>`;
+    if (ty === "voice") return `<select class="btn small sel" data-set="${k}" aria-label="${esc(lab[k] || k)}">${(S.voices || []).map(m => `<option value="${esc(m)}"${m === val ? " selected" : ""}>${esc(VOICE_NAMES[m] || m)}</option>`).join("")}</select>
+      <button type="button" class="btn small" data-voicetest="1" title="${L("השמע דוגמה בקול שנבחר", "Play a sample in the chosen voice")}">▶</button>`;
     if (ty === "choice") return `<select class="btn small sel" data-set="${k}" aria-label="${esc(lab[k] || k)}">${(S.perm_modes || []).map(m => `<option${m === val ? " selected" : ""}>${esc(m)}</option>`).join("")}</select>`;
     if (ty === "num" || ty === "int") return `<input type="number" step="${ty === "int" ? 1 : 0.5}" data-set="${k}" value="${esc(val)}" style="width:80px" aria-label="${esc(lab[k] || k)}">`;
     return `<input type="text" data-set="${k}" value="${esc(val)}" style="width:150px" aria-label="${esc(lab[k] || k)}">`;
@@ -869,3 +873,15 @@ function renderMachines() {
   });
   el.querySelectorAll("[data-sshstart]").forEach(b => b.onclick = () => act({ do: "peer_ssh_start", i: +b.dataset.sshstart }, L("ההפעלה נשלחה דרך ssh", "Start sent over ssh"), null).then(() => setTimeout(load, 15000)));
 }
+
+// voice preview in the settings drawer: plays a short sample in the selected voice (generated on this machine)
+document.addEventListener("click", async e => {
+  const b = e.target.closest && e.target.closest("[data-voicetest]");
+  if (!b) return;
+  const sel = b.parentElement && b.parentElement.querySelector('select[data-set="voice_name"]');
+  b.disabled = true;
+  try {
+    const j = await post({ do: "voice_test", voice: sel ? sel.value : "" });
+    if (j.url) new Audio(j.url).play(); else alert(j.error || "error");
+  } finally { b.disabled = false; }
+});
