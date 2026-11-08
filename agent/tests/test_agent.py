@@ -259,6 +259,19 @@ def test_group_prompt_carries_instructions(multi, tmp_path, monkeypatch):
     gp = mod.group_prompt(DEV)
     assert "הוראות פיתוח מיוחדות" in gp and "handoff-dev.md" in gp
     assert mod.group_prompt(mod.PRIMARY) is None
+    (tmp_path / "groups" / "main.md").write_text("- לענות קצר", encoding="utf-8")
+    assert "לענות קצר" in mod.group_prompt(mod.PRIMARY), "the control group has its own rules file too"
+
+
+def test_rule_command(multi, tmp_path, monkeypatch):
+    mod, _ = multi
+    monkeypatch.setattr(mod, "HOME", str(tmp_path))
+    assert "עוד אין כללי בסיס" in mod.owner_command("/כלל בסיס", mod.PRIMARY)
+    os.makedirs(tmp_path / "groups")
+    (tmp_path / "groups" / "main.md").write_text("- כלל א", encoding="utf-8")
+    assert "כלל א" in mod.owner_command("/כלל בסיס", mod.PRIMARY)
+    assert mod.owner_command("/כלל בסיס לענות תמיד בקצרה", mod.PRIMARY) is None, "with text it goes to Claude for a check"
+    assert mod.rules_rel(DEV).endswith(".md") and mod.rules_rel(mod.PRIMARY) == "groups/main.md"
 
 
 # ---------- review fixes 08.11: interrupted commands, dev-work on raw text, sticky model, total cap, text approval ----------

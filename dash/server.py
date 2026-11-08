@@ -132,6 +132,24 @@ def K(name, chat=None):
     return name if not chat or chat == primary() else f"{name}:{chat}"
 
 
+def rules_rel(chat, g):
+    """The conversation's base-rules file under agent/home (same rule as agent.rules_rel)."""
+    if g.get("instructions"):
+        return g["instructions"]
+    if chat == primary():
+        return "groups/main.md"
+    return f"groups/{g.get('slug') or re.sub(r'[^0-9a-zA-Z]+', '', chat.split('@')[0])[:12] or 'chat'}.md"
+
+
+def rules_of(chat):
+    rel = rules_rel(chat, conversations().get(chat) or {})
+    try:
+        text = open(os.path.join(ROOT, "agent", "home", rel), encoding="utf-8").read()
+    except OSError:
+        text = ""
+    return {"path": "agent/home/" + rel, "text": text}
+
+
 def sync_policy_groups():
     """Tell the bridge which extra groups are Claude conversations (their replies are sent directly, not as drafts)."""
     jids = [j for j in conversations() if j not in (primary(), LOCAL)]
@@ -589,7 +607,7 @@ def data(chat=None):
                   "pending": (rows(p["agent"], "SELECT count(*) n FROM commands WHERE status IN ('pending','running')") or [{"n": 0}])[0]["n"],
                   "budget": c.get("daily_budget_usd", 5), "spent_today": round(spent[0]["s"], 2) if spent else 0,
                   "heartbeat_age": None},
-        "chat": group, "groups": glist,
+        "chat": group, "groups": glist, "rules": rules_of(group),
         "presence": {"pc_last": str(pc_last).replace("T", " ") if pc_last else None, "phone_last": str(phone_last)[:19] if phone_last else None},
         "model": model_info(group),
         "live": (json.loads(kv(K("live_steps", group))) if kv(K("live_steps", group)) else None),

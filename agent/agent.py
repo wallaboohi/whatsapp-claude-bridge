@@ -670,18 +670,33 @@ def handoff_path(chat):
     return os.path.join(HOME, f"handoff-{g.get('slug') or re.sub(r'[^0-9a-zA-Z]+', '', chat.split('@')[0])[:12] or 'chat'}.md")
 
 
+def rules_rel(chat, g=None):
+    """This conversation's base-rules file, relative to agent/home: groups.json "instructions", else groups/<slug>.md
+    (groups/main.md for the control group). The dashboard shows it in the conversation tab (same rule in dash/server.py)."""
+    chat = chat or PRIMARY
+    g = g if g is not None else (load_groups().get(chat) or {})
+    if g.get("instructions"):
+        return g["instructions"]
+    if chat == PRIMARY:
+        return "groups/main.md"
+    return f"groups/{g.get('slug') or re.sub(r'[^0-9a-zA-Z]+', '', chat.split('@')[0])[:12] or 'chat'}.md"
+
+
 def group_prompt(chat):
-    """Extra system prompt for a non-primary conversation: its instructions file (agent/home/groups/*.md) plus the hand-off file name."""
+    """Extra system prompt: the conversation's base-rules file (rules_rel) for every conversation; non-primary ones also get
+    their name/purpose and hand-off file name. None when there is nothing to add."""
     if not chat or chat == PRIMARY:
-        return None
+        try:
+            own = open(os.path.join(HOME, rules_rel(PRIMARY)), encoding="utf-8").read().strip()
+        except OSError:
+            own = ""
+        return f"כללי בסיס לשיחה הזו ({rules_rel(PRIMARY)}):\n{own}" if own else None
     g = load_groups().get(chat) or {}
     parts = [f"שיחה: {g.get('name', chat)} (מטרה: {g.get('purpose', '')}). זו שיחה נפרדת — לכל שיחה סשן, הוראות ומודל משלה."]
-    ins = g.get("instructions")
-    if ins:
-        try:
-            parts.append(open(os.path.join(HOME, ins), encoding="utf-8").read().strip())
-        except OSError:
-            pass
+    try:
+        parts.append(open(os.path.join(HOME, rules_rel(chat, g)), encoding="utf-8").read().strip())
+    except OSError:
+        pass
     parts.append(f"בתחילת סשן חדש קרא את {handoff_path(chat)} אם קיים (סיכום מהשיחה הקודמת בשיחה הזו).")
     return "\n\n".join(parts)
 
@@ -1550,6 +1565,18 @@ class StatusMsg:
         self.timer.cancel()
 
 
+RULE_CMD = re.compile(r"^/(כלל בסיס|כללי בסיס|כלל|rule)(?=\s|$)\s*(.*)$", re.S)
+RULE_PROMPT = ("[/כלל בסיס] {owner} מבקש להוסיף כלל בסיס לשיחה הזו:\n«{rule}»\n\n"
+               "קובץ הכללים של השיחה: {path} (נטען בכל סשן של השיחה הזו בלבד; הלוח מציג אותו בלשונית השיחה). "
+               "הכללים לכל השיחות: {general}.\n"
+               "לפני שאתה כותב: 1) ודא שהבנת נכון למה הוא מתכוון; 2) בדוק סתירה או כפילות מול שני הקבצים ומול מה שביקש קודם; "
+               "3) הפעל שיקול דעת: האם הכלל מומלץ, מיותר, מזיק או כדאי לנסח אחרת.\n"
+               "אם ברור ולא סותר: הוסף לקובץ (צור אותו אם אין) שורה אחת מנוסחת היטב עם התאריך, בלי לשנות כללים אחרים, "
+               "ודווח בקצרה מה נוסף בדיוק, ואם יש — טיפ או הצעה לנוסח טוב יותר. "
+               "אם יש סתירה, דו-משמעות או שהכלל נראה מזיק: *אל תכתוב*. הסבר מה מפריע ושאל. "
+               "אם הכלל מתאים לכל השיחות, אמור זאת והצע להוסיף אותו גם לקובץ הכללי (רק אחרי אישור).")
+
+
 def owner_command(text, chat=None):
     """Slash commands answered locally (no Claude run, no cost), for this conversation. Returns reply text or None."""
     if re.match(r"^/(מחכים|waiting)\s*$", text.strip()):
@@ -1560,6 +1587,14 @@ def owner_command(text, chat=None):
         kv_set(key, "1" if on else "")
         return ("🛞 *הקראה קבועה: פועלת* — כל תשובה בשיחה הזו תגיע גם כהודעה קולית. לביטול: /🛞" if on else
                 "🛞 *הקראה קבועה: כבויה* — תשובות בטקסט בלבד (🛞 על הודעה עדיין מקריא אותה). להפעלה: /🛞")
+    if RULE_CMD.match(text.strip()) and not RULE_CMD.match(text.strip()).group(2).strip():
+        rel = rules_rel(chat)
+        try:
+            body = open(os.path.join(HOME, rel), encoding="utf-8").read().strip()
+        except OSError:
+            body = ""
+        return ((f"📜 *כללי הבסיס של השיחה הזו* (`{rel}`):\n{body}" if body else f"📜 עוד אין כללי בסיס לשיחה הזו (`{rel}`).")
+                + "\n\nלהוספה: /כלל בסיס ואחריו הכלל. אבדוק שהוא ברור ולא סותר כללים קיימים לפני שאוסיף.")
     if re.match(r"^/(הפעל מחדש|אתחל|restart)\s*$", text.strip()):
         RESTART_REQ.set()
         return "🔄 מפעיל את הסוכן מחדש. אכתוב כאן כשאעלה (בערך 20 שניות)."
@@ -1780,7 +1815,12 @@ def run_command(row):
             where, dest = (f'מהמחשב (לוח הבקרה) לקבוצה "{gname}"', "גם לקבוצה בווצאפ") if LANG == "he" else (f'from the PC (dashboard) for group "{gname}"', "to the WhatsApp group too")
         else:
             where, dest = (f'בקבוצה "{gname}" בווצאפ', "לקבוצה") if LANG == "he" else (f'in the WhatsApp group "{gname}"', "to the group")
-        prompt = T["prompt"].format(owner=OWNER, when=when, text=text.lstrip("!").strip(), where=where, dest=dest)
+        body = text.lstrip("!").strip()
+        rm = RULE_CMD.match(body)
+        if rm and rm.group(2).strip():  # /כלל בסיס <rule>: Claude checks it and adds it to this conversation's rules file
+            body = RULE_PROMPT.format(owner=OWNER, rule=rm.group(2).strip(), path=os.path.join(HOME, rules_rel(chat)),
+                                      general=os.path.join(HOME, "CLAUDE.md"))
+        prompt = T["prompt"].format(owner=OWNER, when=when, text=body, where=where, dest=dest)
         if src == "wa" and came_back_from_pc(chat, cid):
             prompt = (T_BACK_HE if LANG == "he" else T_BACK_EN) + prompt
         model, how = pick_model_info(text, chat)

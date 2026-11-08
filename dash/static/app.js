@@ -498,12 +498,28 @@ function renderTabs(d) {
   $("grpName").textContent = g.name || "—";
   $("grpMeta").textContent = `${PURPOSE[g.purpose] || ""} · ${L("תקרה", "cap")} $${g.budget ?? "—"} · ${L("היום", "today")} $${g.spent ?? 0}`;
   $("grpEdit").hidden = local; $("grpOff").hidden = !!g.primary;
+  { const n = rulesCount(d); $("rulesSum").textContent = n ? String(n) : ""; }
   $("h-chat").textContent = local ? L("שיחה מקומית עם Claude", "Local chat with Claude") : L("השיחה בקבוצה", "Conversation in group") + " · " + (g.name || "");
   $("syncChk").checked = !!syncMap[d.chat]; sendHint();
   const run = !!(d.live && !d.live.done); $("stopBtn").hidden = !run;
   fitChat();
 }
 $("tabAdd").onclick = e => { e.stopPropagation(); toggleAdd(); };
+// base rules of the current conversation (agent/home/groups/*.md): shown read-only; added with /כלל בסיס so Claude checks them first
+function rulesCount(d) { return ((d.rules && d.rules.text) || "").split("\n").filter(l => /^\s*[-*•\d]/.test(l)).length; }
+function showRules() {
+  const r = (last && last.rules) || {}, g = groupOf(last && last.chat);
+  drawerKind = "ctx"; $("scrim").hidden = false; $("drawer").hidden = false;
+  $("drawerTitle").textContent = L("📜 כללי בסיס · ", "📜 Base rules · ") + (g.name || "");
+  $("drawerTabs").innerHTML = "";
+  $("drawerBody").innerHTML = (r.text && r.text.trim() ? `<pre class="item" style="white-space:pre-wrap;font:inherit">${esc(r.text.trim())}</pre>`
+      : `<p class="empty">${L("עוד אין כללי בסיס לשיחה הזו", "No base rules for this conversation yet")}</p>`) +
+    `<p class="note tight">${L("להוספת כלל: כתוב בשיחה (כאן או בווצאפ) <b>/כלל בסיס</b> ואחריו הכלל. Claude בודק שהוא ברור ולא סותר כללים קיימים, מציע ניסוח או טיפ, ושואל לפני שהוא מוסיף כשמשהו לא ברור. הכללים נטענים בכל סשן של השיחה הזו בלבד; הכללים לכל השיחות נמצאים ב-agent/home/CLAUDE.md.",
+      "To add a rule, write <b>/rule</b> and the rule in this conversation (here or in WhatsApp). Claude checks it is clear and does not contradict existing rules, suggests wording, and asks first when unclear. Loaded in every session of this conversation only; rules for all conversations are in agent/home/CLAUDE.md.")}</p>` +
+    `<p class="note tight muted">${esc(r.path || "")}</p>`;
+  $("drawerClose").focus();
+}
+$("rulesBtn").onclick = showRules;
 $("tabs").addEventListener("click", e => {
   const t = e.target.closest(".tab"); if (!t) return;
   curChat = t.dataset.chat; curPeer = t.dataset.peer === "" ? null : +t.dataset.peer;
