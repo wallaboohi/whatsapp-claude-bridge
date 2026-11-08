@@ -767,3 +767,12 @@ def test_follow_ups_missed_calls_and_unread_sends(agent):
     assert not any("972500000002" in x for x in out), "an answered call is not missed"
     assert any("972500000003" in x and "לא קרא" in x for x in out)
     assert not any("972500000004" in x or "972500000005" in x for x in out)
+
+def test_stage_icons_for_commands_and_git(agent):
+    mod, _ = agent
+    ev = lambda c: {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": c}}]}}
+    assert mod._stage_of(ev("dir")).startswith("\u2b1b")
+    assert "\u05d1\u05e8\u05e9\u05ea" in mod._stage_of(ev("git push hub HEAD:main"))  # network
+    assert "\u05de\u05e7\u05d5\u05de\u05d9" in mod._stage_of(ev("git commit -m x"))  # local
+    assert "\u05d1\u05e8\u05e9\u05ea" in mod._stage_of(ev("git -C C:/x pull --ff-only"))
+    assert "\U0001f512" in mod.T["budget_stop"] and "!!!" in mod.T["budget_stop"]

@@ -46,9 +46,9 @@ OWNER = CFG.get("owner_name") or ("הבעלים" if LANG == "he" else "the owner
 # every text the agent itself writes to WhatsApp / Windows, in Hebrew and English
 T = {
     "he": {
-        "budget_stop": "💸 הגעתי לתקרת העלות היומית (${spent:.2f} מתוך ${budget:.0f}). כדי להמשיך בכל זאת — התחל את ההודעה ב-! (או ב-!!! לשעה שלמה בלי הגבלה)",
+        "budget_stop": "🔒 *תקרת העלות היומית ננעלה* (${spent:.2f} מתוך ${budget:.0f}).\nאיך עוקפים:\n• ! בתחילת ההודעה — הודעה אחת בלי תקרה\n• !!! בתחילת ההודעה — שעה שלמה בלי תקרה (🔓)\n• בלוח הבקרה ← הגדרות ← עלות — להעלות את התקרה (קבוע)\nבחצות התקרה מתאפסת לבד.",
         "override_hour": "🔓 בלי תקרת עלות עד {until}.",
-        "budget_warn": "⚠️ נוצלו ${spent:.2f} מתוך תקרה יומית של ${budget:.0f}.",
+        "budget_warn": "⚠️ נוצלו ${spent:.2f} מתוך תקרה יומית של ${budget:.0f}. בהגעה לתקרה ננעל 🔒 — עקיפה: ! להודעה אחת, !!! לשעה.",
         "working": "⏳ עובד על זה, זה לוקח קצת יותר זמן…",
         "failed": "לא הצלחתי לעבד את ההודעה, נסה שוב.",
         "voice": "(הודעה קולית, תמלול)",
@@ -65,7 +65,7 @@ T = {
                   "אם צריך להחזיר קובץ (אקסל, תמונה, PDF) — שמור אותו בתיקייה outbox והוא יישלח אחרי התשובה.",
     },
     "en": {
-        "budget_stop": "💸 Daily cost cap reached (${spent:.2f} of ${budget:.0f}). Start the message with ! to continue anyway (or !!! for a whole hour).",
+        "budget_stop": "🔒 *Daily cost cap locked* (${spent:.2f} of ${budget:.0f}).\nTo bypass:\n• ! at the start — one message without the cap\n• !!! at the start — one hour without the cap (🔓)\n• Dashboard → Settings → Cost — raise the cap\nIt resets at midnight.",
         "override_hour": "🔓 No cost cap until {until}.",
         "budget_warn": "⚠️ ${spent:.2f} used of the ${budget:.0f} daily cap.",
         "working": "⏳ Working on it, this takes a bit longer…",
@@ -622,12 +622,14 @@ def _stage_of(ev):
             if name in ("Bash", "PowerShell"):
                 c = str(inp.get("command", ""))
                 if re.search(r"(^|[\s;&|])git\s", c):
-                    return "🔀 עובד עם גיט"
+                    if re.search(r"(^|[\s;&|])git\s+(-C\s+\S+\s+)?(push|pull|fetch|clone|ls-remote)\b", c):
+                        return "🌐 גיט ברשת (מסנכרן עם מאגר מרוחק)"
+                    return "🗂️ גיט מקומי (עבודה בקוד במחשב)"
                 if re.search(r"go build|go vet|release|pyinstaller", c):
                     return "🛠️ מקמפל/בונה"
                 if "wa_send" in c:
                     return "📨 מכין טיוטה"
-                return "⚙️ מריץ פקודה"
+                return "⬛ מריץ פקודה (cmd)"
             return "⚙️ " + name
         if part.get("type") == "thinking":
             return "🧠 חושב"
@@ -1173,7 +1175,10 @@ class StatusMsg:
     def _text(self):
         # the hourglass flips (⏳ ↔ ⌛) on every edit so the owner sees it is alive (owner request 08.11)
         icon = "⏳" if self.tick % 2 == 0 else "⌛"
-        return CFG["reply_prefix"] + italic(f"{icon} {self.stage} · {self._elapsed()} · {self.model}")
+        prefix = CFG["reply_prefix"]
+        if self.tick % 2 and prefix.strip() == "🤖":
+            prefix = prefix.replace("🤖", "🦾")  # the robot "moves" too while working (owner request 08.11)
+        return prefix + italic(f"{icon} {self.stage} · {self._elapsed()} · {self.model}")
 
     def _final(self):
         n = len(self.steps)
