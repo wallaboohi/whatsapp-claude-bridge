@@ -710,3 +710,60 @@ def test_status_hourglass_flips(agent):
     b = st._text()
     st.finish()
     assert "\u23f3" in a and "\u231b" in b, "the hourglass alternates on every edit"
+
+
+def test_local_health_alerts_once_after_delay_and_resets(agent):
+    mod, _ = agent
+    t0 = mod.dt.datetime(2026, 11, 8, 20, 0)
+    m = lambda n: t0 + mod.dt.timedelta(minutes=n)
+    bad = {"connected": False, "health": {"problem": "outdated", "detail": "405"}}
+    st, msg = mod.local_health_step({}, bad, t0, {"health_alert_minutes": 5})
+    assert msg is None and st["problem"] == "outdated"
+    st, msg = mod.local_health_step(st, bad, m(6), {"health_alert_minutes": 5})
+    assert msg and "עדכון" in msg and "405" in msg
+    st, msg = mod.local_health_step(st, bad, m(20), {})
+    assert msg is None, "one alert per incident"
+    st, msg = mod.local_health_step(st, {"connected": True, "health": {}}, m(21), {})
+    assert st == {} and msg is None
+    st, msg = mod.local_health_step({}, {"connected": False}, t0, {})
+    assert st["problem"] == "down"
+
+
+def test_peer_alert_names_the_bridge_problem(agent):
+    mod, _ = agent
+    t0 = mod.dt.datetime(2026, 11, 8, 20, 0)
+    brief = {"agent_alive": True, "bridge": {"connected": True, "health": {"problem": "outdated", "detail": "405"}}}
+    st, out = mod.peer_watch_step({}, brief, t0, {"peer_alert_minutes": 10}, "לפטופ")
+    st, out = mod.peer_watch_step(st, brief, t0 + mod.dt.timedelta(minutes=11), {"peer_alert_minutes": 10}, "לפטופ")
+    assert len(out) == 1 and "סיבה:" in out[0] and "עדכון" in out[0]
+
+
+def test_stage_icon():
+    import importlib, sys
+    sys.path.insert(0, HERE)
+    mod = importlib.import_module("agent")
+    assert mod.stage_icon("⚙️ מריץ פקודה") == "⚙️"
+    assert mod.stage_icon("🧠 מתחיל") == "🧠"
+    assert mod.stage_icon("מתחיל") == ""
+
+
+def test_follow_ups_missed_calls_and_unread_sends(agent):
+    mod, db = agent
+    db.execute("CREATE TABLE calls (call_id TEXT, caller TEXT, event TEXT, reason TEXT, at TIMESTAMP)")
+    db.execute("CREATE TABLE receipts (message_id TEXT, chat_jid TEXT, reader TEXT, type TEXT, at TIMESTAMP)")
+    db.execute("CREATE TABLE send_log (id INTEGER PRIMARY KEY, recipient TEXT, message_id TEXT, ok BOOLEAN, detail TEXT, timestamp TIMESTAMP)")
+    db.executemany("INSERT INTO calls VALUES (?, ?, ?, '', ?)", [
+        ("C1", "972500000001", "offer", "2026-11-08 09:00:00"),
+        ("C2", "972500000002", "offer", "2026-11-08 09:10:00"), ("C2", "972500000002", "accept", "2026-11-08 09:10:05")])
+    db.execute("INSERT INTO receipts VALUES ('R0', 'x', 'x', 'read', '2026-11-08 07:00:00')")
+    db.executemany("INSERT INTO send_log (recipient, message_id, ok, detail, timestamp) VALUES (?, ?, 1, '', ?)", [
+        ("972500000003@s.whatsapp.net", "S1", "2026-11-08 08:00:00+02:00"),
+        ("972500000004@s.whatsapp.net", "S2", "2026-11-08 08:00:00+02:00"),
+        ("972500000005@s.whatsapp.net", "S0", "2026-11-08 06:00:00+02:00")])  # before receipts were tracked
+    db.execute("INSERT INTO receipts VALUES ('S2', 'x', 'x', 'read', '2026-11-08 08:30:00')")
+    db.commit()
+    out = mod.follow_ups(mod.dt.datetime(2026, 11, 8, 0, 0), mod.dt.datetime(2026, 11, 8, 12, 0))
+    assert any("שיחה שלא נענתה" in x and "972500000001" in x for x in out)
+    assert not any("972500000002" in x for x in out), "an answered call is not missed"
+    assert any("972500000003" in x and "לא קרא" in x for x in out)
+    assert not any("972500000004" in x or "972500000005" in x for x in out)

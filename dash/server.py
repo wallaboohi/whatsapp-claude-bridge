@@ -449,7 +449,7 @@ def brief():
         except ValueError:
             tunnels[nm] = None
     return {"machine": socket.gethostname(), "tool_version": (open(os.path.join(ROOT, "VERSION")).read().strip() if os.path.exists(os.path.join(ROOT, "VERSION")) else "?"),
-            "dash_version": VERSION, "bridge": {k: b.get(k) for k in ("connected", "version", "paused", "error", "connected_since")},
+            "dash_version": VERSION, "bridge": {k: b.get(k) for k in ("connected", "version", "paused", "error", "connected_since", "health")},
             "agent_alive": alive, "heartbeat": hb, "listen_paused": kv("listen_paused") or "", "groups": gl, "tunnels": tunnels,
             "services": services(), "backup_dir": backup_dir_abs(), "cost": cost_summary(),
             "host_label": c.get("host_label") or "", "account": c.get("claude_account") or ""}
