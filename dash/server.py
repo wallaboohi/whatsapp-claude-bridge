@@ -249,8 +249,8 @@ VOICES = ["he-IL-HilaNeural", "he-IL-AvriNeural", "en-US-JennyNeural", "en-US-Gu
 SETTINGS = {
     "backup_time": ("time", "03:00", None), "update_check_time": ("time", "09:00", None), "group_check_time": ("time", "10:00", None),
     "selftest_time": ("time", "04:30", None), "morning_summary_time": ("time", "07:30", None), "signin_check_time": ("time", "09:30", None),
-    "auto_update_time": ("time", "23:50", None),
-    "auto_update": ("bool", True, None), "morning_summary": ("bool", True, None), "voice_replies": ("bool", True, None),
+    "auto_update_time": ("time", "23:50", None), "auto_release_time": ("time", "23:30", None),
+    "auto_update": ("bool", True, None), "auto_release": ("bool", False, None), "morning_summary": ("bool", True, None), "voice_replies": ("bool", True, None),
     "transcribe": ("bool", True, None), "transcribe_all_chats": ("bool", True, None), "fresh_sessions": ("bool", False, None),
     "reply_italic": ("bool", True, None), "quote_replies": ("bool", True, None), "strict_mcp": ("bool", True, None),
     "daily_budget_usd": ("num", 20, (0, 1000)), "total_daily_budget_usd": ("num", None, (0, 5000)),

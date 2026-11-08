@@ -27,6 +27,8 @@
   "voice_replies": true,
   "voice_name": "he-IL-HilaNeural",
   "group_name_model": true,
+  "auto_release": false,
+  "auto_release_time": "23:30",
   "morning_summary": true,
   "morning_summary_time": "07:30",
   "selftest_time": "04:30",

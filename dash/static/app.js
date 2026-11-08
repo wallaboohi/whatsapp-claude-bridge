@@ -725,7 +725,7 @@ function schedContent(d) {
 const SET_LABEL = () => ({
   backup_time: L("גיבוי יומי", "Daily backup"), update_check_time: L("בדיקת עדכון (הודעה)", "Update check (notice)"), group_check_time: L("בדיקת שם קבוצה", "Group name check"),
   selftest_time: L("בדיקה עצמית לילית", "Nightly self-test"), morning_summary_time: L("סיכום בוקר", "Morning summary"), signin_check_time: L("בדיקת התחברות Claude", "Claude sign-in check"),
-  auto_update_time: L("עדכון אוטומטי", "Auto-update"), daily_budget_usd: L("תקרה יומית לשיחה ($)", "Daily cap per chat ($)"), total_daily_budget_usd: L("תקרה כוללת ליום ($)", "Total daily cap ($)"),
+  auto_update_time: L("עדכון אוטומטי", "Auto-update"), auto_release_time: L("שחרור לילי ל-GitHub (מחשב מפתח)", "Nightly release to GitHub (maintainer)"), daily_budget_usd: L("תקרה יומית לשיחה ($)", "Daily cap per chat ($)"), total_daily_budget_usd: L("תקרה כוללת ליום ($)", "Total daily cap ($)"),
   light_model: L("מודל קל (אוטו)", "Light model (auto)"), claude_model: L("מודל רגיל (אוטו)", "Normal model (auto)"), deep_model: L("מודל חזק (!! / תכנון)", "Strong model (!!)"),
   fresh_sessions: L("סשן נקי לכל הודעה", "Fresh session per message"), session_max_runs: L("הודעות לסשן (4M) לפני החלפה", "Messages per session (4M)"), claude_timeout_minutes: L("תקרת זמן לפקודה (דקות; לקבוצה: groups.json timeout_minutes)", "Time limit per command (minutes)"),
   permission_mode: L("הרשאות Claude", "Claude permissions"), voice_replies: L("תשובה קולית להקלטה", "Voice reply to voice notes"), voice_name: L("קול", "Voice"), group_name_model: L("שם הקבוצה לפי המודל (גשר אופוס ווצאפ)", "Group name shows the model"),
@@ -740,7 +740,7 @@ const SET_LABEL = () => ({
   claude_account: L("חשבון Claude במחשב הזה", "Claude account on this computer"),
 });
 const JOBS = [  // [time key, toggle key, kv job, run-now action]
-  ["auto_update_time", "auto_update", "auto_update", "tool_update_apply"], ["morning_summary_time", "morning_summary", "morning_summary", null],
+  ["auto_release_time", "auto_release", "auto_release", null], ["auto_update_time", "auto_update", "auto_update", "tool_update_apply"], ["morning_summary_time", "morning_summary", "morning_summary", null],
   ["backup_time", null, "backup", "backup"], ["selftest_time", null, "selftest", "selftest_now"], ["update_check_time", null, "update_check", "tool_update_check"],
   ["signin_check_time", null, "signin_check", null], ["group_check_time", null, "group_check", null]];
 function trGapHtml(d) {

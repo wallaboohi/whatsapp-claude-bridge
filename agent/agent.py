@@ -462,6 +462,61 @@ def auto_update():
     log("auto_update started", res.get("latest"))
 
 
+def auto_release():
+    """Owner request 08.11: code changes go only to the shared repo (hub) during the day; once a day (config
+    auto_release_time, default 23:30) the maintainer machine (config auto_release: true) publishes everything new as the
+    next patch version (tools/release.py: tests, scan, tag, push to GitHub). The nightly auto-update (23:50) then installs
+    it on every machine. Nothing new → nothing happens."""
+    if not CFG.get("auto_release"):
+        return
+
+    def g(*a, timeout=120):
+        return subprocess.run(["git", *a], cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=timeout, creationflags=NO_WINDOW)
+
+    def say(t):
+        _ctx.chat = PRIMARY
+        try:
+            reply(t)
+        finally:
+            _ctx.chat = None
+
+    g("fetch", "-q", "hub")
+    if g("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}").returncode == 0:
+        pull = g("pull", "-q", "--ff-only")
+        if pull.returncode != 0:
+            say("⚠️ שחרור לילי לא בוצע: הקוד במחשב הזה לא מסונכרן עם המאגר המשותף (צריך מיזוג). " + pull.stderr[-200:])
+            return
+    last = g("describe", "--tags", "--abbrev=0").stdout.strip()
+    subjects = [s for s in g("log", "--no-merges", "--format=%s", f"{last}..HEAD").stdout.splitlines()
+                if s and not s.startswith("Release v")]
+    if not subjects:
+        log("auto_release: nothing new since", last)
+        return
+    if g("status", "--porcelain", "--untracked-files=no").stdout.strip():
+        say("⚠️ שחרור לילי לא בוצע: יש שינויים לא שמורים בקבצי הכלי במחשב הזה.")
+        return
+    cur = open(os.path.join(ROOT, "VERSION")).read().strip()
+    a, b, c = (int(x) for x in cur.split("."))
+    ver = f"{a}.{b}.{c + 1}"
+    notes = os.path.join(HERE, "release-notes.tmp")
+    with open(notes, "w", encoding="utf-8") as f:
+        f.write("\n".join("- " + s[:160] for s in subjects[:20]) + "\n")
+    uvx = shutil.which("uv") or os.path.expanduser("~/.local/bin/uv.exe")
+    r = subprocess.run([uvx, "run", "--no-project", "python", "-X", "utf8", os.path.join(ROOT, "tools", "release.py"), ver,
+                        f"--notes-file={notes}"], cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=1800, creationflags=NO_WINDOW)
+    try:
+        os.remove(notes)
+    except OSError:
+        pass
+    if r.returncode != 0:
+        say(f"⚠️ שחרור לילי של {ver} נכשל — הגרסה לא פורסמה, הכלי ממשיך לעבוד כרגיל.\n{(r.stdout + r.stderr)[-300:]}")
+        return
+    g("push", "-q", "hub", "HEAD:main", "--tags")
+    say(f"🚀 שחרור לילי: גרסה {ver} פורסמה ב-GitHub ({len(subjects)} שינויים מאז {last}). העדכון האוטומטי ב-{CFG.get('auto_update_time', '23:50')} יתקין אותה בכל המחשבים.")
+
+
 def report_restart():
     """After a requested restart: confirm in the group with the settings actually loaded."""
     raw = kv_get("restart_pending")
@@ -2942,6 +2997,7 @@ def scheduler():
                      (CFG.get("morning_summary_time", "07:30"), "morning_summary", morning_summary),
                      (CFG.get("signin_check_time", "09:30"), "signin_check", signin_check),
                      (CFG.get("day_sync_time", "23:40"), "day_sync", day_sync),
+                     (CFG.get("auto_release_time", "23:30"), "auto_release", auto_release),
                      (CFG.get("auto_update_time", "23:50"), "auto_update", auto_update)]
             for at, key, fn in daily + _daily:
                 if now.strftime("%H:%M") >= at and kv_get(f"day:{key}") != today:
