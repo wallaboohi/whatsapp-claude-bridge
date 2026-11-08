@@ -32,6 +32,7 @@
   "signin_check_time": "09:30",
   "reconnect_settle_seconds": 45,
   "auto_update": true,
+  "day_sync_time": "23:40",
   "auto_update_time": "23:50",
   "peers": [],
   "permission_mode": "auto",

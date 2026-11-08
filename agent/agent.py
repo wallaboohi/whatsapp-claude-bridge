@@ -21,6 +21,7 @@ import re
 import os
 import queue
 import shutil
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -305,6 +306,119 @@ def report_auto_update():
         reply(msg)
     finally:
         _ctx.chat = None
+
+
+def _git(*args, timeout=120):
+    r = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=timeout, creationflags=NO_WINDOW)
+    return r.returncode, (r.stdout + r.stderr).strip()
+
+
+def day_sync_plan(changed):
+    """What a set of changed paths (repo-relative, '/'-separated) requires: (run_go_tests, run_py_tests, rebuild_bridge)."""
+    go = any(p.startswith("whatsapp-bridge/") and p.endswith(".go") for p in changed)
+    py = any(p.endswith(".py") and (p.startswith("agent/") or p.startswith("dash/") or p.startswith("tools/")) for p in changed)
+    return go, py, go
+
+
+def _day_sync_tests(go, py):
+    """Returns '' when the tests pass (or none are needed), else a short failure text."""
+    uvx = shutil.which("uv") or os.path.expanduser("~/.local/bin/uv.exe")
+    runs = []
+    if go:
+        runs.append((["go", "test", "./..."], os.path.join(ROOT, "whatsapp-bridge")))
+    if py:
+        runs.append(([uvx, "run", "--no-sync", "python", "-X", "utf8", "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests"],
+                     os.path.join(ROOT, "agent")))
+    for cmd, cwd in runs:
+        try:
+            r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900,
+                               creationflags=NO_WINDOW)
+        except Exception as e:
+            return f"{cmd[0]}: {e}"
+        if r.returncode != 0:
+            return (r.stdout + r.stderr).strip().splitlines()[-1][:200] if (r.stdout + r.stderr).strip() else f"{cmd[0]} failed"
+    return ""
+
+
+def _rebuild_bridge():
+    """Build the bridge next to the running one, swap the exe and stop the old process (run-bridge.cmd starts the new one)."""
+    bdir = os.path.join(ROOT, "whatsapp-bridge")
+    ver = open(os.path.join(ROOT, "VERSION")).read().strip() if os.path.exists(os.path.join(ROOT, "VERSION")) else "dev"
+    r = subprocess.run(["go", "build", "-ldflags", f"-X main.version={ver}", "-o", "whatsapp-bridge-new.exe", "."], cwd=bdir,
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900, creationflags=NO_WINDOW,
+                       env=dict(os.environ, CGO_ENABLED="1"))
+    if r.returncode != 0:
+        return "בניית הגשר נכשלה: " + ((r.stdout + r.stderr).strip().splitlines() or ["?"])[-1][:200]
+    exe, prev, new = (os.path.join(bdir, n) for n in ("whatsapp-bridge.exe", "whatsapp-bridge-prev.exe", "whatsapp-bridge-new.exe"))
+    try:
+        if os.path.exists(prev):
+            os.replace(prev, prev + ".old")
+        os.replace(exe, prev)  # a running exe can be renamed on Windows
+        os.replace(new, exe)
+    except OSError as e:
+        return f"החלפת קובץ הגשר נכשלה: {e}"
+    # only the old process runs now (the loop starts the new exe after it exits), and it keeps its original image name
+    subprocess.run(["taskkill", "/F", "/IM", "whatsapp-bridge.exe"], capture_output=True, creationflags=NO_WINDOW)
+    return ""
+
+
+def day_sync():
+    """Daily before the midnight session change and the 23:50 update (config day_sync_time, default 23:40; day_sync false = off):
+    save the day's code (tracked files, only if the tests pass), pull + push the shared hub, and when the code changed rebuild
+    the bridge and restart the agent so tomorrow starts on the newest version. Untracked files are only reported."""
+    if not CFG.get("day_sync", True):
+        return
+    rc, remotes = _git("remote")
+    if rc != 0 or "hub" not in remotes.split():
+        return
+    deadline = time.time() + 10 * 60  # let a running Claude answer finish first
+    while time.time() < deadline:
+        with adb() as db:
+            if not db.execute("SELECT 1 FROM commands WHERE status = 'running'").fetchone():
+                break
+        time.sleep(30)
+    notes, host = [], socket.gethostname()
+    _, before = _git("rev-parse", "HEAD")
+    _, dirty = _git("status", "--porcelain", "--untracked-files=no")
+    changed = [ln[3:].strip().strip('"') for ln in dirty.splitlines() if ln.strip()]
+    if changed:
+        go, py, _ = day_sync_plan(changed)
+        fail = _day_sync_tests(go, py)
+        if fail:
+            notes.append(f"⚠️ {len(changed)} קבצים ששונו *לא נשמרו*: הבדיקות נכשלו ({fail}). צריך לתקן לפני השמירה.")
+        else:
+            name, mail = (CFG.get("git_author") or {}).get("name") or "whatsapp-agent", (CFG.get("git_author") or {}).get("email") or "agent@localhost"
+            _git("add", "-u")
+            rc, out = _git("-c", f"user.name={name}", "-c", f"user.email={mail}", "commit", "-q", "-m",
+                           f"Daily sync {host} {dt.date.today().isoformat()}: {len(changed)} files")
+            notes.append(f"💾 נשמרו {len(changed)} קבצים ששונו היום." if rc == 0 else f"⚠️ השמירה נכשלה: {out[-200:]}")
+    _, untracked = _git("ls-files", "--others", "--exclude-standard")
+    if untracked.strip():
+        notes.append("📄 קבצים חדשים שלא נשמרו (בכוונה, לבדיקה שלך): " + ", ".join(untracked.split()[:8]))
+    rc, out = _git("pull", "--ff-only", "hub", "main", timeout=300)
+    if rc != 0:
+        notes.append("⚠️ משיכה מה-hub נכשלה (לא fast-forward?) — צריך מיזוג ידני: " + out.splitlines()[-1][:150])
+    else:
+        rc, out = _git("push", "hub", "HEAD:main", timeout=300)
+        notes.append("⬆️ נדחף ל-hub." if rc == 0 else "⚠️ הדחיפה ל-hub נכשלה: " + out.splitlines()[-1][:150])
+    _, after = _git("rev-parse", "HEAD")
+    running = kv_get("running_head") or before
+    _, diff = _git("diff", "--name-only", running, after) if running != after else (0, "")
+    changed_since_start = [p for p in diff.splitlines() if p]
+    _, _, rebuild = day_sync_plan(changed_since_start)
+    restart = bool(changed_since_start)
+    if rebuild:
+        err = _rebuild_bridge()
+        notes.append(("⚠️ " + err) if err else "🔧 הגשר נבנה מחדש ועלה מחדש.")
+    _ctx.chat = PRIMARY
+    try:
+        reply(f"🌙 *שמירה יומית · {host}*\n" + ("\n".join(notes) if notes else "אין שינויים היום.")
+              + ("\n🔄 הסוכן עולה מחדש עם הקוד החדש." if restart else ""))
+    finally:
+        _ctx.chat = None
+    if restart:
+        RESTART_REQ.set()
 
 
 def auto_update():
@@ -2704,6 +2818,7 @@ def scheduler():
                      (CFG.get("selftest_time", "04:30"), "selftest", nightly_selftest),
                      (CFG.get("morning_summary_time", "07:30"), "morning_summary", morning_summary),
                      (CFG.get("signin_check_time", "09:30"), "signin_check", signin_check),
+                     (CFG.get("day_sync_time", "23:40"), "day_sync", day_sync),
                      (CFG.get("auto_update_time", "23:50"), "auto_update", auto_update)]
             for at, key, fn in daily + _daily:
                 if now.strftime("%H:%M") >= at and kv_get(f"day:{key}") != today:
@@ -2736,6 +2851,11 @@ if __name__ == "__main__":
         _manual[sys.argv[1]]()
         sys.exit()
     log("agent starting")
+    try:
+        kv_set("running_head", subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True,
+                                              timeout=20, creationflags=NO_WINDOW).stdout.strip())
+    except Exception:
+        pass
     if os.path.exists(RESTART_FILE):  # a request left over from before this start is already fulfilled
         os.remove(RESTART_FILE)
     threading.Thread(target=report_restart, daemon=True).start()

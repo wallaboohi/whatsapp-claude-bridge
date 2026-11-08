@@ -776,3 +776,42 @@ def test_stage_icons_for_commands_and_git(agent):
     assert "\u05de\u05e7\u05d5\u05de\u05d9" in mod._stage_of(ev("git commit -m x"))  # local
     assert "\u05d1\u05e8\u05e9\u05ea" in mod._stage_of(ev("git -C C:/x pull --ff-only"))
     assert "\U0001f512" in mod.T["budget_stop"] and "!!!" in mod.T["budget_stop"]
+
+
+def test_day_sync_plan():
+    import importlib, sys
+    sys.path.insert(0, HERE)
+    mod = importlib.import_module("agent")
+    assert mod.day_sync_plan(["whatsapp-bridge/health.go"]) == (True, False, True)
+    assert mod.day_sync_plan(["agent/agent.py", "README.md"]) == (False, True, False)
+    assert mod.day_sync_plan(["README.md"]) == (False, False, False)
+
+
+def test_day_sync_does_not_save_when_tests_fail(agent, monkeypatch):
+    mod, _ = agent
+    calls, said = [], []
+    def fake_git(*args, timeout=120):
+        calls.append(args)
+        if args[0] == "remote":
+            return 0, "hub\norigin"
+        if args[0] == "status":
+            return 0, " M agent/agent.py"
+        if args[0] == "rev-parse":
+            return 0, "abc"
+        return 0, ""
+    monkeypatch.setattr(mod, "_git", fake_git)
+    monkeypatch.setattr(mod, "_day_sync_tests", lambda go, py: "1 failed")
+    monkeypatch.setattr(mod, "reply", lambda text, **k: said.append(text))
+    mod.day_sync()
+    assert not any(a[0] in ("add", "commit") or (len(a) > 4 and a[4] == "commit") for a in calls)
+    assert said and "לא נשמרו" in said[0] and "1 failed" in said[0]
+    assert ("push", "hub", "HEAD:main") in calls, "what is already committed is still pushed"
+
+
+def test_day_sync_skips_without_hub(agent, monkeypatch):
+    mod, _ = agent
+    said = []
+    monkeypatch.setattr(mod, "_git", lambda *a, timeout=120: (0, "origin"))
+    monkeypatch.setattr(mod, "reply", lambda text, **k: said.append(text))
+    mod.day_sync()
+    assert said == []
