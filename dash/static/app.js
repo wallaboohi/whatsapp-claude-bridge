@@ -728,7 +728,7 @@ const SET_LABEL = () => ({
   auto_update_time: L("עדכון אוטומטי", "Auto-update"), auto_release_time: L("שחרור לילי ל-GitHub (מחשב מפתח)", "Nightly release to GitHub (maintainer)"), daily_budget_usd: L("תקרה יומית לשיחה ($)", "Daily cap per chat ($)"), total_daily_budget_usd: L("תקרה כוללת ליום ($)", "Total daily cap ($)"),
   light_model: L("מודל קל (אוטו)", "Light model (auto)"), claude_model: L("מודל רגיל (אוטו)", "Normal model (auto)"), deep_model: L("מודל חזק (!! / תכנון)", "Strong model (!!)"),
   fresh_sessions: L("סשן נקי לכל הודעה", "Fresh session per message"), session_max_runs: L("הודעות לסשן (4M) לפני החלפה", "Messages per session (4M)"), claude_timeout_minutes: L("תקרת זמן לפקודה (דקות; לקבוצה: groups.json timeout_minutes)", "Time limit per command (minutes)"),
-  permission_mode: L("הרשאות Claude", "Claude permissions"), voice_replies: L("תשובה קולית להקלטה", "Voice reply to voice notes"), voice_name: L("קול", "Voice"), group_name_model: L("שם הקבוצה לפי המודל (גשר אופוס ווצאפ)", "Group name shows the model"),
+  permission_mode: L("הרשאות Claude", "Claude permissions"), voice_replies: L("תשובה קולית להקלטה", "Voice reply to voice notes"), voice_name: L("קול", "Voice"), voice_style: L("סגנון קול", "Voice style"), group_name_model: L("שם הקבוצה לפי המודל (גשר אופוס ווצאפ)", "Group name shows the model"),
   transcribe: L("תמלול הקלטות שלי", "Transcribe my voice notes"), transcribe_all_chats: L("תמלול הקלטות בכל השיחות", "Transcribe all chats"),
   reply_italic: L("תשובות בנטוי", "Italic replies"), quote_replies: L("ציטוט ההודעה בתשובה", "Quote in replies"), strict_mcp: L("בלי שרתי MCP נוספים", "Strict MCP"),
   disconnect_alert_minutes: L("התראת ניתוק אחרי (דק')", "Disconnect alert after (min)"), backup_keep_days: L("שמירת גיבויים (ימים)", "Keep backups (days)"),
@@ -763,8 +763,10 @@ function peerBackupHtml(d) {
 
 function settingsContent(d) {
   const S = d.settings || {}, v = S.values || {}, t = S.types || {}, lab = SET_LABEL(), jobs = d.jobs || {};
-  const VOICE_NAMES = { "he-IL-HilaNeural": L("הילה (אישה)", "Hila (female, Hebrew)"), "he-IL-AvriNeural": L("אבי (גבר)", "Avri (male, Hebrew)"),
-    "en-US-JennyNeural": "Jenny (English)", "en-US-GuyNeural": "Guy (English)" };
+  const VOICE_NAMES = { "pt-BR-ThalitaMultilingualNeural": L("תליטה", "Thalita"), "en-US-AvaMultilingualNeural": L("אווה", "Ava"),
+    "en-US-EmmaMultilingualNeural": L("אמה", "Emma"), "fr-FR-VivienneMultilingualNeural": L("ויויאן", "Vivienne"),
+    "de-DE-SeraphinaMultilingualNeural": L("סרפינה", "Seraphina"), "he-IL-HilaNeural": L("הילה", "Hila"),
+    "he-IL-AvriNeural": L("אבי (גבר)", "Avri (male)"), "en-US-AndrewMultilingualNeural": L("אנדרו (גבר)", "Andrew (male)") };
   const inp = k => {
     const ty = t[k], val = v[k];
     if (ty === "bool") return `<input type="checkbox" data-set="${k}"${val ? " checked" : ""} aria-label="${esc(lab[k] || k)}">`;
@@ -772,6 +774,7 @@ function settingsContent(d) {
     if (ty === "model") return `<select class="btn small sel" data-set="${k}" aria-label="${esc(lab[k] || k)}">${(S.models || []).map(m => `<option${m === val ? " selected" : ""}>${esc(m)}</option>`).join("")}</select>`;
     if (ty === "voice") return `<select class="btn small sel" data-set="${k}" aria-label="${esc(lab[k] || k)}">${(S.voices || []).map(m => `<option value="${esc(m)}"${m === val ? " selected" : ""}>${esc(VOICE_NAMES[m] || m)}</option>`).join("")}</select>
       <button type="button" class="btn small" data-voicetest="1" title="${L("השמע דוגמה בקול שנבחר", "Play a sample in the chosen voice")}">▶</button>`;
+    if (ty === "vstyle") return `<select class="btn small sel" data-set="${k}" aria-label="${esc(lab[k] || k)}">${["normal", "soft"].map(m => `<option value="${m}"${m === val ? " selected" : ""}>${m === "soft" ? L("רך (איטי ונמוך מעט)", "Soft") : L("רגיל", "Normal")}</option>`).join("")}</select>`;
     if (ty === "choice") return `<select class="btn small sel" data-set="${k}" aria-label="${esc(lab[k] || k)}">${(S.perm_modes || []).map(m => `<option${m === val ? " selected" : ""}>${esc(m)}</option>`).join("")}</select>`;
     if (ty === "num" || ty === "int") return `<input type="number" step="${ty === "int" ? 1 : 0.5}" data-set="${k}" value="${esc(val)}" style="width:80px" aria-label="${esc(lab[k] || k)}">`;
     return `<input type="text" data-set="${k}" value="${esc(val)}" style="width:150px" aria-label="${esc(lab[k] || k)}">`;
@@ -790,7 +793,7 @@ function settingsContent(d) {
     sec(L("תזמונים", "Schedules"), JOBS.map(jobRow).join("")) +
     sec(L("עלות", "Cost"), ["daily_budget_usd", "total_daily_budget_usd"].map(row).join("") + `<p class="note tight">${L("תקרה לשיחה מסוימת: בכרטיס \"השיחה הנוכחית\" ← 💲", "Per-chat cap: in the 'This conversation' card")}</p>`) +
     sec(L("מודלים וסשן", "Models & sessions"), ["light_model", "claude_model", "deep_model", "group_name_model", "fresh_sessions", "session_max_runs", "claude_timeout_minutes", "permission_mode"].map(row).join("")) +
-    sec(L("קול ותמלול", "Voice"), ["voice_replies", "voice_name", "transcribe", "transcribe_all_chats"].map(row).join("") +
+    sec(L("קול ותמלול", "Voice"), ["voice_replies", "voice_name", "voice_style", "transcribe", "transcribe_all_chats"].map(row).join("") +
       `<p class="note tight">${L("הפעלה/כיבוי תמלול נכנסים לתוקף ב\"שמור והפעל מחדש\".", "Switching transcription takes effect after Save & restart.")}</p>` + trGapHtml(d)) +
     sec(L("תשובות", "Replies"), ["reply_italic", "quote_replies", "strict_mcp"].map(row).join("")) +
     sec(L("התראות וגיבוי", "Alerts & backup"), ["disconnect_alert_minutes", "reconnect_settle_seconds", "backup_keep_days", "backup_media_days"].map(row).join("")) +

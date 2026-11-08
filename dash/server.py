@@ -244,7 +244,10 @@ def svc_start(name):
 
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 PERM_MODES = ["default", "acceptEdits", "auto", "bypassPermissions", "plan"]
-VOICES = ["he-IL-HilaNeural", "he-IL-AvriNeural", "en-US-JennyNeural", "en-US-GuyNeural"]
+VOICES = ["pt-BR-ThalitaMultilingualNeural", "en-US-AvaMultilingualNeural", "en-US-EmmaMultilingualNeural",
+          "fr-FR-VivienneMultilingualNeural", "de-DE-SeraphinaMultilingualNeural", "he-IL-HilaNeural", "he-IL-AvriNeural",
+          "en-US-AndrewMultilingualNeural"]
+VOICE_STYLES = ["normal", "soft"]
 # every setting the agent reads from config.json that the owner may want to change: key -> (type, default, extra)
 SETTINGS = {
     "backup_time": ("time", "03:00", None), "update_check_time": ("time", "09:00", None), "group_check_time": ("time", "10:00", None),
@@ -257,7 +260,7 @@ SETTINGS = {
     "session_max_runs": ("int", 60, (1, 1000)), "claude_timeout_minutes": ("int", 15, (1, 240)), "disconnect_alert_minutes": ("int", 10, (1, 1440)),
     "backup_keep_days": ("int", 14, (1, 365)), "backup_media_days": ("int", 90, (0, 3650)), "reconnect_settle_seconds": ("int", 45, (0, 600)),
     "light_model": ("model", "haiku", None), "claude_model": ("model", "sonnet", None), "deep_model": ("model", "opus", None),
-    "permission_mode": ("choice", "auto", PERM_MODES), "voice_name": ("voice", "he-IL-HilaNeural", VOICES), "group_name_model": ("bool", True, None),
+    "permission_mode": ("choice", "auto", PERM_MODES), "voice_name": ("voice", "pt-BR-ThalitaMultilingualNeural", VOICES), "voice_style": ("vstyle", "normal", VOICE_STYLES), "group_name_model": ("bool", True, None),
     "peer_watch": ("bool", True, None), "peer_alert_minutes": ("int", 10, (1, 1440)), "peer_offline_minutes": ("int", 30, (1, 10080)),
     "peer_backup": ("bool", True, None), "peer_backup_max_mb": ("int", 2048, (0, 200000)),
     "host_label": ("opt", "", None), "claude_account": ("opt", "", None),
@@ -296,7 +299,7 @@ def validate_setting(k, v):
         if not x[0] <= n <= x[1]:
             raise ValueError(f"{k}: בין {x[0]} ל-{x[1]}")
         return n
-    if t in ("choice", "voice"):
+    if t in ("choice", "voice", "vstyle"):
         if v not in x:
             raise ValueError(f"{k}: אחד מ-{', '.join(x)}")
         return v

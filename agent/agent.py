@@ -1700,8 +1700,10 @@ def tts_clean(text, limit=800):
     return t
 
 
-VOICES = {"he-IL-HilaNeural": "הילה (אישה)", "he-IL-AvriNeural": "אבי (גבר)",
-          "en-US-JennyNeural": "Jenny (English)", "en-US-GuyNeural": "Guy (English)"}
+# multilingual voices speak Hebrew too (owner chose Thalita 08.11); plain English voices stay silent on Hebrew text
+VOICES = {"pt-BR-ThalitaMultilingualNeural": "תליטה", "en-US-AvaMultilingualNeural": "אווה", "en-US-EmmaMultilingualNeural": "אמה",
+          "fr-FR-VivienneMultilingualNeural": "ויויאן", "de-DE-SeraphinaMultilingualNeural": "סרפינה",
+          "he-IL-HilaNeural": "הילה", "he-IL-AvriNeural": "אבי (גבר)", "en-US-AndrewMultilingualNeural": "אנדרו (גבר)"}
 
 
 def tts_ogg(text, path, voice=None):
@@ -1710,8 +1712,9 @@ def tts_ogg(text, path, voice=None):
     import av
     import edge_tts
     mp3 = path[:-4] + ".mp3"
-    voice = voice or CFG.get("voice_name") or ("he-IL-HilaNeural" if LANG == "he" else "en-US-JennyNeural")
-    asyncio.run(edge_tts.Communicate(text, voice).save(mp3))
+    voice = voice or CFG.get("voice_name") or ("pt-BR-ThalitaMultilingualNeural" if LANG == "he" else "en-US-AvaMultilingualNeural")
+    soft = CFG.get("voice_style") == "soft"  # "רך": a little slower and lower
+    asyncio.run(edge_tts.Communicate(text, voice, rate="-12%" if soft else "+0%", pitch="-6Hz" if soft else "+0Hz").save(mp3))
     inp, out = av.open(mp3), av.open(path, "w", format="ogg")
     try:
         st = out.add_stream("libopus", rate=48000)
