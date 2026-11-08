@@ -815,3 +815,23 @@ def test_day_sync_skips_without_hub(agent, monkeypatch):
     monkeypatch.setattr(mod, "reply", lambda text, **k: said.append(text))
     mod.day_sync()
     assert said == []
+
+
+def test_group_name_follows_model(agent, monkeypatch):
+    mod, _ = agent
+    calls = []
+    def fake_bridge(path, body=None, timeout=180, tok=None):
+        calls.append((path, body))
+        if path == "/group_info":
+            return {"success": True, "name": "\u05d2\u05e9\u05e8 \u05e7\u05dc\u05d0\u05d5\u05d3 \u05d5\u05d5\u05e6\u05d0\u05e4"}
+        return {"success": True}
+    monkeypatch.setattr(mod, "bridge", fake_bridge)
+    mod.CFG["group_name_model"] = True
+    mod.sync_group_name(mod.PRIMARY, "claude-opus-5-5")
+    names = [b["name"] for p, b in calls if p == "/set_group"]
+    assert names == ["\u05d2\u05e9\u05e8 \u05d0\u05d5\u05e4\u05d5\u05e1 \u05d5\u05d5\u05e6\u05d0\u05e4"], names  # גשר אופוס ווצאפ
+    mod.sync_group_name(mod.PRIMARY, "opus")  # same name: no second rename
+    assert len([1 for p, b in calls if p == "/set_group"]) == 1
+    mod.kv_set(mod.K("name_set_at", mod.PRIMARY), "0")
+    mod.sync_group_name(mod.PRIMARY, "sonnet")
+    assert [b["name"] for p, b in calls if p == "/set_group"][-1].split()[1] == "\u05e1\u05d5\u05e0\u05d8"  # סונט

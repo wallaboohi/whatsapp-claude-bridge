@@ -1163,6 +1163,76 @@ def get_override(chat=None):
     return node["model"]
 
 
+MODEL_HE = {"opus": "אופוס", "sonnet": "סונט", "haiku": "הייקו", "fable": "פייבל"}
+_rename_lock = threading.Lock()
+
+
+def model_he(model):
+    m = (model or "").lower()
+    for k, v in MODEL_HE.items():
+        if k in m:
+            return v
+    return model or ""
+
+
+def group_name_template(chat):
+    """The group's name with a {model} slot, learned once from its current name: "קלאוד" → the model
+    ("גשר קלאוד ווצאפ" → "גשר {model} ווצאפ"); a name that already holds a model name keeps that slot; any other
+    name gets " · {model}" appended. Stored in kv name_tpl:<chat> (delete it to re-learn after a manual rename)."""
+    tpl = kv_get(K("name_tpl", chat))
+    if tpl:
+        return tpl
+    res = bridge("/group_info", {"jid": chat}, timeout=30)
+    name = (res.get("name") or "").strip() if res.get("success") else ""
+    if not name:
+        return ""
+    for word in ("קלאוד", *MODEL_HE.values()):
+        if word in name:
+            tpl = name.replace(word, "{model}", 1)
+            break
+    else:
+        tpl = name + " · {model}"
+    kv_set(K("name_tpl", chat), tpl)
+    return tpl
+
+
+def sync_group_name(chat, model):
+    """Owner request 08.11: every connected WhatsApp group shows the model that talks in it ("גשר אופוס ווצאפ").
+    Called when a run starts (auto = the model actually working) and every minute (a model chosen in WhatsApp or the
+    dashboard). Renames only when the name would change, at most once per 20 s per group. Config group_name_model."""
+    if not CFG.get("group_name_model", True) or not model or not str(chat).endswith("@g.us"):
+        return
+    if chat != PRIMARY and chat not in load_groups():
+        return
+    with _rename_lock:
+        try:
+            tpl = group_name_template(chat)
+            if not tpl:
+                return
+            want = tpl.replace("{model}", model_he(model))[:100]
+            if kv_get(K("name_set", chat)) == want:
+                return
+            last = kv_get(K("name_set_at", chat))
+            if last and time.time() - float(last) < 20:
+                return
+            res = bridge("/set_group", {"jid": chat, "name": want}, timeout=30)
+            kv_set(K("name_set_at", chat), str(time.time()))
+            if res.get("success", True) and not res.get("error"):
+                kv_set(K("name_set", chat), want)
+                log("group renamed for model:", chat, want)
+            else:
+                log("group rename failed", chat, res)
+        except Exception as e:
+            log("group rename error", e)
+
+
+def sync_all_group_names():
+    """Every minute: the name follows the forced model (WhatsApp /מודל or dashboard) or, in auto, the last model that worked."""
+    for chat in [PRIMARY, *[j for j in load_groups() if j != LOCAL]]:
+        m = get_override(chat) or kv_get(K("last_model", chat)) or CFG.get("claude_model") or "sonnet"
+        sync_group_name(chat, m)
+
+
 def set_override(model, hours=None, chat=None):
     until = (dt.datetime.now() + dt.timedelta(hours=hours)).isoformat(timespec="seconds") if hours else ""
     o = _override_state()
@@ -1366,6 +1436,9 @@ def owner_command(text, chat=None):
         return "לא מכיר את המודל הזה. אפשרויות: " + ", ".join(MODELS) + "\n\n" + models_guide(chat)
     hours = 1 if "hour" in parts[1:] else None
     set_override(name, hours, chat)
+    target = chat or PRIMARY
+    threading.Thread(target=sync_group_name, args=(target, get_override(target) or kv_get(K("last_model", target)) or name),
+                     daemon=True).start()
     return f"✅ המודל הוחלף ל-*{MODELS[name]['he']}*{' לשעה' if hours else ''} ({MODELS[name]['cost']}). חזרה לאוטו: /מודל אוטו"
 
 
@@ -1512,6 +1585,7 @@ def run_command(row):
             prompt = (T_BACK_HE if LANG == "he" else T_BACK_EN) + prompt
         model, how = pick_model_info(text, chat)
         _ctx.auto_pick = how == "auto"
+        threading.Thread(target=sync_group_name, args=(chat, model), daemon=True).start()  # the name shows who is answering
         started = time.time()
         status = StatusMsg(model, chat, wa=not pc_only(), react_to=mid if src == "wa" else None)
         limit_min = run_timeout_minutes(chat)
@@ -2828,6 +2902,7 @@ def scheduler():
                 kv_set("at:reminders", now.strftime("%Y%m%d%H%M"))
                 work.put(reminders_check)
                 work.put(scheduled_check)
+                slow.put(sync_all_group_names)
                 work.put(transcribe_backfill_check)
             for minutes, key, fn in _periodic:
                 last = kv_get(f"at:{key}")

@@ -257,7 +257,7 @@ SETTINGS = {
     "session_max_runs": ("int", 60, (1, 1000)), "claude_timeout_minutes": ("int", 15, (1, 240)), "disconnect_alert_minutes": ("int", 10, (1, 1440)),
     "backup_keep_days": ("int", 14, (1, 365)), "backup_media_days": ("int", 90, (0, 3650)), "reconnect_settle_seconds": ("int", 45, (0, 600)),
     "light_model": ("model", "haiku", None), "claude_model": ("model", "sonnet", None), "deep_model": ("model", "opus", None),
-    "permission_mode": ("choice", "auto", PERM_MODES), "voice_name": ("voice", "he-IL-HilaNeural", VOICES),
+    "permission_mode": ("choice", "auto", PERM_MODES), "voice_name": ("voice", "he-IL-HilaNeural", VOICES), "group_name_model": ("bool", True, None),
     "peer_watch": ("bool", True, None), "peer_alert_minutes": ("int", 10, (1, 1440)), "peer_offline_minutes": ("int", 30, (1, 10080)),
     "peer_backup": ("bool", True, None), "peer_backup_max_mb": ("int", 2048, (0, 200000)),
     "host_label": ("opt", "", None), "claude_account": ("opt", "", None),
