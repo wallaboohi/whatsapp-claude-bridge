@@ -363,8 +363,86 @@ def _rebuild_bridge():
     return ""
 
 
+def _git_author():
+    a = CFG.get("git_author") or {}
+    return ["-c", f"user.name={a.get('name') or 'whatsapp-agent'}", "-c", f"user.email={a.get('email') or 'agent@localhost'}"]
+
+
+def _resolve_conflicts(files):
+    """A headless Claude run (Read/Edit only, no git) that combines both computers' versions of each conflicted file.
+    Returns '' or a short failure text."""
+    prompt = ("Git merge conflict between the two computers that develop this tool (shared repo 'hub'). Conflicted files: "
+              + ", ".join(files) + ". For each file: read it, combine BOTH sides into code that keeps every addition and change "
+              "of each side (never drop or override one side; if both changed the same lines, write code that does both), and "
+              "remove every conflict marker. Edit only these files. Do not run git or anything else. Reply 'done'.")
+    cmd = [shutil.which("claude") or "claude", "-p", "--permission-mode", "acceptEdits", "--tools", "Read,Edit",
+           "--strict-mcp-config", "--model", CFG.get("merge_model", "opus")]
+    try:
+        r = subprocess.run(cmd, cwd=ROOT, input=prompt, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=1500, creationflags=NO_WINDOW)
+    except Exception as e:
+        return f"claude: {e}"
+    return "" if r.returncode == 0 else ((r.stdout + r.stderr).strip()[-200:] or "claude failed")
+
+
+def _hub_sync():
+    """Owner 09.11: bring this machine and hub/main together so the result holds BOTH computers' changes. Fast-forward when
+    possible; otherwise a real merge (no rebase, no overwrite); conflicting files are combined by Claude. The merged code
+    must pass the tests, else the merge is undone (our own commits stay). Returns (ok, note) — note is '' for a plain pull."""
+    _git("fetch", "-q", "hub", timeout=300)
+    rc, out = _git("merge", "--ff-only", "hub/main")
+    if rc == 0:
+        return True, ""
+    _, before = _git("rev-parse", "HEAD")
+    rc, out = _git(*_git_author(), "merge", "--no-edit", "hub/main", timeout=300)
+    conflicted = []
+    if rc != 0:
+        _, u = _git("diff", "--name-only", "--diff-filter=U")
+        conflicted = [p for p in u.split() if p]
+        if not conflicted:
+            _git("merge", "--abort")
+            return False, "⚠️ המיזוג עם המחשב השני נכשל: " + (out.splitlines() or ["?"])[-1][:150]
+        fail = _resolve_conflicts(conflicted)
+        rc_m, left = _git("grep", "-l", "-E", "^(<<<<<<<|>>>>>>>)( |$)", "--", *conflicted)
+        if fail or left.strip():
+            _git("merge", "--abort")
+            return False, (f"⚠️ התנגשות בין המחשבים ב-{', '.join(conflicted[:5])} ולא הצלחתי לשלב אוטומטית "
+                           f"({fail or 'נשארו סימני התנגשות'}). המיזוג בוטל, שום דבר לא נמחק — צריך מיזוג ידני.")
+        _git("add", "--", *conflicted)
+        rc, out = _git(*_git_author(), "commit", "-q", "--no-edit")
+        if rc != 0:
+            _git("merge", "--abort")
+            return False, "⚠️ שמירת המיזוג נכשלה: " + out[-150:]
+    _, diff = _git("diff", "--name-only", before, "HEAD")
+    go, py, _ = day_sync_plan([p for p in diff.splitlines() if p])
+    fail = _day_sync_tests(go, py)
+    if fail:
+        _git("reset", "--keep", before)
+        return False, f"⚠️ הקוד המאוחד משני המחשבים נכשל בבדיקות ({fail}). המיזוג בוטל, שום דבר לא נמחק — צריך לבדוק."
+    return True, ("🔀 מוזג עם המחשב השני" + (f" (התנגשות ב-{len(conflicted)} קבצים שולבה כך ששני הצדדים נשמרו)" if conflicted else "")
+                  + ", הבדיקות עברו.")
+
+
+def _peers_included():
+    """Owner 09.11: a release must contain both computers' work. Every peer (config peers) must answer (dashboard /brief →
+    git), have nothing unsaved, and its HEAD must already be inside ours. Returns '' or the reason (Hebrew)."""
+    for p in CFG.get("peers") or []:
+        name = p.get("name") or peer_alias(p) or "?"
+        b = peer_fetch(p, timeout=10)
+        if not b:
+            return f"המחשב '{name}' לא זמין, ואי אפשר לוודא שהשינויים שלו נכללו"
+        g = b.get("git") or {}
+        if not g.get("head"):
+            return f"המחשב '{name}' לא מדווח על מצב הקוד שלו (הלוח שם בגרסה ישנה)"
+        if g.get("dirty"):
+            return f"במחשב '{name}' יש {g['dirty']} קבצים ששונו ולא נשמרו"
+        if _git("merge-base", "--is-ancestor", g["head"], "HEAD")[0] != 0:
+            return f"במחשב '{name}' יש קוד ({g['head'][:7]}) שעוד לא הגיע למאגר המשותף"
+    return ""
+
+
 def day_sync():
-    """Daily before the midnight session change and the 23:50 update (config day_sync_time, default 23:40; day_sync false = off):
+    """Daily before the release, the midnight session change and the 23:50 update (config day_sync_time, default 23:15; day_sync false = off):
     save the day's code (tracked files, only if the tests pass), pull + push the shared hub, and when the code changed rebuild
     the bridge and restart the agent so tomorrow starts on the newest version. Untracked files are only reported."""
     if not CFG.get("day_sync", True):
@@ -388,18 +466,17 @@ def day_sync():
         if fail:
             notes.append(f"⚠️ {len(changed)} קבצים ששונו *לא נשמרו*: הבדיקות נכשלו ({fail}). צריך לתקן לפני השמירה.")
         else:
-            name, mail = (CFG.get("git_author") or {}).get("name") or "whatsapp-agent", (CFG.get("git_author") or {}).get("email") or "agent@localhost"
             _git("add", "-u")
-            rc, out = _git("-c", f"user.name={name}", "-c", f"user.email={mail}", "commit", "-q", "-m",
+            rc, out = _git(*_git_author(), "commit", "-q", "-m",
                            f"Daily sync {host} {dt.date.today().isoformat()}: {len(changed)} files")
             notes.append(f"💾 נשמרו {len(changed)} קבצים ששונו היום." if rc == 0 else f"⚠️ השמירה נכשלה: {out[-200:]}")
     _, untracked = _git("ls-files", "--others", "--exclude-standard")
     if untracked.strip():
         notes.append("📄 קבצים חדשים שלא נשמרו (בכוונה, לבדיקה שלך): " + ", ".join(untracked.split()[:8]))
-    rc, out = _git("pull", "--ff-only", "hub", "main", timeout=300)
-    if rc != 0:
-        notes.append("⚠️ משיכה מה-hub נכשלה (לא fast-forward?) — צריך מיזוג ידני: " + out.splitlines()[-1][:150])
-    else:
+    ok, note = _hub_sync()
+    if note:
+        notes.append(note)
+    if ok:
         rc, out = _git("push", "hub", "HEAD:main", timeout=300)
         notes.append("⬆️ נדחף ל-hub." if rc == 0 else "⚠️ הדחיפה ל-hub נכשלה: " + out.splitlines()[-1][:150])
     _, after = _git("rev-parse", "HEAD")
@@ -466,7 +543,8 @@ def auto_release():
     """Owner request 08.11: code changes go only to the shared repo (hub) during the day; once a day (config
     auto_release_time, default 23:30) the maintainer machine (config auto_release: true) publishes everything new as the
     next patch version (tools/release.py: tests, scan, tag, push to GitHub). The nightly auto-update (23:50) then installs
-    it on every machine. Nothing new → nothing happens."""
+    it on every machine. Nothing new → nothing happens. Owner 09.11: first merge with hub (_hub_sync) and verify every peer's
+    code is already included (_peers_included, config release_require_peers) — else postpone, never publish half."""
     if not CFG.get("auto_release"):
         return
 
@@ -481,20 +559,24 @@ def auto_release():
         finally:
             _ctx.chat = None
 
-    g("fetch", "-q", "hub")
-    if g("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}").returncode == 0:
-        pull = g("pull", "-q", "--ff-only")
-        if pull.returncode != 0:
-            say("⚠️ שחרור לילי לא בוצע: הקוד במחשב הזה לא מסונכרן עם המאגר המשותף (צריך מיזוג). " + pull.stderr[-200:])
-            return
-    last = g("describe", "--tags", "--abbrev=0").stdout.strip()
+    if g("status", "--porcelain", "--untracked-files=no").stdout.strip():
+        say("⚠️ שחרור לילי לא בוצע: יש שינויים לא שמורים בקבצי הכלי במחשב הזה.")
+        return
+    ok, note = _hub_sync()
+    if not ok:
+        say("⚠️ שחרור לילי לא בוצע — " + note.lstrip("⚠️ "))
+        return
+    if note:
+        g("push", "-q", "hub", "HEAD:main")
+    why = _peers_included() if CFG.get("release_require_peers", True) else ""
+    if why:
+        say(f"⏸️ שחרור לילי נדחה: {why}. כך לא תפורסם גרסה בלי השינויים של שני המחשבים. אפשר לשחרר ידנית אחרי שזה מסתדר.")
+        return
+    last = g("describe", "--tags", "--abbrev=0", "--match", "v*").stdout.strip()
     subjects = [s for s in g("log", "--no-merges", "--format=%s", f"{last}..HEAD").stdout.splitlines()
                 if s and not s.startswith("Release v")]
     if not subjects:
         log("auto_release: nothing new since", last)
-        return
-    if g("status", "--porcelain", "--untracked-files=no").stdout.strip():
-        say("⚠️ שחרור לילי לא בוצע: יש שינויים לא שמורים בקבצי הכלי במחשב הזה.")
         return
     cur = open(os.path.join(ROOT, "VERSION")).read().strip()
     a, b, c = (int(x) for x in cur.split("."))
@@ -3052,7 +3134,7 @@ def scheduler():
                      (CFG.get("selftest_time", "04:30"), "selftest", nightly_selftest),
                      (CFG.get("morning_summary_time", "07:30"), "morning_summary", morning_summary),
                      (CFG.get("signin_check_time", "09:30"), "signin_check", signin_check),
-                     (CFG.get("day_sync_time", "23:40"), "day_sync", day_sync),
+                     (CFG.get("day_sync_time", "23:15"), "day_sync", day_sync),
                      (CFG.get("auto_release_time", "23:30"), "auto_release", auto_release),
                      (CFG.get("auto_update_time", "23:50"), "auto_update", auto_update)]
             for at, key, fn in daily + _daily:

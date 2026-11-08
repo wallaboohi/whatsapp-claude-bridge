@@ -430,6 +430,17 @@ def peer_call(i, path, body=None, raw=None, ctype="application/json", timeout=5)
         return {"offline": True, "error": str(e)[:200]}
 
 
+def git_state():
+    """This machine's code for the other machine's nightly release check: HEAD and how many tracked files are unsaved."""
+    try:
+        run = lambda *a: subprocess.run(["git", *a], cwd=ROOT, capture_output=True, text=True, timeout=20, creationflags=NW)
+        head = run("rev-parse", "HEAD").stdout.strip()
+        dirty = len([ln for ln in run("status", "--porcelain", "--untracked-files=no").stdout.splitlines() if ln.strip()])
+        return {"head": head, "dirty": dirty} if head else None
+    except Exception:
+        return None
+
+
 def brief():
     """Small status of this machine for the other machine's dashboard (tabs + the "computers" card)."""
     c, p = cfg(), paths()
@@ -458,7 +469,7 @@ def brief():
             "dash_version": VERSION, "bridge": {k: b.get(k) for k in ("connected", "version", "paused", "error", "connected_since", "health")},
             "agent_alive": alive, "heartbeat": hb, "listen_paused": kv("listen_paused") or "", "groups": gl, "tunnels": tunnels,
             "services": services(), "backup_dir": backup_dir_abs(), "cost": cost_summary(),
-            "host_label": c.get("host_label") or "", "account": c.get("claude_account") or ""}
+            "host_label": c.get("host_label") or "", "account": c.get("claude_account") or "", "git": git_state()}
 
 
 def peers_status():

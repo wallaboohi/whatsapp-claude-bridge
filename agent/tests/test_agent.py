@@ -809,6 +809,71 @@ def test_day_sync_does_not_save_when_tests_fail(agent, monkeypatch):
     assert ("push", "hub", "HEAD:main") in calls, "what is already committed is still pushed"
 
 
+def _fake_git_merge(calls, merge_rc=0, conflicted="", leftover=""):
+    def fake_git(*args, timeout=120):
+        calls.append(args)
+        a = [x for x in args if x != "-c" and "=" not in x]
+        if a[:2] == ["merge", "--ff-only"]:
+            return 1, "fatal: Not possible to fast-forward"
+        if a[:1] == ["merge"] and "hub/main" in a:
+            return merge_rc, "CONFLICT" if merge_rc else "Merge made"
+        if a[:1] == ["diff"] and "--diff-filter=U" in a:
+            return 0, conflicted
+        if a[:1] == ["grep"]:
+            return (0 if leftover else 1), leftover
+        if a[:1] == ["diff"]:
+            return 0, "agent/agent.py"
+        if a[:1] == ["rev-parse"]:
+            return 0, "abc"
+        return 0, ""
+    return fake_git
+
+
+def test_hub_sync_merges_both_sides_and_runs_tests(agent, monkeypatch):
+    mod, _ = agent
+    calls, resolved = [], []
+    monkeypatch.setattr(mod, "_git", _fake_git_merge(calls, merge_rc=1, conflicted="agent/agent.py"))
+    monkeypatch.setattr(mod, "_resolve_conflicts", lambda files: resolved.append(files) or "")
+    monkeypatch.setattr(mod, "_day_sync_tests", lambda go, py: "")
+    ok, note = mod._hub_sync()
+    assert ok and "🔀" in note and resolved == [["agent/agent.py"]]
+    assert any("commit" in c for c in calls), "the combined result is committed"
+    assert not any(c[:1] == ("reset",) for c in calls)
+
+
+def test_hub_sync_undoes_merge_when_tests_fail(agent, monkeypatch):
+    mod, _ = agent
+    calls = []
+    monkeypatch.setattr(mod, "_git", _fake_git_merge(calls))
+    monkeypatch.setattr(mod, "_day_sync_tests", lambda go, py: "2 failed")
+    ok, note = mod._hub_sync()
+    assert not ok and "2 failed" in note
+    assert ("reset", "--keep", "abc") in calls, "undo keeps our own commits (no --hard)"
+
+
+def test_hub_sync_aborts_when_markers_remain(agent, monkeypatch):
+    mod, _ = agent
+    calls = []
+    monkeypatch.setattr(mod, "_git", _fake_git_merge(calls, merge_rc=1, conflicted="a.py", leftover="a.py"))
+    monkeypatch.setattr(mod, "_resolve_conflicts", lambda files: "")
+    ok, note = mod._hub_sync()
+    assert not ok and ("merge", "--abort") in calls and not any("commit" in c for c in calls)
+
+
+def test_peers_included(agent, monkeypatch):
+    mod, _ = agent
+    mod.CFG["peers"] = [{"name": "laptop", "url": "http://x"}]
+    monkeypatch.setattr(mod, "_git", lambda *a, timeout=120: (0, ""))
+    monkeypatch.setattr(mod, "peer_fetch", lambda p, path="/brief", timeout=5: None)
+    assert "laptop" in mod._peers_included()
+    monkeypatch.setattr(mod, "peer_fetch", lambda p, path="/brief", timeout=5: {"git": {"head": "abc", "dirty": 2}})
+    assert "2" in mod._peers_included()
+    monkeypatch.setattr(mod, "peer_fetch", lambda p, path="/brief", timeout=5: {"git": {"head": "abc", "dirty": 0}})
+    assert mod._peers_included() == ""
+    monkeypatch.setattr(mod, "_git", lambda *a, timeout=120: (1, ""))  # its HEAD is not inside ours
+    assert "abc" in mod._peers_included()
+
+
 def test_day_sync_skips_without_hub(agent, monkeypatch):
     mod, _ = agent
     said = []
