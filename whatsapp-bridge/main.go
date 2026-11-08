@@ -78,6 +78,7 @@ func main() {
 	ownerToken = loadOwnerToken()
 
 	registerEventHandlers(client, messageStore, logger)
+	registerHealth(client)
 
 	// Create channel to track connection success
 	connected := make(chan bool, 1)

@@ -87,6 +87,7 @@ func registerExtraAPI(client *whatsmeow.Client) {
 			"sent_today":      sentToday,
 			"drafts_pending":  draftsPending,
 			"daily_cap":       envInt("WA_DAILY_CAP", 150),
+			"health":          healthSnapshot(),
 		})
 	})
 
