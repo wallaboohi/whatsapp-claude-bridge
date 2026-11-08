@@ -871,7 +871,7 @@ function settingsPanes(d) {
   return {
     general: sec(L("הסוכן", "The agent"), ["language", "reply_italic", "quote_replies", "strict_mcp"].map(row).join("")),
     voice: sec(L("קול", "Voice"), ["voice_replies", "voice_name", "voice_style"].map(row).join("") +
-        `<p class="note tight help">😎 ${L("הקראה: שלח 😎 בקבוצה (מקריא את התשובה האחרונה שלי) או הגב 😎 על כל הודעה (מקריא אותה). לא מפעיל את Claude ועובד גם כשהתשובה הקולית כבויה.", "Read-aloud: send 😎 (reads my last answer) or react 😎 on any message (reads it). No Claude run; works even with voice replies off.")}</p>`) +
+        `<p class="note tight help">🛞 ${L("הקראה: שלח 🛞 בקבוצה (מקריא את התשובה האחרונה שלי) או הגב 🛞 על כל הודעה (מקריא אותה). לא מפעיל את Claude ועובד גם כשהתשובה הקולית כבויה.", "Read-aloud: send 🛞 (reads my last answer) or react 🛞 on any message (reads it). No Claude run; works even with voice replies off.")}</p>`) +
       sec(L("תמלול", "Transcription"), ["transcribe", "transcribe_all_chats"].map(row).join("") + trGapHtml(d)),
     models: sec(L("מודלים וסשן", "Models & sessions"), ["light_model", "claude_model", "deep_model", "group_name_model", "fresh_sessions", "session_max_runs", "claude_timeout_minutes", "permission_mode"].map(row).join("")),
     cost: sec(L("תקרות", "Caps"), ["daily_budget_usd", "total_daily_budget_usd"].map(row).join("") +

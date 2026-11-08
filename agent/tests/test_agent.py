@@ -772,9 +772,10 @@ def test_stage_icons_for_commands_and_git(agent):
     mod, _ = agent
     ev = lambda c: {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": c}}]}}
     assert mod._stage_of(ev("dir")).startswith("\u2b1b")
-    assert "\u05d1\u05e8\u05e9\u05ea" in mod._stage_of(ev("git push hub HEAD:main"))  # network
+    assert "GitHub" in mod._stage_of(ev("git push origin enhanced:main"))  # network = GitHub
+    assert mod._stage_of(ev("git push hub HEAD:main")).startswith("\U0001f501")  # the other computer, not GitHub
     assert "\u05de\u05e7\u05d5\u05de\u05d9" in mod._stage_of(ev("git commit -m x"))  # local
-    assert "\u05d1\u05e8\u05e9\u05ea" in mod._stage_of(ev("git -C C:/x pull --ff-only"))
+    assert mod._stage_of(ev("git -C C:/x pull --ff-only")).startswith("\U0001f501")
     assert "\U0001f512" in mod.T["budget_stop"] and "!!!" in mod.T["budget_stop"]
 
 

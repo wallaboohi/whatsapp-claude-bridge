@@ -792,7 +792,9 @@ def _stage_of(ev):
                 c = str(inp.get("command", ""))
                 if re.search(r"(^|[\s;&|])git\s", c):
                     if re.search(r"(^|[\s;&|])git\s+(-C\s+\S+\s+)?(push|pull|fetch|clone|ls-remote)\b", c):
-                        return "🌐 גיט ברשת (מסנכרן עם מאגר מרוחק)"
+                        if re.search(r"\b(origin|github)", c, re.I) or "release.py" in c:
+                            return "🌐 גיט ברשת (GitHub)"
+                        return "🔁 מסנכרן עם המחשב השני (מאגר משותף, לא GitHub)"
                     return "🗂️ גיט מקומי (עבודה בקוד במחשב)"
                 if re.search(r"go build|go vet|release|pyinstaller", c):
                     return "🛠️ מקמפל/בונה"
@@ -1146,9 +1148,14 @@ def cap_lifted(chat, text=""):
     return (text or "").lstrip().startswith("!") or (kv_get(K("override_until", chat)) or "") > dt.datetime.now().isoformat(timespec="seconds")
 
 
+def unlimited(chat):
+    g = load_groups().get(chat or PRIMARY) or {}
+    return bool(g.get("unlimited"))
+
+
 def over_budget(chat, text=""):
     """None when a run may go ahead; otherwise which cap stops it: ('chat'|'total', spent, cap)."""
-    if cap_lifted(chat, text):
+    if cap_lifted(chat, text) or unlimited(chat):
         return None
     spent, cap = spent_today(chat), budget_for(chat)
     if spent >= cap:
@@ -1570,6 +1577,22 @@ def wait_for_limit(cid, chat, mid, src, until):
               quoted=mid if src == "wa" else None)
 
 
+def release_budget_waiters():
+    """Commands kept by a cost cap go back to the queue as soon as their conversation is under its cap again."""
+    with adb() as db:
+        chats = [r[0] for r in db.execute("SELECT DISTINCT coalesce(chat_jid, ?) FROM commands WHERE status = 'waiting_budget'", (PRIMARY,))]
+    n = 0
+    for chat in chats:
+        if not over_budget(chat):
+            with adb() as db:
+                n += db.execute("UPDATE commands SET status = 'pending' WHERE status = 'waiting_budget' AND coalesce(chat_jid, ?) = ?",
+                                (PRIMARY, chat)).rowcount
+            kv_set(K("budget_notice", chat), "")
+    if n:
+        log(f"cost cap allows again: {n} command(s) re-queued")
+    return n
+
+
 def release_limit_waiters():
     """Once the limit has reset: commands parked by it go back to the queue (oldest first, as before)."""
     v = kv_get("limit_until") or ""
@@ -1620,7 +1643,15 @@ def run_command(row):
             msg = T["budget_stop"].format(spent=spent, budget=cap)
             if kind == "total":
                 msg = ("(תקרה כוללת לכל השיחות) " if LANG == "he" else "(total cap, all conversations) ") + msg
-            reply(msg)
+            # keep the command: it runs by itself when the cap allows again (midnight, a raised cap) — owner request 08.11
+            with adb() as db:
+                db.execute("UPDATE commands SET status = 'waiting_budget' WHERE id = ?", (cid,))
+            parked = True
+            key = K("budget_notice", chat)
+            if kv_get(key) != dt.date.today().isoformat():
+                kv_set(key, dt.date.today().isoformat())
+                reply(msg + ("\n📥 ההודעות שתשלח עכשיו נשמרות ויטופלו לבד כשהתקרה תתאפס (בחצות) או מיד כשתעלה אותה."
+                             if LANG == "he" else "\n📥 Messages sent now are kept and handled when the cap resets (midnight) or is raised."))
             return
         budget, spent = budget_for(chat), spent_today(chat)
         if spent >= budget * 0.8 and kv_get(K("budget_warned", chat)) != dt.date.today().isoformat():
@@ -1736,11 +1767,11 @@ def tts_ogg(text, path, voice=None):
     return path
 
 
-READ_ALOUD = "😎"
+READ_ALOUD = "🛞"  # owner request 08.11 23:23: the wheel = "I am driving, read it to me" (was 😎)
 
 
 def read_aloud(chat, mid=None):
-    """Owner request 08.11: 😎 (as a message, or as a reaction on one of the bot's messages) → a voice note that reads the
+    """Owner request 08.11: 🛞 (as a message, or as a reaction on one of the bot's messages) → a voice note that reads the
     bot's last answer in this chat (or the reacted message). Local, no Claude run; works even if voice_replies is off."""
     prefix = CFG["reply_prefix"].strip()
     try:
@@ -1762,7 +1793,7 @@ def read_aloud(chat, mid=None):
     if len(t) < 2:
         _ctx.chat = chat
         try:
-            reply("😎 אין הודעה שלי להקריא כאן." if LANG == "he" else "😎 Nothing of mine to read here.")
+            reply("🛞 אין הודעה שלי להקריא כאן." if LANG == "he" else "🛞 Nothing of mine to read here.")
         finally:
             _ctx.chat = None
         return
@@ -1873,6 +1904,7 @@ def command_worker():
                     restart_now(reason)
             else:
                 release_limit_waiters()
+                release_budget_waiters()
                 with adb() as db:
                     chats = [r[0] for r in db.execute("SELECT DISTINCT coalesce(chat_jid, ?) FROM commands WHERE status = 'pending'", (PRIMARY,))]
                 for chat in chats:
@@ -2544,7 +2576,7 @@ def handle(row):
             return  # our own reply
         if sent_special(mid):
             return  # an event / poll / location the tool itself sent (has no reply prefix)
-        if content == READ_ALOUD:  # 😎 = read my last answer aloud (no Claude run)
+        if content == READ_ALOUD:  # 🛞 = read my last answer aloud (no Claude run)
             work.put(lambda: read_aloud(cj))
             return
         try:
