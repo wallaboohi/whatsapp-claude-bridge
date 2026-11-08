@@ -414,6 +414,8 @@ def test_usage_limit_parks_and_requeues_commands(agent, monkeypatch):
     assert mod.release_limit_waiters() == 0, "still waiting"
     mod.kv_set("limit_until", (mod.dt.datetime.now() - mod.dt.timedelta(minutes=1)).isoformat(timespec="seconds"))
     assert mod.release_limit_waiters() == 2
+    resumed = [t for t in sent if "▶️" in t]
+    assert len(resumed) == 1 and "2 הודעות" in resumed[0] and "10:20" in resumed[0], "one notice listing what arrived"
     with mod.adb() as db:
         assert [r[0] for r in db.execute("SELECT status FROM commands ORDER BY id")] == ["pending", "pending"]
 

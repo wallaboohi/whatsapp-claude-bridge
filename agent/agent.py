@@ -1665,6 +1665,30 @@ def wait_for_limit(cid, chat, mid, src, until):
               quoted=mid if src == "wa" else None)
 
 
+RESUME_NOTE = {"he": "▶️ {why} — קיבלתי {n} הודעות ששלחת בזמן ההמתנה ({times}). עונה על כולן לפי הסדר, כל תשובה מצוטטת להודעה שלה.",
+               "en": "▶️ {why} — I received {n} messages you sent while waiting ({times}). Answering all of them in order, each quoting its message."}
+
+
+def resume_notice(status, why, chat=None):
+    """Owner 09.11: when a limit is over, say per conversation which parked messages arrived and that each will be answered
+    (before they go back to the queue). chat=None = every conversation with commands in this status."""
+    q = "SELECT coalesce(chat_jid, ?), at FROM commands WHERE status = ?" + (" AND coalesce(chat_jid, ?) = ?" if chat else "") + " ORDER BY id"
+    with adb() as db:
+        rows = db.execute(q, (PRIMARY, status) + ((PRIMARY, chat) if chat else ())).fetchall()
+    by = {}
+    for c, at in rows:
+        by.setdefault(c, []).append(str(at or "")[11:16] or "?")
+    for c, times in by.items():
+        _ctx.chat = c
+        try:
+            reply(RESUME_NOTE.get(LANG, RESUME_NOTE["en"]).format(why=why, n=len(times), times=", ".join(times[:12])
+                                                                   + ("…" if len(times) > 12 else "")))
+        except Exception:
+            log("resume notice failed", traceback.format_exc())
+        finally:
+            _ctx.chat = None
+
+
 def release_budget_waiters():
     """Commands kept by a cost cap go back to the queue as soon as their conversation is under its cap again."""
     with adb() as db:
@@ -1672,6 +1696,7 @@ def release_budget_waiters():
     n = 0
     for chat in chats:
         if not over_budget(chat):
+            resume_notice("waiting_budget", "תקרת העלות מאפשרת שוב" if LANG == "he" else "The cost cap allows again", chat)
             with adb() as db:
                 n += db.execute("UPDATE commands SET status = 'pending' WHERE status = 'waiting_budget' AND coalesce(chat_jid, ?) = ?",
                                 (PRIMARY, chat)).rowcount
@@ -1686,6 +1711,7 @@ def release_limit_waiters():
     v = kv_get("limit_until") or ""
     if v and not limit_until():
         kv_set("limit_until", "")
+        resume_notice("waiting_limit", "מכסת השימוש של Claude חזרה" if LANG == "he" else "Claude's usage limit has reset")
         with adb() as db:
             n = db.execute("UPDATE commands SET status = 'pending' WHERE status = 'waiting_limit'").rowcount
         log(f"usage limit over: {n} command(s) re-queued")
