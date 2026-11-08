@@ -727,7 +727,7 @@ const SET_LABEL = () => ({
   selftest_time: L("בדיקה עצמית לילית", "Nightly self-test"), morning_summary_time: L("סיכום בוקר", "Morning summary"), signin_check_time: L("בדיקת התחברות Claude", "Claude sign-in check"),
   auto_update_time: L("עדכון אוטומטי", "Auto-update"), daily_budget_usd: L("תקרה יומית לשיחה ($)", "Daily cap per chat ($)"), total_daily_budget_usd: L("תקרה כוללת ליום ($)", "Total daily cap ($)"),
   light_model: L("מודל קל (אוטו)", "Light model (auto)"), claude_model: L("מודל רגיל (אוטו)", "Normal model (auto)"), deep_model: L("מודל חזק (!! / תכנון)", "Strong model (!!)"),
-  fresh_sessions: L("סשן נקי לכל הודעה", "Fresh session per message"), session_max_runs: L("הודעות לסשן (4M) לפני החלפה", "Messages per session (4M)"),
+  fresh_sessions: L("סשן נקי לכל הודעה", "Fresh session per message"), session_max_runs: L("הודעות לסשן (4M) לפני החלפה", "Messages per session (4M)"), claude_timeout_minutes: L("תקרת זמן לפקודה (דקות; לקבוצה: groups.json timeout_minutes)", "Time limit per command (minutes)"),
   permission_mode: L("הרשאות Claude", "Claude permissions"), voice_replies: L("תשובה קולית להקלטה", "Voice reply to voice notes"), voice_name: L("קול", "Voice"),
   transcribe: L("תמלול הקלטות שלי", "Transcribe my voice notes"), transcribe_all_chats: L("תמלול הקלטות בכל השיחות", "Transcribe all chats"),
   reply_italic: L("תשובות בנטוי", "Italic replies"), quote_replies: L("ציטוט ההודעה בתשובה", "Quote in replies"), strict_mcp: L("בלי שרתי MCP נוספים", "Strict MCP"),
@@ -785,7 +785,7 @@ function settingsContent(d) {
   return `<p class="note tight">${L("כל שינוי נשמר ל-config.json של המחשב הזה (", "Saved to this computer's config.json (")}${esc(d.machine || "")}${L("). רוב ההגדרות נכנסות לתוקף אחרי הפעלה מחדש של הסוכן.", "). Most take effect after the agent restarts.")}</p>` +
     sec(L("תזמונים", "Schedules"), JOBS.map(jobRow).join("")) +
     sec(L("עלות", "Cost"), ["daily_budget_usd", "total_daily_budget_usd"].map(row).join("") + `<p class="note tight">${L("תקרה לשיחה מסוימת: בכרטיס \"השיחה הנוכחית\" ← 💲", "Per-chat cap: in the 'This conversation' card")}</p>`) +
-    sec(L("מודלים וסשן", "Models & sessions"), ["light_model", "claude_model", "deep_model", "fresh_sessions", "session_max_runs", "permission_mode"].map(row).join("")) +
+    sec(L("מודלים וסשן", "Models & sessions"), ["light_model", "claude_model", "deep_model", "fresh_sessions", "session_max_runs", "claude_timeout_minutes", "permission_mode"].map(row).join("")) +
     sec(L("קול ותמלול", "Voice"), ["voice_replies", "voice_name", "transcribe", "transcribe_all_chats"].map(row).join("") +
       `<p class="note tight">${L("הפעלה/כיבוי תמלול נכנסים לתוקף ב\"שמור והפעל מחדש\".", "Switching transcription takes effect after Save & restart.")}</p>` + trGapHtml(d)) +
     sec(L("תשובות", "Replies"), ["reply_italic", "quote_replies", "strict_mcp"].map(row).join("")) +

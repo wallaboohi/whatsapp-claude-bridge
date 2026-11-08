@@ -1313,6 +1313,16 @@ def release_limit_waiters():
     return 0
 
 
+def run_timeout_minutes(chat):
+    """Time limit for one owner command: groups.json "timeout_minutes" for this conversation, else config
+    "claude_timeout_minutes" (default 15). Long development work gets more (owner request 08.11)."""
+    g = load_groups().get(chat) or {}
+    try:
+        return max(1, int(g.get("timeout_minutes") or CFG.get("claude_timeout_minutes") or 15))
+    except (TypeError, ValueError):
+        return 15
+
+
 def run_command(row):
     """Answer one owner command (in the calling thread; _ctx = its conversation)."""
     cid, mid, text, when, chat, src, sync = row
@@ -1363,9 +1373,10 @@ def run_command(row):
         _ctx.auto_pick = how == "auto"
         started = time.time()
         status = StatusMsg(model, chat, wa=not pc_only())
+        limit_min = run_timeout_minutes(chat)
         try:
             answer = claude(prompt, model=model, session=not CFG.get("fresh_sessions"), on_stage=status.set_stage, chat=chat,
-                            raw=raw_text(text.lstrip("!")))
+                            raw=raw_text(text.lstrip("!")), timeout=limit_min * 60)
         except LimitHit as e:
             parked = True
             wait_for_limit(cid, chat, mid, src, e.until)
@@ -1379,6 +1390,9 @@ def run_command(row):
         rec = None if stopped else recommend(text, model, streak)
         kv_set(K("last_recommend", chat), json.dumps({"model": rec[0], "why": rec[1], "at": dt.datetime.now().isoformat(timespec="seconds")}, ensure_ascii=False) if rec else "")
         out = answer or T["failed"]
+        if not answer and time.time() - started >= limit_min * 60 - 10:  # killed by the time limit, not a crash
+            out = (f"⏱ נעצרתי אחרי {limit_min} דקות (תקרת הזמן של השיחה הזו — אפשר לשנות בלוח). מה שכבר בוצע נשמר; "
+                   "כתוב \"המשך\" ואמשיך מאותה נקודה.")
         if rec:
             out += f"\n\n💡 כדאי לעבור ל-{MODELS[rec[0]]['he']} ({rec[1]}). פקודה: {MODELS[rec[0]]['cmd']}"
         elif how == "sticky_deep" and not stopped:

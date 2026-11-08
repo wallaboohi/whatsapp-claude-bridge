@@ -253,7 +253,7 @@ SETTINGS = {
     "transcribe": ("bool", True, None), "transcribe_all_chats": ("bool", True, None), "fresh_sessions": ("bool", False, None),
     "reply_italic": ("bool", True, None), "quote_replies": ("bool", True, None), "strict_mcp": ("bool", True, None),
     "daily_budget_usd": ("num", 20, (0, 1000)), "total_daily_budget_usd": ("num", None, (0, 5000)),
-    "session_max_runs": ("int", 60, (1, 1000)), "disconnect_alert_minutes": ("int", 10, (1, 1440)),
+    "session_max_runs": ("int", 60, (1, 1000)), "claude_timeout_minutes": ("int", 15, (1, 240)), "disconnect_alert_minutes": ("int", 10, (1, 1440)),
     "backup_keep_days": ("int", 14, (1, 365)), "backup_media_days": ("int", 90, (0, 3650)), "reconnect_settle_seconds": ("int", 45, (0, 600)),
     "light_model": ("model", "haiku", None), "claude_model": ("model", "sonnet", None), "deep_model": ("model", "opus", None),
     "permission_mode": ("choice", "auto", PERM_MODES), "voice_name": ("text", "he-IL-AvriNeural", None),
@@ -1233,7 +1233,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         host = self.headers.get("Host", "")
         origin = self.headers.get("Origin")
-        if origin and origin not in (f"http://{host}",):  # same-origin only
+        if origin and origin not in (f"http://{host}", f"https://{host}"):  # same-origin only (https = via Tailscale)
             return self.send_json({"error": "forbidden"}, 403)
         n = int(self.headers.get("Content-Length", 0))
         pi, rest = self._peer_index(self.path.split("?")[0])
