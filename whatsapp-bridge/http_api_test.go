@@ -19,7 +19,7 @@ var allEndpoints = []string{
 	"/api/group_info", "/api/set_group", "/api/group_participants", "/api/group_photo", "/api/group_settings",
 	"/api/group_invite", "/api/edit_message", "/api/delete_message", "/api/forward", "/api/pin_message", "/api/star",
 	"/api/mark_read", "/api/pin_chat", "/api/send_poll", "/api/send_contact", "/api/post_status", "/api/set_about",
-	"/api/block",
+	"/api/block", "/api/history_sync",
 }
 
 func serve(t *testing.T, method, path, tok, body string) (code int, panicked bool) {

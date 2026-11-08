@@ -10,6 +10,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waHistorySync"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
@@ -20,6 +21,7 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 	fmt.Printf("Received history sync event with %d conversations\n", len(historySync.Data.Conversations))
 
 	syncedCount := 0
+	perChat := map[string]int{} // stored messages per chat (reported for on-demand batches)
 	for _, conversation := range historySync.Data.Conversations {
 		// Parse JID from the conversation
 		if conversation.ID == nil {
@@ -141,6 +143,7 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 					logger.Warnf("Failed to store history message: %v", err)
 				} else {
 					syncedCount++
+					perChat[chatJID]++
 					// Log successful message storage
 					if mediaType != "" {
 						logger.Infof("Stored message: [%s] %s -> %s: [%s: %s] %s",
@@ -155,6 +158,11 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 	}
 
 	fmt.Printf("History sync complete. Stored %d messages.\n", syncedCount)
+	if historySync.Data.GetSyncType() == waHistorySync.HistorySync_ON_DEMAND {
+		for chat, n := range perChat { // the dashboard / agent can refresh that chat
+			publish(map[string]any{"type": "history_sync", "chat_jid": chat, "count": n})
+		}
+	}
 }
 
 // Request history sync from the server

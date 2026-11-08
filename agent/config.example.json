@@ -34,5 +34,10 @@
   "auto_update": true,
   "auto_update_time": "23:50",
   "peers": [],
-  "permission_mode": "auto"
+  "permission_mode": "auto",
+  "peer_watch": true,
+  "peer_alert_minutes": 10,
+  "peer_offline_minutes": 30,
+  "peer_backup": true,
+  "peer_backup_max_mb": 2048
 }

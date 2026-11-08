@@ -271,6 +271,7 @@ function drawerContent(kind, d) {
       order.slice(0, 12).map(([k, v]) => `<button class="btn small${recvChat === k ? " primary" : ""}" data-chat="${esc(k)}">${v.group ? "👥 " : ""}${esc(k)} · ${v.n}</button>`).join("") + `</div>`;
     const search = `<input id="recvSearch" class="search" type="search" value="${esc(recvQ)}" placeholder="${L("חיפוש לפי שם, שיחה או מילה…", "Search name, chat or word…")}" aria-label="${L("חיפוש בהודעות שהתקבלו", "Search received")}">`;
     const groups = order.filter(([, v]) => v.items.length).map(([k, v]) => `<details class="item" open><summary class="item-head"><span class="avatar">${v.group ? "👥" : esc(String(k).charAt(0))}</span><div class="who-col"><strong>${esc(k)}</strong><span class="muted" style="font-size:.78rem">${v.items.length} ${L("הודעות", "messages")} · ${L("אחרונה", "last")} ${hhmm(toDate(v.last))}</span></div></summary>
+      ${v.items[0] && v.items[0].chat_jid ? `<div class="row tight"><button type="button" class="btn small" data-hist="${esc(v.items[0].chat_jid)}" title="${L("מבקש מהטלפון הודעות ישנות של השיחה הזו", "Ask the phone for older messages of this chat")}">📥 ${L("השלם היסטוריה", "Complete history")}</button></div>` : ""}
       ${v.items.map(r => `<div class="msg-row${v.group ? "" : " solo"}"><span class="muted">${hhmm(toDate(r.timestamp))}</span>${v.group ? `<strong>${esc(r.sender)}</strong>` : ""}<span>${esc(txt(r))}</span></div>`).join("")}</details>`).join("");
     return search + chips + (groups || empty(all.length ? L("אין תוצאות לחיפוש", "No matches") : L("לא התקבלו הודעות היום", "No messages received today")));
   }
@@ -278,15 +279,23 @@ function drawerContent(kind, d) {
   if (kind === "sched") return schedContent(d);
   if (kind === "settings") return settingsContent(d);
   if (kind === "tr") {
-    const t = d.transcripts || [];
-    return t.length ? t.map(r => `<article class="item"><div class="item-head"><strong>${esc(r.sender)}</strong><span class="muted" style="font-size:.78rem">${fmt(r.ts)}</span></div><div class="item-body">${esc(r.text)}</div></article>`).join("") : empty(L("אין תמלולים", "No transcripts"));
+    const t = d.transcripts || [], gap = trGapHtml(d);
+    return (gap ? `<div class="item">${gap}</div>` : "") + (t.length ? t.map(r => `<article class="item"><div class="item-head"><strong>${esc(r.sender)}</strong><span class="muted" style="font-size:.78rem">${fmt(r.ts)}</span></div><div class="item-body">${esc(r.text)}</div></article>`).join("") : empty(L("אין תמלולים", "No transcripts")));
   }
   if (kind === "cost") {
     const a = d.agent || {}, c = d.costs || [], runs = d.runs_today || [], max = Math.max(0.01, ...c.map(x => x.cost));
+    const ms = [{ ...(d.cost_self || {}), here: true }].concat(((peersInfo && peersInfo.peers) || []).map(p => p.brief && p.brief.cost ? { ...p.brief.cost, machine: p.brief.cost.machine || p.name } : { machine: p.name, off: true }));
+    const machBlock = `<div class="item"><div class="item-head"><strong>${L("לפי מחשב / חשבון Claude", "By computer / Claude account")}</strong></div>
+      <div class="bar-row" style="grid-template-columns:1fr 70px 70px 70px"><span class="muted">${L("מחשב · חשבון", "Computer · account")}</span><span class="muted">${L("היום", "Today")}</span><span class="muted">7 ${L("ימים", "days")}</span><span class="muted">30 ${L("ימים", "days")}</span></div>
+      ${ms.map(m => `<div class="bar-row" style="grid-template-columns:1fr 70px 70px 70px"><span>🖥️ ${esc(m.machine || "?")}${m.account ? ` · <span class="muted">${esc(m.account)}</span>` : ""}${m.here ? ` <span class="muted">(${L("כאן", "here")})</span>` : ""}</span>${m.off ? `<span class="muted" style="grid-column:span 3">${L("לא זמין כרגע", "not reachable")}</span>` : `<span>$${(m.today || 0).toFixed(2)}</span><span>$${(m.d7 || 0).toFixed(2)}</span><span>$${(m.d30 || 0).toFixed(2)}</span>`}</div>`).join("")}
+      <p class="note tight">${L("שם המחשב והחשבון: הגדרות ← זהות המחשב", "Names: Settings → This computer")}</p></div>`;
+    const cc = d.cost_by_chat || [], cmax = Math.max(0.01, ...cc.map(x => x.d7 || 0));
+    const chatBlock = cc.length ? `<div class="item"><div class="item-head"><strong>${L("לפי שיחה (7 ימים)", "By conversation (7 days)")}</strong></div>${cc.map(r => `<div class="bar-row" style="grid-template-columns:120px 1fr 150px"><span>${esc(r.name)}</span><span class="meter"><span style="width:${100 * (r.d7 || 0) / cmax}%"></span></span><span>$${(r.d7 || 0).toFixed(2)} · ${L("היום", "today")} $${(r.today || 0).toFixed(2)}</span></div>`).join("")}</div>` : "";
     const byModel = {}; runs.forEach(r => { const m = r.model || "?"; byModel[m] = byModel[m] || { n: 0, cost: 0 }; byModel[m].n++; byModel[m].cost += r.cost || 0; });
     const mmax = Math.max(0.01, ...Object.values(byModel).map(x => x.cost)), pct = Math.min(100, 100 * (a.spent_today || 0) / (a.budget || 1));
     return `<div class="sum-row"><span class="stat">${L("היום", "Today")}: $${(a.spent_today ?? 0).toFixed(2)}</span><span class="stat">${L("תקרה", "Cap")}: $${a.budget}</span><span class="stat">${L("ריצות היום", "Runs today")}: ${runs.length}</span></div>
       <div class="item"><div class="item-head"><strong>${L("ניצול התקרה היומית", "Daily cap used")}</strong><span class="muted">${Math.round(pct)}%</span></div><span class="meter${pct > 80 ? " hot" : ""}"><span style="width:${pct}%"></span></span></div>
+      ${machBlock}${chatBlock}
       ${Object.keys(byModel).length ? `<div class="item"><div class="item-head"><strong>${L("היום לפי מודל", "Today by model")}</strong></div>${Object.entries(byModel).sort((x, y) => y[1].cost - x[1].cost).map(([m, v]) => `<div class="bar-row" style="grid-template-columns:90px 1fr 120px"><span>${m === "?" ? L("לא נרשם", "not recorded") : esc(m)}</span><span class="meter"><span style="width:${100 * v.cost / mmax}%"></span></span><span>$${v.cost.toFixed(2)} · ${v.n} ${L("ריצות", "runs")}</span></div>`).join("")}</div>` : ""}
       <div class="item"><div class="item-head"><strong>${L("לפי שיחה — היום", "By conversation — today")}</strong></div>${(d.groups || []).map(g => `<div class="conv-row"><span>${g.jid === "local" ? "💻" : "👥"} ${esc(g.name)} · <span class="muted">${esc(MODEL_HE(g.model))}</span></span><span>$${g.spent} / $${g.budget}</span><span class="meter${g.spent >= g.budget ? " hot" : ""}"><span style="width:${Math.min(100, 100 * g.spent / (g.budget || 1))}%"></span></span></div>`).join("")}<p class="note tight">${L("תקרה לכל שיחה בנפרד — לשינוי: בכרטיס \"השיחה הנוכחית\" ← 💲 תקרה", "Each conversation has its own cap — change it in the 'This conversation' card")}</p></div>
       <div class="item"><div class="item-head"><strong>${L("לפי יום", "By day")}</strong></div>${c.slice().reverse().map(r => `<div class="bar-row"><span class="muted">${r.day.slice(8, 10)}.${r.day.slice(5, 7)}</span><span class="meter"><span style="width:${100 * r.cost / max}%"></span></span><span>$${r.cost}</span></div>`).join("")}</div>
@@ -725,11 +734,33 @@ const SET_LABEL = () => ({
   disconnect_alert_minutes: L("התראת ניתוק אחרי (דק')", "Disconnect alert after (min)"), backup_keep_days: L("שמירת גיבויים (ימים)", "Keep backups (days)"),
   backup_media_days: L("גיבוי מדיה של (ימים)", "Back up media of (days)"), reconnect_settle_seconds: L("המתנה אחרי חזרת חיבור (שנ')", "Wait after reconnect (s)"),
   auto_update: L("עדכון אוטומטי", "Auto-update"), morning_summary: L("סיכום בוקר", "Morning summary"),
+  peer_watch: L("שמירה הדדית — התראה כשמחשב אחר נופל", "Watch the other computers"), peer_alert_minutes: L("התראה על גשר מנותק שם אחרי (דק')", "Alert: their bridge down after (min)"),
+  peer_offline_minutes: L("התראה על מחשב שלא עונה אחרי (דק')", "Alert: computer unreachable after (min)"), peer_backup: L("גיבוי לילי גם למחשב השני", "Nightly backup to the other computer"),
+  peer_backup_max_mb: L("מדיה לגיבוי בלילה, עד (MB)", "Media per night, up to (MB)"), host_label: L("שם המחשב הזה (תצוגה)", "This computer's name (display)"),
+  claude_account: L("חשבון Claude במחשב הזה", "Claude account on this computer"),
 });
 const JOBS = [  // [time key, toggle key, kv job, run-now action]
   ["auto_update_time", "auto_update", "auto_update", "tool_update_apply"], ["morning_summary_time", "morning_summary", "morning_summary", null],
   ["backup_time", null, "backup", "backup"], ["selftest_time", null, "selftest", "selftest_now"], ["update_check_time", null, "update_check", "tool_update_check"],
   ["signin_check_time", null, "signin_check", null], ["group_check_time", null, "group_check", null]];
+function trGapHtml(d) {
+  const g = d.transcribe_gap || {}, pr = g.progress || {};
+  if (pr.state === "running") return `<div class="set-row"><span>🎙️ ${L("מתמלל חסרים", "Transcribing the gap")}: ${pr.done || 0}/${pr.total || 0}${pr.failed ? ` · ${pr.failed} ${L("נכשלו", "failed")}` : ""}</span></div>`;
+  if (!g.missing) return pr.state === "done" ? `<p class="note tight">✓ ${L("כל ההקלטות תומללו", "All voice notes transcribed")} (${esc(String(pr.at || "").slice(5, 16))})</p>` : "";
+  return `<div class="set-row"><span>🎙️ ${g.missing} ${L("הקלטות לא תומללו מאז", "voice notes not transcribed since")} ${fmt(g.since)}${g.requested ? ` · ${L("בתור…", "queued…")}` : ""}</span>
+    <button type="button" class="btn small" data-trfill="1"${g.on ? "" : ` disabled title="${L("התמלול כבוי", "transcription is off")}"`}>${L("תמלל את החסרים", "Transcribe the missing")}</button></div>`;
+}
+
+function peerBackupHtml(d) {
+  const pb = d.peer_backups || {}, names = Object.keys(pb);
+  if (!names.length) return `<p class="note tight">${L("לגיבוי למחשב אחר צריך שם ssh או מנהרה ברשימת המחשבים למטה.", "Backup to another computer needs an ssh alias or tunnel in the list below.")}</p>`;
+  return names.map(n => { const r = pb[n];
+    const st = !r ? L("עוד לא רץ", "not run yet") : r.ok ? `✓ ${esc(String(r.at).slice(5, 16))} · ${r.dbs} ${L("מסדי נתונים", "databases")} · ${r.media_copied} ${L("קבצי מדיה", "media files")} (${r.media_mb} MB)${r.media_left ? ` · ${r.media_left} ${L("ימשיכו מחר", "left for tomorrow")}` : ""}`
+      : `✖ ${esc(String(r.at).slice(5, 16))} · ${esc(r.error || "")}`;
+    return `<div class="set-row"><span>💾 ${L("גיבוי ל-", "Backup to ")}${esc(n)}: <span class="${r && !r.ok ? "bad" : "muted"}">${st}</span></span></div>`; }).join("") +
+    `<div class="row tight"><button type="button" class="btn small" data-now="peer_backup_now">💾 ${L("גבה עכשיו לשני", "Back up to the other now")}</button></div>`;
+}
+
 function settingsContent(d) {
   const S = d.settings || {}, v = S.values || {}, t = S.types || {}, lab = SET_LABEL(), jobs = d.jobs || {};
   const inp = k => {
@@ -747,16 +778,21 @@ function settingsContent(d) {
     ${now ? `<button type="button" class="btn small" data-now="${now}">${now === "tool_update_check" ? L("בדוק", "Check") : L("עכשיו", "Now")}</button>` : ""}</span></div>`;
   const sec = (title, body) => `<details class="item set-sec" open><summary><strong>${title}</strong></summary>${body}</details>`;
   const peersRows = (S.peers || []).map((p, i) => `<div class="set-row peer-row" data-pi="${i}"><input type="text" data-pf="name" value="${esc(p.name)}" placeholder="${L("שם", "name")}" style="width:80px">
-    <input type="text" data-pf="url" value="${esc(p.url)}" placeholder="http://127.0.0.1:8781" style="width:150px"><input type="text" data-pf="tunnel" value="${esc(p.tunnel || "")}" placeholder="ssh (${L("לא חובה", "optional")})" style="width:90px">
+    <input type="text" data-pf="url" value="${esc(p.url)}" placeholder="http://127.0.0.1:8781" style="width:150px"><input type="text" data-pf="tunnel" value="${esc(p.tunnel || "")}" placeholder="${L("מנהרה", "tunnel")} (${L("לא חובה", "optional")})" style="width:90px" title="${L("שם ssh שהסוכן כאן מחזיק דרכו את החיבור לשני", "ssh alias this agent keeps the tunnel through")}">
+    <input type="text" data-pf="ssh" value="${esc(p.ssh || "")}" placeholder="ssh (${L("לא חובה", "optional")})" style="width:80px" title="${L("שם ssh להפעלת הסוכן שם ולגיבוי — אם אין מנהרה", "ssh alias for starting the agent there and backups")}">
     <button type="button" class="btn small danger-soft" data-prm="${i}">✕</button></div>`).join("");
   const tun = (peersInfo && peersInfo.self && peersInfo.self.tunnels) || {};
   return `<p class="note tight">${L("כל שינוי נשמר ל-config.json של המחשב הזה (", "Saved to this computer's config.json (")}${esc(d.machine || "")}${L("). רוב ההגדרות נכנסות לתוקף אחרי הפעלה מחדש של הסוכן.", "). Most take effect after the agent restarts.")}</p>` +
     sec(L("תזמונים", "Schedules"), JOBS.map(jobRow).join("")) +
     sec(L("עלות", "Cost"), ["daily_budget_usd", "total_daily_budget_usd"].map(row).join("") + `<p class="note tight">${L("תקרה לשיחה מסוימת: בכרטיס \"השיחה הנוכחית\" ← 💲", "Per-chat cap: in the 'This conversation' card")}</p>`) +
     sec(L("מודלים וסשן", "Models & sessions"), ["light_model", "claude_model", "deep_model", "fresh_sessions", "session_max_runs", "permission_mode"].map(row).join("")) +
-    sec(L("קול ותמלול", "Voice"), ["voice_replies", "voice_name", "transcribe", "transcribe_all_chats"].map(row).join("")) +
+    sec(L("קול ותמלול", "Voice"), ["voice_replies", "voice_name", "transcribe", "transcribe_all_chats"].map(row).join("") +
+      `<p class="note tight">${L("הפעלה/כיבוי תמלול נכנסים לתוקף ב\"שמור והפעל מחדש\".", "Switching transcription takes effect after Save & restart.")}</p>` + trGapHtml(d)) +
     sec(L("תשובות", "Replies"), ["reply_italic", "quote_replies", "strict_mcp"].map(row).join("")) +
     sec(L("התראות וגיבוי", "Alerts & backup"), ["disconnect_alert_minutes", "reconnect_settle_seconds", "backup_keep_days", "backup_media_days"].map(row).join("")) +
+    sec(L("המחשבים האחרים — שמירה וגיבוי", "Other computers — watch & backup"), ["peer_watch", "peer_alert_minutes", "peer_offline_minutes", "peer_backup", "peer_backup_max_mb"].map(row).join("") +
+      peerBackupHtml(d)) +
+    sec(L("זהות המחשב", "This computer"), ["host_label", "claude_account"].map(row).join("")) +
     `<div class="row tight"><button type="button" class="btn small" id="setSave">💾 ${L("שמור", "Save")}</button><button type="button" class="btn small primary" id="setSaveRestart">💾 ${L("שמור והפעל מחדש את הסוכן", "Save & restart the agent")}</button></div>` +
     sec(L("תוספים", "Plugins"), (S.plugins || []).length ? S.plugins.map(p => `<label class="set-row"><span>${esc(p.name)}</span><input type="checkbox" data-plugin="${esc(p.path)}"${p.on ? " checked" : ""}></label>`).join("") + `<p class="note tight">${L("הפעלה/כיבוי תוסף מפעיל את הסוכן מחדש.", "Switching a plugin restarts the agent.")}</p>` : empty(L("אין תוספים", "No plugins"))) +
     sec(L("קבוצות כבויות", "Switched-off groups"), (d.disabled_groups || []).length ? d.disabled_groups.map(g => `<div class="set-row"><span>${esc(g.name)}</span><button type="button" class="btn small" data-genable="${esc(g.jid)}">▶ ${L("הפעל האזנה", "Listen again")}</button></div>`).join("") : empty(L("אין", "None"))) +
@@ -779,13 +815,16 @@ function wireDrawer(body) {
   q("[data-now]", b => {
     const a = b.dataset.now;
     if (a === "tool_update_apply" && !confirm(L("לעדכן עכשיו? הגשר והסוכן יופעלו מחדש.", "Update now? Bridge and agent restart."))) return;
-    act({ do: a, force: true }, { backup: L("הגיבוי התחיל", "Backup started"), selftest_now: L("הבדיקה רצה ברקע", "Self-test running"), tool_update_apply: L("העדכון התחיל", "Update started") }[a])
+    act({ do: a, force: true }, { backup: L("הגיבוי התחיל", "Backup started"), selftest_now: L("הבדיקה רצה ברקע", "Self-test running"), tool_update_apply: L("העדכון התחיל", "Update started"),
+      peer_backup_now: L("הגיבוי למחשב השני התחיל ברקע", "Backup to the other computer started") }[a])
       .then(j => { if (a === "tool_update_check" && j && !j.error) toast(j.available ? L(`גרסה ${j.latest} זמינה`, `${j.latest} available`) : L(`הכלי עדכני (${j.current})`, `Up to date (${j.current})`)); });
   });
+  q("[data-trfill]", b => act({ do: "transcribe_backfill" }, L("התמלול של החסרים יתחיל תוך דקה — ההתקדמות כאן", "Starts within a minute — progress shows here")).then(() => setTimeout(() => renderDrawer(true), 1500)));
+  q("[data-hist]", b => { const n = prompt(L("כמה הודעות ישנות לבקש מהטלפון?", "How many older messages to ask the phone for?"), "50"); if (n) act({ do: "history_sync", jid: b.dataset.hist, count: +n || 50 }, L("בקשה נשלחה לטלפון — ההודעות יגיעו תוך דקות", "Request sent to the phone — messages arrive within minutes")); });
   q("[data-tun]", b => act({ do: "tunnel", name: b.dataset.tun, on: b.dataset.on === "1" }, L("נשמר", "Saved")).then(() => setTimeout(() => renderDrawer(true), 1200)));
   q("[data-prm]", b => { b.closest(".peer-row").remove(); });
   const add = body.querySelector("#peerAdd"); if (add) add.onclick = () => add.closest(".row").insertAdjacentHTML("beforebegin",
-    `<div class="set-row peer-row"><input type="text" data-pf="name" placeholder="${L("שם", "name")}" style="width:80px"><input type="text" data-pf="url" value="http://127.0.0.1:8781" style="width:150px"><input type="text" data-pf="tunnel" placeholder="ssh" style="width:90px"><button type="button" class="btn small danger-soft" onclick="this.parentNode.remove()">✕</button></div>`);
+    `<div class="set-row peer-row"><input type="text" data-pf="name" placeholder="${L("שם", "name")}" style="width:80px"><input type="text" data-pf="url" value="http://127.0.0.1:8781" style="width:150px"><input type="text" data-pf="tunnel" placeholder="${L("מנהרה", "tunnel")}" style="width:90px"><input type="text" data-pf="ssh" placeholder="ssh" style="width:80px"><button type="button" class="btn small danger-soft" onclick="this.parentNode.remove()">✕</button></div>`);
   const ps = body.querySelector("#peerSave"); if (ps) ps.onclick = () => {
     const list = [...body.querySelectorAll(".peer-row")].map(r => Object.fromEntries([...r.querySelectorAll("[data-pf]")].map(x => [x.dataset.pf, x.value.trim()])));
     act({ do: "peers_save", peers: list }, L("נשמר — הסוכן עולה מחדש", "Saved — restarting"));
@@ -802,7 +841,7 @@ function wireDrawer(body) {
 function renderMachines() {
   const el = $("machines"); if (!el || !peersInfo) return;
   const me = peersInfo.self || {}, list = [{ peer: null, name: L("המחשב הזה", "This computer") + (me.machine ? ` (${me.machine})` : ""), online: true, b: me }]
-    .concat((peersInfo.peers || []).map(p => ({ peer: p.i, name: p.name, online: p.online, b: p.brief || {}, tunnel: p.tunnel, err: p.error })));
+    .concat((peersInfo.peers || []).map(p => ({ peer: p.i, name: p.name, online: p.online, b: p.brief || {}, tunnel: p.tunnel, ssh: p.ssh || p.tunnel, err: p.error })));
   const dot = (ok, t) => `<span class="schip ${ok ? "ok" : "bad"}"><span class="dot"></span>${t}</span>`;
   el.innerHTML = list.map(m => {
     const b = m.b || {}, br = b.bridge || {}, sv = b.services || {}, brOk = m.online && br.connected && !br.error;
@@ -815,7 +854,8 @@ function renderMachines() {
         <button class="btn small" data-rst="bridge" data-m="${m.peer ?? ""}">↻ ${L("גשר", "Bridge")}</button>
         <button class="btn small" data-svc="agent" data-op="stop" data-m="${m.peer ?? ""}">⏹ ${L("עצור סוכן", "Stop agent")}</button>
         <button class="btn small" data-rst="agent" data-m="${m.peer ?? ""}">↻ ${L("סוכן", "Agent")}</button>` :
-        (m.tunnel ? `<button class="btn small" data-sshstart="${m.peer}">▶ ${L("הפעל שם (ssh)", "Start there (ssh)")}</button>` : "")}</div></div>`;
+        (m.ssh ? `<button class="btn small primary" data-sshstart="${m.peer}" title="${L("מפעיל את הסוכן במחשב השני דרך ssh", "Starts the agent on the other computer over ssh")}">▶ ${L("הפעל סוכן", "Start agent")}</button>` :
+          `<span class="muted">${L("להפעלה מכאן: הוסף שם ssh למחשב בהגדרות", "To start it from here: add an ssh alias in Settings")}</span>`)}</div></div>`;
   }).join("");
   const peerOf = b => b.dataset.m === "" ? null : +b.dataset.m;
   el.querySelectorAll("[data-svc]").forEach(b => b.onclick = () => {

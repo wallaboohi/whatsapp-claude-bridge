@@ -640,3 +640,63 @@ def test_paused_conversation_keeps_commands_queued(agent, monkeypatch):
         assert db.execute("SELECT status FROM commands").fetchall() == [("pending",)], "nothing is lost while paused"
     mod.kv_set("listen_paused", "")
     assert not mod.listening_paused(mod.PRIMARY)
+
+
+
+def test_peer_watch_alerts_once_and_reports_recovery(agent):
+    mod, _ = agent
+    cfg = {"peer_offline_minutes": 30, "peer_alert_minutes": 10}
+    t0 = mod.dt.datetime(2026, 11, 8, 20, 0)
+    m = lambda n: t0 + mod.dt.timedelta(minutes=n)
+    st, out = mod.peer_watch_step({}, None, t0, cfg, "נייח")
+    assert out == [] and st["off_since"]
+    st, out = mod.peer_watch_step(st, None, m(20), cfg, "נייח")
+    assert out == [], "not before peer_offline_minutes"
+    st, out = mod.peer_watch_step(st, None, m(31), cfg, "נייח")
+    assert len(out) == 1 and "לא זמין" in out[0] and "שינה" in out[0]
+    st, out = mod.peer_watch_step(st, None, m(40), cfg, "נייח")
+    assert out == [], "one alert per incident"
+    ok = {"agent_alive": True, "bridge": {"connected": True}}
+    st, out = mod.peer_watch_step(st, ok, m(45), cfg, "נייח")
+    assert len(out) == 1 and "חזר" in out[0] and "45" in out[0]
+    down = {"agent_alive": True, "bridge": {"connected": False}}
+    st, out = mod.peer_watch_step(st, down, m(50), cfg, "נייח")
+    st, out = mod.peer_watch_step(st, down, m(61), cfg, "נייח")
+    assert len(out) == 1 and "הגשר" in out[0]
+    st, out = mod.peer_watch_step(st, ok, m(70), cfg, "נייח")
+    assert len(out) == 1 and "חזר להתחבר" in out[0]
+    st, out = mod.peer_watch_step({}, down, m(0), cfg, "נייח")
+    st, out = mod.peer_watch_step(st, ok, m(5), cfg, "נייח")
+    assert out == [], "a short blip that never alerted stays quiet"
+
+
+def test_peer_backup_plan_newest_first_within_cap(agent):
+    mod, _ = agent
+    local = [("a/old.jpg", 100, 1), ("a/new.jpg", 300, 9), ("b/mid.ogg", 200, 5), ("b/have.ogg", 50, 7)]
+    plan, left = mod.peer_backup_plan(local, {"b\\have.ogg"}, 520)
+    assert [r for r, _, _ in plan] == ["a/new.jpg", "b/mid.ogg"] and left == 1
+    plan, left = mod.peer_backup_plan(local, set(), 10_000)
+    assert len(plan) == 4 and left == 0
+    assert mod.peer_alias({"tunnel": "ybhw"}) == "ybhw" and mod.peer_alias({"ssh": "4-MINE", "tunnel": "x"}) == "4-MINE"
+
+
+def test_transcribe_gap_finds_untranscribed_voice_notes(agent):
+    mod, db = agent
+    prim = mod.PRIMARY
+    db.execute("INSERT INTO messages VALUES ('v1', ?, 'me', '', '2026-11-08 10:00:00+02:00', 1, 'audio', 'a.ogg')", (prim,))
+    db.execute("INSERT INTO messages VALUES ('v2', ?, 'me', '', '2026-11-08 11:00:00+02:00', 1, 'audio', 'b.ogg')", (prim,))
+    db.execute("INSERT INTO messages VALUES ('v0', ?, 'me', '', '2026-11-01 11:00:00+02:00', 1, 'audio', 'c.ogg')", (prim,))
+    db.execute("INSERT INTO messages VALUES ('o1', '972500000001@s.whatsapp.net', 'x', '', '2026-11-08 12:00:00+02:00', 0, 'audio', 'd.ogg')")
+    db.commit()
+    with mod.adb() as a:
+        a.execute("INSERT INTO transcripts VALUES ('v2', ?, 'me', '2026-11-08 11:00', 'שלום', 'm')", (prim,))
+    mod.kv_set("transcribe_off_since", "2026-11-08T09:00:00")
+    mod.CFG["transcribe_all_chats"] = False
+    since, todo = mod.transcribe_gap()
+    assert since.startswith("2026-11-08T09") and [r[0] for r in todo] == ["v1"], "only the owner's control-group notes, untranscribed, in the gap"
+    mod.CFG["transcribe_all_chats"] = True
+    since, todo = mod.transcribe_gap()
+    assert [r[0] for r in todo] == ["v1", "o1"], "oldest first, every chat"
+    mod.kv_set("transcribe_backfill_request", "x")
+    mod.transcribe_backfill_check()
+    assert mod.kv_get("transcribe_backfill_request") == "" and mod.slow.qsize() >= 1

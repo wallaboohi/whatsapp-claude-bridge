@@ -1673,6 +1673,241 @@ def backup():
                 os.remove(os.path.join(d, f))
     kv_set("backup_done", dt.datetime.now().isoformat())
     log(f"backup done: dbs -> {day}, media checked {fetched}/{len(todo)}, new files copied {copied}")
+    if CFG.get("peer_backup", True) and any(peer_alias(p) for p in CFG.get("peers") or []):
+        try:
+            peer_backup()
+        except Exception:
+            log("peer backup error", traceback.format_exc())
+
+
+# ---------- the other machines: watch them, back up to them ----------
+
+def peer_alias(peer):
+    """ssh alias of a peer (for starting its agent / copying backups): "ssh", else the tunnel alias."""
+    return str(peer.get("ssh") or peer.get("tunnel") or "").strip()
+
+
+def peer_fetch(peer, path="/brief", timeout=5):
+    try:
+        return json.loads(urllib.request.urlopen(str(peer.get("url", "")).rstrip("/") + path, timeout=timeout).read().decode() or "{}")
+    except Exception:
+        return None
+
+
+def peer_watch_step(state, brief, now, cfg, name):
+    """One check of one peer. state: dict kept in kv; brief: the peer's /brief or None (unreachable).
+    Returns (new_state, [messages]). One alert per incident, plus a recovery message with how long it lasted."""
+    st, out = dict(state or {}), []
+    off_min, br_min = int(cfg.get("peer_offline_minutes", 30)), int(cfg.get("peer_alert_minutes", 10))
+    mins = lambda since: max(0, int((now - dt.datetime.fromisoformat(since)).total_seconds() // 60))
+    reachable = bool(brief) and brief.get("agent_alive", True) is not False
+    if not reachable:
+        st.setdefault("off_since", now.isoformat(timespec="seconds"))
+        if not st.get("off_alerted") and mins(st["off_since"]) >= off_min:
+            st["off_alerted"] = True
+            why = (f"הסוכן שם לא פעיל" if brief else "הלוח והסוכן שם לא עונים") + " — אולי המחשב כבוי, במצב שינה או בלי רשת"
+            out.append(f"⚠️ המחשב \"{name}\" לא זמין מ-{st['off_since'][11:16]} ({mins(st['off_since'])} דק'): {why}. "
+                       f"אפשר להפעיל אותו מהלוח (כרטיס מחשבים ← ▶ הפעל סוכן).")
+        return st, out
+    if st.get("off_since"):
+        if st.get("off_alerted"):
+            out.append(f"✅ המחשב \"{name}\" חזר לענות (לא היה זמין {mins(st['off_since'])} דק').")
+        st.pop("off_since", None)
+        st.pop("off_alerted", None)
+    b = brief.get("bridge") or {}
+    if not b.get("connected") or b.get("error"):
+        st.setdefault("br_since", now.isoformat(timespec="seconds"))
+        if not st.get("br_alerted") and mins(st["br_since"]) >= br_min:
+            st["br_alerted"] = True
+            out.append(f"⚠️ הגשר במחשב \"{name}\" מנותק מוואטסאפ מ-{st['br_since'][11:16]} ({mins(st['br_since'])} דק'). "
+                       f"אפשר להפעיל אותו מחדש מהלוח (כרטיס מחשבים).")
+    elif st.get("br_since"):
+        if st.get("br_alerted"):
+            out.append(f"✅ הגשר במחשב \"{name}\" חזר להתחבר (היה מנותק {mins(st['br_since'])} דק').")
+        st.pop("br_since", None)
+        st.pop("br_alerted", None)
+    return st, out
+
+
+def peer_watch():
+    """Every 2 minutes: is each other machine (config peers) up, and is its bridge connected? Alerts go to OUR primary
+    control group — so a machine whose own bridge is down still gets reported. Config peer_watch (default on)."""
+    time.sleep(90)  # let the tunnel come up after a start
+    while True:
+        try:
+            if CFG.get("peer_watch", True):
+                for peer in CFG.get("peers") or []:
+                    name = peer.get("name") or peer_alias(peer) or "?"
+                    key = f"peerwatch:{name}"
+                    try:
+                        state = json.loads(kv_get(key) or "{}")
+                    except ValueError:
+                        state = {}
+                    state, msgs = peer_watch_step(state, peer_fetch(peer), dt.datetime.now(), CFG, name)
+                    kv_set(key, json.dumps(state, ensure_ascii=False))
+                    for m in msgs:
+                        _ctx.chat = PRIMARY
+                        try:
+                            reply(m)
+                        finally:
+                            _ctx.chat = None
+        except Exception:
+            log("peer_watch error", traceback.format_exc())
+        time.sleep(120)
+
+
+def _ssh(alias, remote_cmd, timeout=120):
+    ssh = shutil.which("ssh") or r"C:\Windows\System32\OpenSSH\ssh.exe"
+    return subprocess.run([ssh, "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", alias, remote_cmd], capture_output=True,
+                          timeout=timeout, creationflags=NO_WINDOW)
+
+
+def _ps_remote(alias, script, timeout=180):
+    """PowerShell on the other machine (its ssh shell is cmd): sent base64-encoded, so quoting and Hebrew survive."""
+    import base64
+    enc = base64.b64encode(("[Console]::OutputEncoding=[Text.Encoding]::UTF8;" + script).encode("utf-16-le")).decode()
+    r = _ssh(alias, f"powershell -NoProfile -EncodedCommand {enc}", timeout)
+    return r.returncode, (r.stdout or b"").decode("utf-8", "replace"), (r.stderr or b"").decode("utf-8", "replace")
+
+
+def _scp(alias, files, dest_dir, timeout=1800):
+    scp = shutil.which("scp") or r"C:\Windows\System32\OpenSSH\scp.exe"
+    r = subprocess.run([scp, "-q", "-B", "-o", "ConnectTimeout=20", *files, f"{alias}:{dest_dir.rstrip('/')}/"],
+                       capture_output=True, timeout=timeout, creationflags=NO_WINDOW)
+    if r.returncode:
+        raise RuntimeError((r.stderr or b"").decode("utf-8", "replace")[-200:] or f"scp exit {r.returncode}")
+
+
+def peer_backup_plan(local, remote, cap_bytes):
+    """local: [(rel_path, size, mtime)], remote: set of rel paths (any slash style). Newest missing files first, up to
+    cap_bytes. Returns (to_copy, skipped_count)."""
+    have = {r.replace("\\", "/").lower() for r in remote}
+    missing = sorted([x for x in local if x[0].replace("\\", "/").lower() not in have], key=lambda x: -x[2])
+    out, total = [], 0
+    for rel, size, mt in missing:
+        if total + size > cap_bytes:
+            continue
+        out.append((rel, size, mt))
+        total += size
+    return out, len(missing) - len(out)
+
+
+def peer_backup(names=None):
+    """After the nightly backup: copy this machine's backup to each other machine with an ssh alias, into
+    <its backup_dir>/peer-<this host>/ — databases every night, media incrementally (only files missing there, newest
+    first, up to peer_backup_max_mb per night). Result per peer in kv peer_backup:<name> (shown in the dashboard)."""
+    import socket
+    root = _path(CFG["backup_dir"])
+    day = dt.date.today().isoformat()
+    dbdir = os.path.join(root, "db", day)
+    host = re.sub(r"[^\w.-]+", "_", CFG.get("host_label") or socket.gethostname())
+    for peer in CFG.get("peers") or []:
+        name, alias = peer.get("name") or "?", peer_alias(peer)
+        if not alias or (names and name not in names):
+            continue
+        res = {"at": dt.datetime.now().isoformat(timespec="seconds"), "ok": False}
+        try:
+            b = peer_fetch(peer, timeout=8) or {}
+            rbase = (b.get("backup_dir") or "").replace("\\", "/").rstrip("/")
+            if not rbase:  # the other dashboard is not reachable: its default backup folder
+                code, out, err = _ps_remote(alias, "Write-Output (Join-Path $env:USERPROFILE 'WhatsApp-Backup')")
+                rbase = out.strip().splitlines()[-1].replace("\\", "/") if code == 0 and out.strip() else ""
+            if not rbase:
+                raise RuntimeError("המחשב השני לא זמין (ssh)")
+            dest = f"{rbase}/peer-{host}"
+            keep = int(CFG.get("backup_keep_days", 14))
+            mroot = os.path.join(root, "media")
+            local = []
+            for d, _, files in os.walk(mroot):
+                for f in files:
+                    full = os.path.join(d, f)
+                    try:
+                        local.append((os.path.relpath(full, mroot).replace("\\", "/"), os.path.getsize(full), os.path.getmtime(full)))
+                    except OSError:
+                        pass
+            code, out, err = _ps_remote(alias,
+                f"New-Item -ItemType Directory -Force -Path '{dest}/db/{day}','{dest}/media' | Out-Null;"
+                f"$b=(Resolve-Path '{dest}/media').Path; Get-ChildItem -Recurse -File -LiteralPath $b | ForEach-Object {{ $_.FullName.Substring($b.Length+1) }};"
+                f"Get-ChildItem -Directory '{dest}/db' | Sort-Object Name | Select-Object -SkipLast {keep} | Remove-Item -Recurse -Force")
+            if code:
+                raise RuntimeError(err.strip()[-200:] or "remote listing failed")
+            remote = {l.strip() for l in out.splitlines() if l.strip()}
+            dbs = [os.path.join(dbdir, n) for n in ("messages.db", "whatsapp.db", "agent.db") if os.path.exists(os.path.join(dbdir, n))]
+            if dbs:
+                _scp(alias, dbs, f"{dest}/db/{day}")
+            plan, skipped = peer_backup_plan(local, remote, int(CFG.get("peer_backup_max_mb", 2048)) * 1024 * 1024)
+            bydir = {}
+            for rel, size, mt in plan:
+                bydir.setdefault(os.path.dirname(rel), []).append(rel)
+            if bydir:
+                dirs = ",".join(f"'{dest}/media/{d}'" for d in bydir if d)
+                if dirs:
+                    _ps_remote(alias, f"New-Item -ItemType Directory -Force -Path {dirs} | Out-Null")
+            copied = nbytes = 0
+            for d, rels in bydir.items():
+                for i in range(0, len(rels), 40):  # stay far below the Windows command-line limit
+                    chunk = rels[i:i + 40]
+                    _scp(alias, [os.path.join(mroot, r) for r in chunk], f"{dest}/media/{d}" if d else f"{dest}/media")
+                    copied += len(chunk)
+                    nbytes += sum(sz for r2, sz, _ in plan if r2 in chunk)
+            res.update(ok=True, dest=dest, dbs=len(dbs), media_copied=copied, media_mb=round(nbytes / 1048576, 1), media_left=skipped)
+            log(f"peer backup -> {name}: {len(dbs)} dbs, {copied} media files ({res['media_mb']} MB), {skipped} left for next time")
+        except Exception as e:
+            res["error"] = str(e)[:300]
+            log("peer backup failed", name, e)
+        kv_set(f"peer_backup:{name}", json.dumps(res, ensure_ascii=False))
+
+
+# ---------- transcription gap: voice notes that arrived while transcription was off ----------
+
+def transcribe_gap(limit=5000):
+    """Voice notes with no transcript since transcription was switched off (kv transcribe_off_since; fallback: 7 days).
+    Owner's voice notes in the control groups always; every chat when transcribe_all_chats. Oldest first."""
+    since = kv_get("transcribe_off_since") or (dt.datetime.now() - dt.timedelta(days=7)).isoformat(timespec="seconds")
+    convs = [PRIMARY] + [j for j in load_groups() if j != LOCAL]
+    with mdb() as db:
+        if CFG.get("transcribe_all_chats"):
+            rows = db.execute("SELECT id, chat_jid, sender, timestamp FROM messages WHERE media_type = 'audio' AND timestamp >= ? "
+                              "ORDER BY timestamp LIMIT ?", (since[:19].replace("T", " "), limit)).fetchall()
+        else:
+            q = ",".join("?" * len(convs))
+            rows = db.execute(f"SELECT id, chat_jid, sender, timestamp FROM messages WHERE media_type = 'audio' AND is_from_me = 1 "
+                              f"AND chat_jid IN ({q}) AND timestamp >= ? ORDER BY timestamp LIMIT ?",
+                              (*convs, since[:19].replace("T", " "), limit)).fetchall()
+    with adb() as db:
+        done = {(r[0], r[1]) for r in db.execute("SELECT id, chat_jid FROM transcripts")}
+    return since, [r for r in rows if (r[0], r[1]) not in done]
+
+
+def transcribe_backfill():
+    """Transcribe the gap, oldest first (slow queue); progress in kv transcribe_backfill for the dashboard."""
+    if not voice_enabled():
+        kv_set("transcribe_backfill", json.dumps({"state": "off", "at": dt.datetime.now().isoformat(timespec="seconds")}))
+        return
+    since, todo = transcribe_gap()
+    prog = {"state": "running", "total": len(todo), "done": 0, "failed": 0, "since": since}
+    kv_set("transcribe_backfill", json.dumps(prog))
+    for mid, cj, sender, ts in todo:
+        try:
+            if transcript_of(cj, mid, sender, ts) is None:
+                prog["failed"] += 1
+            else:
+                prog["done"] += 1
+        except Exception as e:
+            prog["failed"] += 1
+            log("backfill transcription failed", mid, e)
+        kv_set("transcribe_backfill", json.dumps(prog))
+    prog.update(state="done", at=dt.datetime.now().isoformat(timespec="seconds"))
+    kv_set("transcribe_backfill", json.dumps(prog))
+    if not prog["failed"]:
+        kv_set("transcribe_off_since", "")
+
+
+def transcribe_backfill_check():
+    """Every minute: the dashboard asked to fill the gap (kv transcribe_backfill_request)."""
+    if kv_get("transcribe_backfill_request"):
+        kv_set("transcribe_backfill_request", "")
+        slow.put(transcribe_backfill)
 
 
 # ---------- updates ----------
@@ -1723,7 +1958,8 @@ def group_check():
 #   agent.background(fn)                         long-running thread
 #   agent.manual(name, fn)                       `agent.py <name>` on the command line
 
-_hooks, _periodic, _daily, _threads, _manual = [], [], [], [], {"backup": backup, "update_check": update_check, "group_check": group_check}
+_hooks, _periodic, _daily, _threads, _manual = [], [], [], [], {"backup": backup, "update_check": update_check, "group_check": group_check,
+                                                    "peer_backup": peer_backup, "transcribe_backfill": transcribe_backfill}
 on_message = _hooks.append
 background = _threads.append
 every = lambda minutes, key, fn: _periodic.append((minutes, key, fn))
@@ -2318,6 +2554,7 @@ def scheduler():
                 kv_set("at:reminders", now.strftime("%Y%m%d%H%M"))
                 work.put(reminders_check)
                 work.put(scheduled_check)
+                work.put(transcribe_backfill_check)
             for minutes, key, fn in _periodic:
                 last = kv_get(f"at:{key}")
                 if not last or now - dt.datetime.fromisoformat(last) > dt.timedelta(minutes=minutes):
@@ -2348,7 +2585,12 @@ if __name__ == "__main__":
             threading.Thread(target=notify_interrupted, args=(cut,), daemon=True).start()
     except Exception:
         log("mark_interrupted failed", traceback.format_exc())
-    for target in [worker, slow_worker, command_worker, scheduler, event_listener, watchdog, tunnel_keeper] + _threads:
+    try:  # transcription switched off (config edited by hand too): remember since when, to fill the gap later
+        if not CFG.get("transcribe", True) and not kv_get("transcribe_off_since"):
+            kv_set("transcribe_off_since", dt.datetime.now().isoformat(timespec="seconds"))
+    except Exception as e:
+        log("transcribe_off_since", e)
+    for target in [worker, slow_worker, command_worker, scheduler, event_listener, watchdog, tunnel_keeper, peer_watch] + _threads:
         threading.Thread(target=target, daemon=True).start()
     sys.path.insert(0, ROOT)
     from dash import server as dash_server  # control panel, also on http://127.0.0.1:8770

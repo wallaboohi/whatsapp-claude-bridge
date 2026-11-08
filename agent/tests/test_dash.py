@@ -190,3 +190,28 @@ def test_tunnel_switch_and_service_validation(dash):
     assert srv.action({"do": "tunnel", "name": "נייח", "on": False})["ok"] and srv.kv("tunnel_off:נייח") == "1"
     assert srv.action({"do": "tunnel", "name": "נייח", "on": True})["ok"] and srv.kv("tunnel_off:נייח") == ""
     assert srv.action({"do": "service", "what": "everything", "op": "stop"}).get("error")
+
+
+
+def test_settings_transcribe_off_records_gap_and_backfill(dash):
+    srv, tmp = dash
+    srv.action({"do": "settings_save", "values": {"transcribe": False}})
+    assert srv.kv("transcribe_off_since"), "switching transcription off remembers since when"
+    assert srv.action({"do": "transcribe_backfill"}).get("error"), "can't fill the gap while it is off"
+    srv.action({"do": "settings_save", "values": {"transcribe": True, "host_label": "", "claude_account": "עבודה"}})
+    assert srv.action({"do": "transcribe_backfill"}) == {"ok": True} and srv.kv("transcribe_backfill_request")
+    g = srv.transcribe_gap_info()
+    assert g["on"] and g["explicit"] and "missing" in g
+    assert srv.cost_summary()["account"] == "עבודה"
+
+
+def test_history_sync_and_peer_ssh_field(dash, monkeypatch):
+    srv, tmp = dash
+    calls = []
+    monkeypatch.setattr(srv, "bridge", lambda path, body=None, timeout=8: calls.append((path, body)) or {"requested": True})
+    assert srv.action({"do": "history_sync", "jid": "bad"}).get("error")
+    r = srv.action({"do": "history_sync", "jid": "972500000001@s.whatsapp.net", "count": 9999})
+    assert r.get("ok") and calls[-1] == ("/history_sync", {"jid": "972500000001@s.whatsapp.net", "count": 500})
+    assert srv.action({"do": "peers_save", "peers": [{"name": "לפטופ", "url": "http://127.0.0.1:8781", "ssh": "4-MINE"}]}) == {"ok": True}
+    assert srv.peers()[0]["ssh"] == "4-MINE" and srv.peer_alias(srv.peers()[0]) == "4-MINE"
+    assert srv.action({"do": "peers_save", "peers": [{"name": "x", "url": "http://127.0.0.1:8781", "ssh": "bad alias;rm"}]}).get("error")

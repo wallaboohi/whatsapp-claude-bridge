@@ -257,6 +257,9 @@ SETTINGS = {
     "backup_keep_days": ("int", 14, (1, 365)), "backup_media_days": ("int", 90, (0, 3650)), "reconnect_settle_seconds": ("int", 45, (0, 600)),
     "light_model": ("model", "haiku", None), "claude_model": ("model", "sonnet", None), "deep_model": ("model", "opus", None),
     "permission_mode": ("choice", "auto", PERM_MODES), "voice_name": ("text", "he-IL-AvriNeural", None),
+    "peer_watch": ("bool", True, None), "peer_alert_minutes": ("int", 10, (1, 1440)), "peer_offline_minutes": ("int", 30, (1, 10080)),
+    "peer_backup": ("bool", True, None), "peer_backup_max_mb": ("int", 2048, (0, 200000)),
+    "host_label": ("opt", "", None), "claude_account": ("opt", "", None),
 }
 
 
@@ -301,6 +304,8 @@ def validate_setting(k, v):
             raise ValueError(f"{k}: שם מודל")
         return str(v)
     v = str(v).strip()
+    if t == "opt" and v == "":
+        return ""
     if not 0 < len(v) <= 80:
         raise ValueError(f"{k}: טקסט")
     return v
@@ -308,6 +313,69 @@ def validate_setting(k, v):
 
 def peers():
     return cfg().get("peers") or []
+
+
+def peer_alias(pr):
+    return str(pr.get("ssh") or pr.get("tunnel") or "").strip()
+
+
+def backup_dir_abs():
+    v = os.path.expanduser(str(cfg().get("backup_dir", "~/WhatsApp-Backup")))
+    return os.path.normpath(v if os.path.isabs(v) else os.path.join(ROOT, v))
+
+
+def cost_summary():
+    """Claude spend on this machine: today / 7 / 30 days, with the machine name and the Claude account."""
+    c, p = cfg(), paths()
+    d0 = dt.date.today()
+    one = lambda days: round((rows(p["agent"], "SELECT coalesce(sum(cost),0) s FROM claude_runs WHERE substr(at,1,10) >= ?",
+                                  ((d0 - dt.timedelta(days=days - 1)).isoformat(),)) or [{"s": 0}])[0]["s"], 2)
+    return {"machine": c.get("host_label") or socket.gethostname(), "account": c.get("claude_account") or "",
+            "today": one(1), "d7": one(7), "d30": one(30)}
+
+
+def cost_by_chat():
+    c, p = cfg(), paths()
+    since = (dt.date.today() - dt.timedelta(days=6)).isoformat()
+    convs = conversations()
+    out = []
+    for r in rows(p["agent"], "SELECT coalesce(chat, ?) AS chat, round(sum(CASE WHEN substr(at,1,10) = ? THEN cost ELSE 0 END),2) AS today, "
+                              "round(sum(cost),2) AS d7, count(*) AS runs FROM claude_runs WHERE substr(at,1,10) >= ? GROUP BY 1 ORDER BY 3 DESC",
+                  (c["claude_group"], dt.date.today().isoformat(), since)):
+        out.append(dict(r, name=(convs.get(r["chat"]) or {}).get("name") or ("שיחה מקומית" if r["chat"] == LOCAL else str(r["chat"]).split("@")[0])))
+    return out
+
+
+def transcribe_gap_info():
+    """Voice notes with no transcript since transcription was switched off (same rule as the agent's transcribe_gap)."""
+    c, p = cfg(), paths()
+    since = kv("transcribe_off_since") or (dt.datetime.now() - dt.timedelta(days=7)).isoformat(timespec="seconds")
+    s19 = since[:19].replace("T", " ")
+    convs = [c["claude_group"]] + [j for j in load_groups_raw() if j != LOCAL]
+    if c.get("transcribe_all_chats", True):
+        aud = rows(p["msg"], "SELECT id, chat_jid FROM messages WHERE media_type = 'audio' AND timestamp >= ? LIMIT 5000", (s19,))
+    else:
+        aud = rows(p["msg"], "SELECT id, chat_jid FROM messages WHERE media_type = 'audio' AND is_from_me = 1 AND chat_jid IN (%s) "
+                             "AND timestamp >= ? LIMIT 5000" % ",".join("?" * len(convs)), (*convs, s19))
+    done = {(r["id"], r["chat_jid"]) for r in rows(p["agent"], "SELECT id, chat_jid FROM transcripts")}
+    try:
+        prog = json.loads(kv("transcribe_backfill") or "null")
+    except ValueError:
+        prog = None
+    return {"on": bool(c.get("transcribe", True)), "since": since, "explicit": bool(kv("transcribe_off_since")),
+            "missing": sum(1 for r in aud if (r["id"], r["chat_jid"]) not in done), "progress": prog,
+            "requested": bool(kv("transcribe_backfill_request"))}
+
+
+def peer_backups():
+    out = {}
+    for pr in peers():
+        nm = pr.get("name") or peer_alias(pr)
+        try:
+            out[nm] = json.loads(kv(f"peer_backup:{nm}") or "null")
+        except ValueError:
+            out[nm] = None
+    return out
 
 
 def ssh_start_script(root):
@@ -322,12 +390,12 @@ def ssh_start_script(root):
 def peer_ssh_start(i):
     import base64
     ps = peers()
-    if not (0 <= i < len(ps)) or not ps[i].get("tunnel"):
+    if not (0 <= i < len(ps)) or not peer_alias(ps[i]):
         return {"error": "no ssh connection configured for this computer"}
     enc = base64.b64encode(ssh_start_script(ps[i].get("root") or ROOT).encode("utf-16-le")).decode()
     ssh = shutil.which("ssh") or r"C:\Windows\System32\OpenSSH\ssh.exe"
     try:
-        r = subprocess.run([ssh, "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", ps[i]["tunnel"], f"powershell -NoProfile -EncodedCommand {enc}"],
+        r = subprocess.run([ssh, "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", peer_alias(ps[i]), f"powershell -NoProfile -EncodedCommand {enc}"],
                            capture_output=True, text=True, timeout=60, creationflags=NW)
     except Exception as e:
         return {"error": str(e)[:200]}
@@ -383,7 +451,8 @@ def brief():
     return {"machine": socket.gethostname(), "tool_version": (open(os.path.join(ROOT, "VERSION")).read().strip() if os.path.exists(os.path.join(ROOT, "VERSION")) else "?"),
             "dash_version": VERSION, "bridge": {k: b.get(k) for k in ("connected", "version", "paused", "error", "connected_since")},
             "agent_alive": alive, "heartbeat": hb, "listen_paused": kv("listen_paused") or "", "groups": gl, "tunnels": tunnels,
-            "services": services()}
+            "services": services(), "backup_dir": backup_dir_abs(), "cost": cost_summary(),
+            "host_label": c.get("host_label") or "", "account": c.get("claude_account") or ""}
 
 
 def peers_status():
@@ -393,7 +462,8 @@ def peers_status():
 
     def one(i):
         r = peer_call(i, "/brief", timeout=4)
-        out[i] = {"i": i, "name": ps[i].get("name") or f"peer {i}", "tunnel": ps[i].get("tunnel") or "", "online": not r.get("offline"),
+        out[i] = {"i": i, "name": ps[i].get("name") or f"peer {i}", "tunnel": ps[i].get("tunnel") or "", "ssh": peer_alias(ps[i]),
+                  "online": not r.get("offline"),
                   "brief": None if r.get("offline") else r, "error": r.get("error")}
     th = [threading.Thread(target=one, args=(i,)) for i in range(len(ps))]
     [t.start() for t in th]
@@ -530,6 +600,7 @@ def data(chat=None):
         "settings": settings_view(),
         "services": services(),
         "jobs": {k: kv(f"day:{k}") for k in ("backup", "update_check", "group_check", "selftest", "morning_summary", "signin_check", "auto_update")},
+        "cost_self": cost_summary(), "cost_by_chat": cost_by_chat(), "transcribe_gap": transcribe_gap_info(), "peer_backups": peer_backups(),
         "selftest": (json.load(open(os.path.join(ROOT, "agent", "selftest.json"), encoding="utf-8")) if os.path.exists(os.path.join(ROOT, "agent", "selftest.json")) else []),
     }
 
@@ -913,6 +984,7 @@ def action(a):
         return {"ok": True}
     if kind == "settings_save":
         c = cfg()
+        was_on = bool(c.get("transcribe", True))
         try:
             for k, v in (a.get("values") or {}).items():
                 if k in SETTINGS:
@@ -920,8 +992,27 @@ def action(a):
         except ValueError as e:
             return {"error": str(e)}
         save_cfg(c)
+        now_on = bool(c.get("transcribe", True))
+        if was_on and not now_on and not kv("transcribe_off_since"):  # remember the gap, to fill it when switched back on
+            kv_put("transcribe_off_since", dt.datetime.now().isoformat(timespec="seconds"))
         if a.get("restart"):
             open(os.path.join(ROOT, "agent", "restart.request"), "w", encoding="utf-8").write("settings changed in the dashboard")
+        return {"ok": True}
+    if kind == "transcribe_backfill":  # the agent picks this up within a minute and transcribes the gap on its slow queue
+        if not cfg().get("transcribe", True):
+            return {"error": "התמלול כבוי — הפעל אותו בהגדרות (ושמור והפעל מחדש) ואז תמלל את החסרים"}
+        kv_put("transcribe_backfill_request", dt.datetime.now().isoformat(timespec="seconds"))
+        return {"ok": True}
+    if kind == "history_sync":  # ask the phone for older messages of one chat (they arrive asynchronously)
+        jid = str(a.get("jid") or "")
+        if not re.fullmatch(r"[\w.\-]+@(s\.whatsapp\.net|g\.us|lid)", jid):
+            return {"error": "bad chat"}
+        res = bridge("/history_sync", {"jid": jid, "count": max(10, min(500, int(a.get("count") or 50)))}, timeout=20)
+        return res if res.get("error") else {"ok": True, **res}
+    if kind == "peer_backup_now":
+        uv = shutil.which("uv") or os.path.expanduser("~/.local/bin/uv.exe")
+        subprocess.Popen([uv, "run", "-q", "--no-sync", "python", "-X", "utf8", "agent.py", "peer_backup"],
+                         cwd=os.path.join(ROOT, "agent"), creationflags=NW, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return {"ok": True}
     if kind == "plugin_toggle":
         c = cfg()
@@ -937,9 +1028,11 @@ def action(a):
         out = []
         for pr in a.get("peers") or []:
             name, url, tun = str(pr.get("name", "")).strip()[:40], str(pr.get("url", "")).strip(), str(pr.get("tunnel", "") or "").strip()
-            if not name or not re.fullmatch(r"http://127\.0\.0\.1:\d{2,5}", url) or (tun and not re.fullmatch(r"[\w.@\-]{1,64}", tun)):
-                return {"error": "שם, כתובת http://127.0.0.1:<פורט> ושם חיבור ssh (לא חובה)"}
-            out.append({"name": name, "url": url, **({"tunnel": tun} if tun else {})})
+            sh = str(pr.get("ssh", "") or "").strip()
+            ok_alias = lambda x: not x or re.fullmatch(r"[\w.@\-]{1,64}", x)
+            if not name or not re.fullmatch(r"http://127\.0\.0\.1:\d{2,5}", url) or not ok_alias(tun) or not ok_alias(sh):
+                return {"error": "שם, כתובת http://127.0.0.1:<פורט>, מנהרה ו-ssh (לא חובה)"}
+            out.append({"name": name, "url": url, **({"tunnel": tun} if tun else {}), **({"ssh": sh} if sh else {})})
         c = cfg()
         c["peers"] = out
         save_cfg(c)
