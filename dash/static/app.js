@@ -292,11 +292,11 @@ function drawerContent(kind, d) {
     const chatBlock = cc.length ? `<div class="item"><div class="item-head"><strong>${L("לפי שיחה (7 ימים)", "By conversation (7 days)")}</strong></div>${cc.map(r => `<div class="bar-row" style="grid-template-columns:120px 1fr 150px"><span>${esc(r.name)}</span><span class="meter"><span style="width:${100 * (r.d7 || 0) / cmax}%"></span></span><span>$${(r.d7 || 0).toFixed(2)} · ${L("היום", "today")} $${(r.today || 0).toFixed(2)}</span></div>`).join("")}</div>` : "";
     const byModel = {}; runs.forEach(r => { const m = r.model || "?"; byModel[m] = byModel[m] || { n: 0, cost: 0 }; byModel[m].n++; byModel[m].cost += r.cost || 0; });
     const mmax = Math.max(0.01, ...Object.values(byModel).map(x => x.cost)), pct = Math.min(100, 100 * (a.spent_today || 0) / (a.budget || 1));
-    return `<div class="sum-row"><span class="stat">${L("היום", "Today")}: $${(a.spent_today ?? 0).toFixed(2)}</span><span class="stat">${L("תקרה", "Cap")}: $${a.budget}</span><span class="stat">${L("ריצות היום", "Runs today")}: ${runs.length}</span></div>
-      <div class="item"><div class="item-head"><strong>${L("ניצול התקרה היומית", "Daily cap used")}</strong><span class="muted">${Math.round(pct)}%</span></div><span class="meter${pct > 80 ? " hot" : ""}"><span style="width:${pct}%"></span></span></div>
+    return `<div class="sum-row"><span class="stat">${L("היום", "Today")}: $${(a.spent_today ?? 0).toFixed(2)}</span><span class="stat">${L("תקרת שימוש", "Cap")}: $${a.budget}</span><span class="stat">${L("ריצות היום", "Runs today")}: ${runs.length}</span></div>
+      <div class="item"><div class="item-head"><strong>${L("ניצול תקרת השימוש היומית", "Daily cap used")}</strong><span class="muted">${Math.round(pct)}%</span></div><span class="meter${pct > 80 ? " hot" : ""}"><span style="width:${pct}%"></span></span></div>
       ${machBlock}${chatBlock}
       ${Object.keys(byModel).length ? `<div class="item"><div class="item-head"><strong>${L("היום לפי מודל", "Today by model")}</strong></div>${Object.entries(byModel).sort((x, y) => y[1].cost - x[1].cost).map(([m, v]) => `<div class="bar-row" style="grid-template-columns:90px 1fr 120px"><span>${m === "?" ? L("לא נרשם", "not recorded") : esc(m)}</span><span class="meter"><span style="width:${100 * v.cost / mmax}%"></span></span><span>$${v.cost.toFixed(2)} · ${v.n} ${L("ריצות", "runs")}</span></div>`).join("")}</div>` : ""}
-      <div class="item"><div class="item-head"><strong>${L("לפי שיחה — היום", "By conversation — today")}</strong></div>${(d.groups || []).map(g => `<div class="conv-row"><span>${g.jid === "local" ? "💻" : "👥"} ${esc(g.name)} · <span class="muted">${esc(MODEL_HE(g.model))}</span></span><span>$${g.spent} / $${g.budget}</span><span class="meter${g.spent >= g.budget ? " hot" : ""}"><span style="width:${Math.min(100, 100 * g.spent / (g.budget || 1))}%"></span></span></div>`).join("")}<p class="note tight">${L("תקרה לכל שיחה בנפרד — לשינוי: ⚙️ הגדרות ← עלות", "Each conversation has its own cap — change it in ⚙️ Settings → Cost")}</p></div>
+      <div class="item"><div class="item-head"><strong>${L("לפי שיחה — היום", "By conversation — today")}</strong></div>${(d.groups || []).map(g => `<div class="conv-row"><span>${g.jid === "local" ? "💻" : "👥"} ${esc(g.name)} · <span class="muted">${esc(MODEL_HE(g.model))}</span></span><span>$${g.spent} / $${g.budget}</span><span class="meter${g.spent >= g.budget ? " hot" : ""}"><span style="width:${Math.min(100, 100 * g.spent / (g.budget || 1))}%"></span></span></div>`).join("")}<p class="note tight">${L("תקרת שימוש לכל שיחה בנפרד — לשינוי: ⚙️ הגדרות ← עלות", "Each conversation has its own cap — change it in ⚙️ Settings → Cost")}</p></div>
       <div class="item"><div class="item-head"><strong>${L("לפי יום", "By day")}</strong></div>${c.slice().reverse().map(r => `<div class="bar-row"><span class="muted">${r.day.slice(8, 10)}.${r.day.slice(5, 7)}</span><span class="meter"><span style="width:${100 * r.cost / max}%"></span></span><span>$${r.cost}</span></div>`).join("")}</div>
       <div class="item"><div class="item-head"><strong>${L("ריצות Claude היום", "Claude runs today")}</strong></div>${runs.length ? runs.map(r => `<div class="bar-row" style="grid-template-columns:52px 70px 1fr 70px"><span class="muted">${hhmm(toDate(r.at))}</span><span class="muted">${esc(r.model || "")}</span><span class="${r.ok ? "" : "bad"}">${r.ok ? "" : "✖ "}${Math.round(r.seconds)} ${L("שנ'", "s")}</span><span>$${(r.cost || 0).toFixed(3)}</span></div>`).join("") : `<span class="muted">—</span>`}</div>`;
   }
@@ -396,13 +396,13 @@ function render(d) {
     `<span class="schip" title="${L("גיבוי אחרון", "Last backup")}">💾 ${a.backup_done ? ago(a.backup_done) : "—"}</span>`;
   // today tiles
   const pend = (d.drafts || []).filter(x => x.status === "pending").length;
-  $("kSent").textContent = b.sent_today ?? "—"; $("kSentFoot").textContent = b.daily_cap ? L(`מתוך תקרה של ${b.daily_cap}`, `of a ${b.daily_cap} cap`) : "";
+  $("kSent").textContent = b.sent_today ?? "—"; $("kSentFoot").textContent = b.daily_cap ? L(`מתוך תקרת שימוש של ${b.daily_cap}`, `of a ${b.daily_cap} cap`) : "";
   $("kRecv").textContent = d.received_today ?? 0; $("kDrafts").textContent = pend; $("kTr").textContent = d.transcribed_today ?? 0;
   $("kCost").textContent = "$" + (a.spent_today ?? 0).toFixed(2);
   $("todaySum").textContent = `📝 ${pend} · 📤 ${b.sent_today ?? 0} · 📥 ${d.received_today ?? 0}`;
   const pct = Math.min(100, 100 * (a.spent_today || 0) / (a.budget || 5));
   $("kCostBar").style.width = pct + "%"; $("kCostMeter").className = "meter" + (pct >= 100 ? " bad" : pct >= 80 ? " warn" : "");
-  $("kCostMeter").setAttribute("aria-valuenow", Math.round(pct)); $("kCostMeter").title = L(`תקרה יומית $${a.budget}`, `daily cap $${a.budget}`);
+  $("kCostMeter").setAttribute("aria-valuenow", Math.round(pct)); $("kCostMeter").title = L(`תקרת שימוש יומית $${a.budget}`, `daily cap $${a.budget}`);
   // chat
   const chat = $("chat"); const atBottom = chat.scrollTop + chat.clientHeight >= chat.scrollHeight - 40;
   const MT = { audio: L("הודעה קולית", "voice note"), image: L("תמונה", "image"), document: L("קובץ", "file"), video: L("וידאו", "video") };
@@ -477,7 +477,7 @@ function renderTabs(d) {
   const sel = (peer, jid) => peer === curPeer && jid === d.chat;
   const tab = (g, peer, label) => {
     const run = g.live === true || (g.live && !g.live.done);
-    return `<button class="tab${peer !== null ? " peer-tab" : ""}" role="tab" aria-selected="${sel(peer, g.jid)}" data-chat="${esc(g.jid)}" data-peer="${peer === null ? "" : peer}" title="${esc(PURPOSE[g.purpose] || "")}${g.budget ? ` · ${L("תקרה", "cap")} $${g.budget}` : ""}">` +
+    return `<button class="tab${peer !== null ? " peer-tab" : ""}" role="tab" aria-selected="${sel(peer, g.jid)}" data-chat="${esc(g.jid)}" data-peer="${peer === null ? "" : peer}" title="${esc(PURPOSE[g.purpose] || "")}${g.budget ? ` · ${L("תקרת שימוש", "cap")} $${g.budget}` : ""}">` +
       `<span aria-hidden="true">${peer !== null ? "🖥️" : g.jid === "local" ? "💻" : "👥"}</span><span class="t-name">${esc(label || g.name)}</span>` +
       `${g.paused ? `<span class="t-paused" title="${L("ההאזנה מושהית", "listening paused")}">⏸</span>` : ""}` +
       `${run ? `<span class="t-dot" title="${L("עובד עכשיו", "working now")}"></span>` : ""}${g.pending ? `<span class="t-badge">${g.pending}</span>` : ""}` +
@@ -496,7 +496,7 @@ function renderTabs(d) {
     : pcL >= phL ? `💻 <b>${L("אתה במחשב", "You are at the PC")}</b>` : `📱 <b>${L("אתה בנייד", "You are on the phone")}</b>`;
   const g = groupOf(d.chat), local = d.chat === "local";
   $("grpName").textContent = g.name || "—";
-  $("grpMeta").textContent = `${PURPOSE[g.purpose] || ""} · ${L("תקרה", "cap")} $${g.budget ?? "—"} · ${L("היום", "today")} $${g.spent ?? 0}`;
+  $("grpMeta").textContent = `${PURPOSE[g.purpose] || ""} · ${L("תקרת שימוש", "cap")} $${g.budget ?? "—"} · ${L("היום", "today")} $${g.spent ?? 0}`;
   $("grpEdit").hidden = local; $("grpOff").hidden = !!g.primary;
   { const n = rulesCount(d); $("rulesSum").textContent = n ? String(n) : ""; }
   $("h-chat").textContent = local ? L("שיחה מקומית עם Claude", "Local chat with Claude") : L("השיחה בקבוצה", "Conversation in group") + " · " + (g.name || "");
@@ -506,19 +506,30 @@ function renderTabs(d) {
 }
 $("tabAdd").onclick = e => { e.stopPropagation(); toggleAdd(); };
 // base rules of the current conversation (agent/home/groups/*.md): shown read-only; added with /כלל בסיס so Claude checks them first
-function rulesCount(d) { return ((d.rules && d.rules.text) || "").split("\n").filter(l => /^\s*[-*•\d]/.test(l)).length; }
+const RULE_LINE = /^\s*(?:[-*•]|\d+[.)])\s+(\S.*)$/;
+function rulesList(d) {
+  // each rule: "- YYYY-MM-DD HH:MM · text" (older ones may have no time); ordered by the time it was taken in
+  return ((d && d.rules && d.rules.text) || "").split("\n").map(l => (l.match(RULE_LINE) || [])[1]).filter(Boolean).map((t, i) => {
+    const m = t.match(/^\(?(\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2})?)\)?\s*[·:\-–]?\s*(.*)$/);
+    return { at: m ? m[1].replace("T", " ") : "", text: m ? m[2] : t, i };
+  }).sort((a, b) => (a.at || "") < (b.at || "") ? -1 : (a.at || "") > (b.at || "") ? 1 : a.i - b.i);
+}
+function rulesCount(d) { return rulesList(d).length; }
 function showRules() {
   const r = (last && last.rules) || {}, g = groupOf(last && last.chat);
   drawerKind = "ctx"; $("scrim").hidden = false; $("drawer").hidden = false;
   $("drawerTitle").textContent = L("📜 כללי בסיס · ", "📜 Base rules · ") + (g.name || "");
   $("drawerTabs").innerHTML = "";
-  $("drawerBody").innerHTML = (r.text && r.text.trim() ? `<pre class="item" style="white-space:pre-wrap;font:inherit">${esc(r.text.trim())}</pre>`
+  const list = rulesList(last);
+  $("drawerBody").innerHTML = `<p class="note tight"><b>${L(`יש ${list.length} כללים`, `${list.length} rules`)}</b></p>` +
+    (list.length ? `<ol class="item" style="padding-inline-start:1.6em">${list.map(x => `<li style="margin:.35em 0">${x.at ? `<span class="muted">${esc(fmtRuleAt(x.at))}</span> · ` : ""}${esc(x.text)}</li>`).join("")}</ol>`
       : `<p class="empty">${L("עוד אין כללי בסיס לשיחה הזו", "No base rules for this conversation yet")}</p>`) +
     `<p class="note tight">${L("להוספת כלל: כתוב בשיחה (כאן או בווצאפ) <b>/כלל בסיס</b> ואחריו הכלל. Claude בודק שהוא ברור ולא סותר כללים קיימים, מציע ניסוח או טיפ, ושואל לפני שהוא מוסיף כשמשהו לא ברור. הכללים נטענים בכל סשן של השיחה הזו בלבד; הכללים לכל השיחות נמצאים ב-agent/home/CLAUDE.md.",
       "To add a rule, write <b>/rule</b> and the rule in this conversation (here or in WhatsApp). Claude checks it is clear and does not contradict existing rules, suggests wording, and asks first when unclear. Loaded in every session of this conversation only; rules for all conversations are in agent/home/CLAUDE.md.")}</p>` +
-    `<p class="note tight muted">${esc(r.path || "")}</p>`;
+    "";
   $("drawerClose").focus();
 }
+function fmtRuleAt(s) { const m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?: (\d{2}:\d{2}))?/); return m ? `${m[3]}.${m[2]}.${m[1].slice(2)}${m[4] ? " " + m[4] : ""}` : s; }
 $("rulesBtn").onclick = showRules;
 $("tabs").addEventListener("click", e => {
   const t = e.target.closest(".tab"); if (!t) return;
@@ -532,8 +543,8 @@ $("grpRename").onclick = async () => {
   const j = await act({ do: "group_rename", jid: curChat, name: n }, L("השם שונה", "Renamed")); if (j && !j.error) $("grpInput").value = "";
 };
 $("grpBudget").onclick = async () => {
-  const g = groupOf(curChat), v = prompt(L(`תקרת עלות יומית (דולר) ל"${g.name}":`, `Daily cost cap (USD) for "${g.name}":`), g.budget);
-  if (v === null) return; const j = await act({ do: "group_budget", jid: curChat, budget: v }, L("התקרה עודכנה", "Cap updated")); if (j && j.error) toast(j.error);
+  const g = groupOf(curChat), v = prompt(L(`תקרת שימוש יומית (דולר) ל"${g.name}":`, `Daily cost cap (USD) for "${g.name}":`), g.budget);
+  if (v === null) return; const j = await act({ do: "group_budget", jid: curChat, budget: v }, L("תקרת השימוש עודכנה", "Cap updated")); if (j && j.error) toast(j.error);
 };
 $("grpOff").onclick = async () => {
   const g = groupOf(curChat);
@@ -743,7 +754,7 @@ function schedContent(d) {
 const SET_LABEL = () => ({
   backup_time: L("גיבוי יומי", "Daily backup"), update_check_time: L("בדיקת עדכון (הודעה)", "Update check (notice)"), group_check_time: L("בדיקת שם קבוצה", "Group name check"),
   selftest_time: L("בדיקה עצמית לילית", "Nightly self-test"), morning_summary_time: L("סיכום בוקר", "Morning summary"), signin_check_time: L("בדיקת התחברות Claude", "Claude sign-in check"),
-  auto_update_time: L("עדכון אוטומטי", "Auto-update"), auto_release_time: L("שחרור לילי ל-GitHub (מחשב מפתח)", "Nightly release to GitHub (maintainer)"), daily_budget_usd: L("תקרה יומית לשיחה ($)", "Daily cap per chat ($)"), total_daily_budget_usd: L("תקרה כוללת ליום ($)", "Total daily cap ($)"),
+  auto_update_time: L("עדכון אוטומטי", "Auto-update"), auto_release_time: L("שחרור לילי ל-GitHub (מחשב מפתח)", "Nightly release to GitHub (maintainer)"), daily_budget_usd: L("תקרת שימוש יומית לשיחה ($)", "Daily cap per chat ($)"), total_daily_budget_usd: L("תקרת שימוש כוללת ליום ($)", "Total daily cap ($)"),
   light_model: L("מודל קל (אוטו)", "Light model (auto)"), claude_model: L("מודל רגיל (אוטו)", "Normal model (auto)"), deep_model: L("מודל חזק (!! / תכנון)", "Strong model (!!)"),
   fresh_sessions: L("סשן נקי לכל הודעה", "Fresh session per message"), session_max_runs: L("הודעות לסשן (4M) לפני החלפה", "Messages per session (4M)"), claude_timeout_minutes: L("תקרת זמן לפקודה (דקות; לקבוצה: groups.json timeout_minutes)", "Time limit per command (minutes)"),
   permission_mode: L("הרשאות Claude", "Claude permissions"), voice_replies: L("תשובה קולית להקלטה", "Voice reply to voice notes"), voice_name: L("קול", "Voice"), voice_style: L("סגנון קול", "Voice style"), group_name_model: L("שם הקבוצה לפי המודל (גשר אופוס ווצאפ)", "Group name shows the model"),
@@ -791,7 +802,7 @@ const HELP = () => ({
   auto_release_time: L("מפרסם ל-GitHub כל לילה את כל השינויים של היום (רק במחשב המפתח). כיבוי: הסר את הסימון.", "Publishes the day's changes to GitHub every night (maintainer PC only). Untick to turn off."),
   auto_update_time: L("מתקין גרסה חדשה אם יש, ומפעיל מחדש את הגשר והסוכן; חוזר לגרסה קודמת בכשל. כיבוי: הסר את הסימון.", "Installs a new version if there is one and restarts; rolls back on failure. Untick to turn off."),
   daily_budget_usd: L("מעליה Claude לא רץ באותה שיחה עד חצות. עקיפה: ! להודעה אחת, !!! לשעה.", "Above it Claude stops in that chat until midnight. Bypass: ! for one message, !!! for an hour."),
-  total_daily_budget_usd: L("תקרה לכל השיחות יחד, בכל היום.", "Cap for all conversations together per day."),
+  total_daily_budget_usd: L("תקרת שימוש לכל השיחות יחד, בכל היום.", "Cap for all conversations together per day."),
   light_model: L("במצב אוטו: הודעות קצרות ופשוטות.", "Auto mode: short simple messages."), claude_model: L("במצב אוטו: רוב העבודה.", "Auto mode: most work."),
   deep_model: L("ל-!! (הודעה אחת) ולתכנון/ניתוח לעומק.", "For !! (one message) and deep planning."),
   group_name_model: L("שם הקבוצה בווצאפ מראה את המודל שעונה (גשר אופוס ווצאפ).", "The WhatsApp group name shows the answering model."),
@@ -882,7 +893,7 @@ function settingsPanes(d) {
     <input type="text" data-pf="ssh" value="${esc(p.ssh || "")}" placeholder="ssh (${L("לא חובה", "optional")})" style="width:80px" title="${L("שם ssh להפעלת הסוכן שם ולגיבוי — אם אין מנהרה", "ssh alias for starting the agent there and backups")}">
     <button type="button" class="btn small danger-soft" data-prm="${i}">✕</button></div>`).join("");
   const tun = (peersInfo && peersInfo.self && peersInfo.self.tunnels) || {};
-  const groupsCost = `<details class="item set-sec" open><summary><strong>${L("תקרה לכל שיחה", "Cap per conversation")}</strong></summary>${(d.groups || []).map(g => `<div class="set-row"><span>${g.jid === "local" ? "💻" : "👥"} ${esc(g.name)} · <span class="muted">${L("היום", "today")} $${g.spent ?? 0}</span></span>
+  const groupsCost = `<details class="item set-sec" open><summary><strong>${L("תקרת שימוש לכל שיחה", "Cap per conversation")}</strong></summary>${(d.groups || []).map(g => `<div class="set-row"><span>${g.jid === "local" ? "💻" : "👥"} ${esc(g.name)} · <span class="muted">${L("היום", "today")} $${g.spent ?? 0}</span></span>
     <button type="button" class="btn small" data-gbudget="${esc(g.jid)}">💲 $${g.budget ?? "—"}</button></div>`).join("")}</details>`;
   return {
     general: sec(L("הסוכן", "The agent"), ["language", "reply_italic", "quote_replies", "strict_mcp"].map(row).join("")),
@@ -891,8 +902,8 @@ function settingsPanes(d) {
         `<p class="note tight help">🛞 ${L("הקראה: שלח 🛞 בקבוצה (מקריא את התשובה האחרונה שלי) או הגב 🛞 על כל הודעה (מקריא אותה). לא מפעיל את Claude ועובד גם כשהתשובה הקולית כבויה.", "Read-aloud: send 🛞 (reads my last answer) or react 🛞 on any message (reads it). No Claude run; works even with voice replies off.")}</p>`) +
       sec(L("תמלול", "Transcription"), ["transcribe", "transcribe_all_chats"].map(row).join("") + trGapHtml(d)),
     models: sec(L("מודלים וסשן", "Models & sessions"), ["light_model", "claude_model", "deep_model", "group_name_model", "fresh_sessions", "session_max_runs", "claude_timeout_minutes", "permission_mode"].map(row).join("")),
-    cost: sec(L("תקרות", "Caps"), ["daily_budget_usd", "total_daily_budget_usd"].map(row).join("") +
-        `<p class="note tight help">🔒 ${L("כשמגיעים לתקרה: ! בתחילת הודעה = הודעה אחת בלי תקרה; !!! = שעה בלי תקרה; בחצות מתאפס.", "At the cap: ! at the start = one message without the cap; !!! = one hour; resets at midnight.")}</p>`) + groupsCost,
+    cost: sec(L("תקרות שימוש", "Caps"), ["daily_budget_usd", "total_daily_budget_usd"].map(row).join("") +
+        `<p class="note tight help">🔒 ${L("כשמגיעים לתקרת השימוש: ! בתחילת הודעה = הודעה אחת בלי תקרת שימוש; !!! = שעה בלי תקרת שימוש; בחצות מתאפס.", "At the cap: ! at the start = one message without the cap; !!! = one hour; resets at midnight.")}</p>`) + groupsCost,
     groups: sec(L("קבוצות כבויות", "Switched-off groups"), (d.disabled_groups || []).length ? d.disabled_groups.map(g => `<div class="set-row"><span>${esc(g.name)}</span><button type="button" class="btn small" data-genable="${esc(g.jid)}">▶ ${L("הפעל האזנה", "Listen again")}</button></div>`).join("") : empty(L("אין", "None"))),
     send: sec(L("טיוטות מתוזמנות ותזכורות", "Scheduled drafts & reminders"), schedContent(d)),
     sched: sec(L("תזמונים", "Schedules"), JOBS.map(jobRow).join("")) + sec(L("התראות וגיבוי", "Alerts & backup"), ["disconnect_alert_minutes", "reconnect_settle_seconds", "backup_keep_days", "backup_media_days"].map(row).join("")),
@@ -934,8 +945,8 @@ function wireDrawer(body) {
     const list = [...body.querySelectorAll(".peer-row")].map(r => Object.fromEntries([...r.querySelectorAll("[data-pf]")].map(x => [x.dataset.pf, x.value.trim()])));
     act({ do: "peers_save", peers: list }, L("נשמר — הסוכן עולה מחדש", "Saved — restarting"));
   };
-  q("[data-gbudget]", b => { const g = groupOf(b.dataset.gbudget), v = prompt(L(`תקרת עלות יומית (דולר) ל"${g.name}":`, `Daily cost cap (USD) for "${g.name}":`), g.budget);
-    if (v !== null) act({ do: "group_budget", jid: b.dataset.gbudget, budget: v }, L("התקרה עודכנה", "Cap updated")).then(() => setOpen && renderSettings()); });
+  q("[data-gbudget]", b => { const g = groupOf(b.dataset.gbudget), v = prompt(L(`תקרת שימוש יומית (דולר) ל"${g.name}":`, `Daily cost cap (USD) for "${g.name}":`), g.budget);
+    if (v !== null) act({ do: "group_budget", jid: b.dataset.gbudget, budget: v }, L("תקרת השימוש עודכנה", "Cap updated")).then(() => setOpen && renderSettings()); });
   const save = restart => {
     const vals = {}; body.querySelectorAll("[data-set]").forEach(x => vals[x.dataset.set] = x.type === "checkbox" ? x.checked : x.value);
     act({ do: "settings_save", values: vals, restart }, restart ? L("נשמר — הסוכן עולה מחדש", "Saved — restarting") : L("נשמר (בתוקף אחרי הפעלה מחדש)", "Saved (after restart)"))

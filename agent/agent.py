@@ -47,9 +47,9 @@ OWNER = CFG.get("owner_name") or ("הבעלים" if LANG == "he" else "the owner
 # every text the agent itself writes to WhatsApp / Windows, in Hebrew and English
 T = {
     "he": {
-        "budget_stop": "🔒 *תקרת העלות היומית ננעלה* (${spent:.2f} מתוך ${budget:.0f}).\nאיך עוקפים:\n• ! בתחילת ההודעה — הודעה אחת בלי תקרה\n• !!! בתחילת ההודעה — שעה שלמה בלי תקרה (🔓)\n• בלוח הבקרה ← הגדרות ← עלות — להעלות את התקרה (קבוע)\nבחצות התקרה מתאפסת לבד.",
-        "override_hour": "🔓 בלי תקרת עלות עד {until}.",
-        "budget_warn": "⚠️ נוצלו ${spent:.2f} מתוך תקרה יומית של ${budget:.0f}. בהגעה לתקרה ננעל 🔒 — עקיפה: ! להודעה אחת, !!! לשעה.",
+        "budget_stop": "🔒 *תקרת השימוש היומית ננעלה* (${spent:.2f} מתוך ${budget:.0f}).\nאיך עוקפים:\n• ! בתחילת ההודעה — הודעה אחת בלי תקרת שימוש\n• !!! בתחילת ההודעה — שעה שלמה בלי תקרת שימוש (🔓)\n• בלוח הבקרה ← הגדרות ← עלות — להעלות את תקרת השימוש (קבוע)\nבחצות תקרת השימוש מתאפסת לבד.",
+        "override_hour": "🔓 בלי תקרת שימוש עד {until}.",
+        "budget_warn": "⚠️ נוצלו ${spent:.2f} מתוך תקרת שימוש יומית של ${budget:.0f}. בהגעה לתקרת השימוש ננעל 🔒 — עקיפה: ! להודעה אחת, !!! לשעה.",
         "working": "⏳ עובד על זה, זה לוקח קצת יותר זמן…",
         "failed": "לא הצלחתי לעבד את ההודעה, נסה שוב.",
         "voice": "(הודעה קולית, תמלול)",
@@ -613,7 +613,7 @@ def report_restart():
     forced = get_override()
     reply(f"✅ עליתי מחדש ({dt.datetime.now():%H:%M}). "
           f"סשן: {'נקי לכל הודעה' if CFG.get('fresh_sessions') else 'רציף'} · "
-          f"מודל: {forced or 'אוטו'} · תקרה: ${CFG.get('daily_budget_usd')}"
+          f"מודל: {forced or 'אוטו'} · תקרת שימוש: ${CFG.get('daily_budget_usd')}"
           + (f"\nסיבה: {info['reason']}" if info.get("reason") else ""))
 
 
@@ -1262,15 +1262,81 @@ def machine_tag():
     return "🖥️ " + (CFG.get("host_label") or socket.gethostname())
 
 
+_usage_cache = {"at": 0.0, "v": None}
+
+
+def claude_usage(max_age=120):
+    """Claude's own plan meter (the same one Claude shows the user): {"five_hour": {...}, "seven_day": {...}} with
+    utilization % and resets_at, read with this machine's Claude sign-in (~/.claude/.credentials.json). Undocumented
+    endpoint: None when it is not available. Cached for max_age seconds."""
+    if time.time() - _usage_cache["at"] < max_age:
+        return _usage_cache["v"]
+    v = None
+    try:
+        o = (json.load(open(os.path.expanduser("~/.claude/.credentials.json"), encoding="utf-8")).get("claudeAiOauth") or {})
+        req = urllib.request.Request("https://api.anthropic.com/api/oauth/usage", headers={
+            "Authorization": "Bearer " + (o.get("accessToken") or ""), "anthropic-beta": "oauth-2025-04-20", "User-Agent": "claude-code"})
+        v = json.loads(urllib.request.urlopen(req, timeout=10).read().decode())
+        v["plan"] = o.get("subscriptionType") or ""
+    except Exception as e:
+        log("claude usage unavailable", str(e)[:120])
+    _usage_cache.update(at=time.time(), v=v)
+    return v
+
+
+def _pct(a, b):
+    return f"{100 * a / b:.0f}%" if b else "—"
+
+
+def _reset_at(iso):
+    try:
+        t = dt.datetime.fromisoformat(iso).astimezone()
+        return t.strftime("%H:%M") if t.date() == dt.date.today() else t.strftime("%d.%m %H:%M")
+    except Exception:
+        return "?"
+
+
+def claude_usage_short():
+    u = claude_usage() or {}
+    f, w = u.get("five_hour") or {}, u.get("seven_day") or {}
+    if f.get("utilization") is None and w.get("utilization") is None:
+        return ""
+    return f"☁️ Claude: 5 שעות {f.get('utilization', 0):.0f}% · שבוע {w.get('utilization', 0):.0f}%"
+
+
 def usage_line(chat):
-    """Owner 09.11: after every answer — how much of this conversation's cap and of the whole bridge's cap is used today."""
+    """Owner 09.11: after every answer — today's use of this conversation's usage cap and of the whole bridge's, and
+    Claude's own plan meter."""
     try:
         spent, tot, tcap = spent_today(chat), spent_today(), total_budget()
-        mine = f"💰 השיחה: ${spent:.2f} (ללא תקרה)" if unlimited(chat) else f"💰 השיחה: ${spent:.2f} מתוך ${budget_for(chat):.0f}"
-        return f"{mine} · כל הגשר: ${tot:.2f} מתוך ${tcap:.0f}"
+        mine = (f"השיחה ${spent:.2f} (ללא תקרת שימוש)" if unlimited(chat)
+                else f"השיחה ${spent:.2f} מתוך ${budget_for(chat):.0f} ({_pct(spent, budget_for(chat))})")
+        line = f"💰 תקרת שימוש: {mine} · כל הגשר ${tot:.2f} מתוך ${tcap:.0f} ({_pct(tot, tcap)})"
+        cu = claude_usage_short()
+        return line + (f"\n{cu}" if cu else "")
     except Exception as e:
         log("usage line failed", e)
         return ""
+
+
+def usage_report(chat):
+    """/תקרה: every usage number the bridge knows, for both kinds of cap."""
+    spent, tot, tcap, cap = spent_today(chat), spent_today(), total_budget(), budget_for(chat)
+    lines = ["📊 *שימוש נכון ל-" + dt.datetime.now().strftime("%H:%M") + "*", "", "*תקרת השימוש של הגשר* (מתאפסת בחצות):"]
+    lines.append(f"• השיחה הזו: ${spent:.2f} — ללא תקרת שימוש" if unlimited(chat)
+                 else f"• השיחה הזו: ${spent:.2f} מתוך ${cap:.0f} = {_pct(spent, cap)}")
+    lines.append(f"• כל הגשר: ${tot:.2f} מתוך ${tcap:.0f} = {_pct(tot, tcap)}")
+    u = claude_usage()
+    lines += ["", "*חשבון Claude* " + (f"({u.get('plan')})" if u and u.get("plan") else "") + ":"]
+    if not u:
+        lines.append("• לא הצלחתי לקרוא את מד השימוש של Claude עכשיו.")
+    else:
+        for key, name in (("five_hour", "חלון 5 שעות"), ("seven_day", "שבועי"), ("seven_day_opus", "שבועי Opus"), ("seven_day_sonnet", "שבועי Sonnet")):
+            x = u.get(key) or {}
+            if x.get("utilization") is not None:
+                lines.append(f"• {name}: {x['utilization']:.0f}% (מתאפס {_reset_at(x.get('resets_at') or '')})")
+    lines += ["", "_הדולרים הם הערכה של Claude Code לעלות לפי מחירון ה-API; במנוי Pro לא משלמים לפיהם, ולכן אצל Claude מוצגים רק אחוזים._"]
+    return "\n".join(lines)
 
 
 def unlimited(chat):
@@ -1600,10 +1666,15 @@ RULE_PROMPT = ("[/כלל בסיס] {owner} מבקש להוסיף כלל בסיס
                "הכללים לכל השיחות: {general}.\n"
                "לפני שאתה כותב: 1) ודא שהבנת נכון למה הוא מתכוון; 2) בדוק סתירה או כפילות מול שני הקבצים ומול מה שביקש קודם; "
                "3) הפעל שיקול דעת: האם הכלל מומלץ, מיותר, מזיק או כדאי לנסח אחרת.\n"
-               "אם ברור ולא סותר: הוסף לקובץ (צור אותו אם אין) שורה אחת מנוסחת היטב עם התאריך, בלי לשנות כללים אחרים, "
-               "ודווח בקצרה מה נוסף בדיוק, ואם יש — טיפ או הצעה לנוסח טוב יותר. "
-               "אם יש סתירה, דו-משמעות או שהכלל נראה מזיק: *אל תכתוב*. הסבר מה מפריע ושאל. "
-               "אם הכלל מתאים לכל השיחות, אמור זאת והצע להוסיף אותו גם לקובץ הכללי (רק אחרי אישור).")
+               "אם ברור ולא סותר: הוסף לקובץ (צור אותו אם אין) שורה אחת בפורמט `- YYYY-MM-DD HH:MM · <הכלל>`. "
+               "את הכלל *אל תעתיק*: נסח אותו בעברית במילים שלך, כך שיהיה ברור לך בלי ההקשר. אל תשנה כללים אחרים. "
+               "דווח בקצרה מה נוסף בדיוק.\n"
+               "אם הכלל כבר קיים (גם בניסוח אחר) בקובץ השיחה או בקובץ הכללי: *אל תוסיף*, התרע על הכפילות והראה את הכלל הקיים.\n"
+               "אם יש סתירה, דו-משמעות, או שלא הבנת מספיק: *אל תכתוב*. הסבר מה מפריע ושאל.\n"
+               "טיפ או הצעה לשיפור: *אל תיישם לבד*. הצג אותם ושאל אם הוא מאשר.\n"
+               "יש שני סוגים, ואין לערבב ביניהם: כללי *השיחה* (רק לשיחה הזו, למשל סגנון או נושא שלה) וכללי *הגשר* "
+               "({general}, חלים על כל השיחות, למשל איך מטפלים בהודעות שלו). אם הכלל מתאים לגשר כולו, "
+               "אל תוסיף אותו לשיחה: הצע להוסיף אותו ככלל גשר ושאל.")
 
 
 def owner_command(text, chat=None):
@@ -1621,6 +1692,8 @@ def owner_command(text, chat=None):
         return ((f"📜 *כללי הבסיס של השיחה הזו* — יש {rules_count(body)} כללים (`{rel}`):\n{body}" if body
                  else f"📜 עוד אין כללי בסיס לשיחה הזו — יש 0 כללים (`{rel}`).")
                 + "\n\nלהוספה: /כלל בסיס ואחריו הכלל. אבדוק שהוא ברור ולא סותר כללים קיימים לפני שאוסיף.")
+    if re.match(r"^/(תקרה|תקרת שימוש|שימוש|usage)\s*$", text.strip()):
+        return usage_report(chat or PRIMARY)
     if re.match(r"^/(הפעל מחדש|אתחל|restart)\s*$", text.strip()):
         RESTART_REQ.set()
         return "🔄 מפעיל את הסוכן מחדש. אכתוב כאן כשאעלה (בערך 20 שניות)."
@@ -1750,6 +1823,40 @@ def resume_notice(status, why, chat=None):
             _ctx.chat = None
 
 
+def downtime_notice(cursor, since):
+    """Owner 09.11: after the agent was down (a requested or forced restart, a crash), behave like after a limit: tell each
+    conversation which of the owner's messages arrived meanwhile; the sweep then answers them in order. cursor = the last
+    message handled before the restart; since = the last heartbeat before it."""
+    chats = control_chats()
+    if not chats or not since:
+        return 0
+    qs = ",".join("?" * len(chats))
+    with mdb() as db:
+        rows = db.execute(f"SELECT id, chat_jid, timestamp, content, media_type FROM messages WHERE rowid > ? AND is_from_me = 1 "
+                          f"AND chat_jid IN ({qs}) ORDER BY rowid", [cursor] + chats).fetchall()
+    prefix = CFG["reply_prefix"].strip()
+    by = {}
+    with adb() as db:
+        for mid, c, ts, content, media in rows:
+            if (content or "").startswith(prefix) or not ((content or "").strip() or media):
+                continue
+            if db.execute("SELECT 1 FROM handled WHERE id = ? AND chat_jid = ?", (mid, c)).fetchone():
+                continue
+            by.setdefault(c, []).append(str(ts or "")[11:16] or "?")
+    why = (f"חזרתי אחרי הפעלה מחדש (לא הייתי זמין מ-{since:%H:%M})" if LANG == "he"
+           else f"Back after a restart (unavailable since {since:%H:%M})")
+    for c, times in by.items():
+        _ctx.chat = c
+        try:
+            reply(RESUME_NOTE.get(LANG, RESUME_NOTE["en"]).format(why=why, n=len(times), times=", ".join(times[:12])
+                                                                   + ("…" if len(times) > 12 else "")))
+        except Exception:
+            log("downtime notice failed", traceback.format_exc())
+        finally:
+            _ctx.chat = None
+    return sum(len(t) for t in by.values())
+
+
 def release_budget_waiters():
     """Commands kept by a cost cap go back to the queue as soon as their conversation is under its cap again."""
     with adb() as db:
@@ -1757,7 +1864,7 @@ def release_budget_waiters():
     n = 0
     for chat in chats:
         if not over_budget(chat):
-            resume_notice("waiting_budget", "תקרת העלות מאפשרת שוב" if LANG == "he" else "The cost cap allows again", chat)
+            resume_notice("waiting_budget", "תקרת השימוש מאפשרת שוב" if LANG == "he" else "The cost cap allows again", chat)
             with adb() as db:
                 n += db.execute("UPDATE commands SET status = 'pending' WHERE status = 'waiting_budget' AND coalesce(chat_jid, ?) = ?",
                                 (PRIMARY, chat)).rowcount
@@ -1817,7 +1924,7 @@ def run_command(row):
             kind, spent, cap = stop
             msg = T["budget_stop"].format(spent=spent, budget=cap)
             if kind == "total":
-                msg = ("(תקרה כוללת לכל השיחות) " if LANG == "he" else "(total cap, all conversations) ") + msg
+                msg = ("(תקרת שימוש כוללת לכל השיחות) " if LANG == "he" else "(total cap, all conversations) ") + msg
             # keep the command: it runs by itself when the cap allows again (midnight, a raised cap) — owner request 08.11
             with adb() as db:
                 db.execute("UPDATE commands SET status = 'waiting_budget' WHERE id = ?", (cid,))
@@ -2868,11 +2975,17 @@ def sweep_once(cursor, on_row=None):
     return cursor
 
 
-def sweep_loop():
+def sweep_loop(since=None):
     cursor = int(kv_get("cursor_rowid", "0") or 0)
     if not cursor:
         with mdb() as db:
             cursor = db.execute("SELECT coalesce(max(rowid),0) FROM messages").fetchone()[0]
+    elif since:  # back after a restart: say what arrived meanwhile before answering it (owner 09.11)
+        try:
+            wait_bridge(120)
+            downtime_notice(cursor, since)
+        except Exception:
+            log("downtime notice error", traceback.format_exc())
     while True:
         try:
             cursor = sweep_once(cursor)
@@ -3264,6 +3377,10 @@ if __name__ == "__main__":
         sys.exit()
     log("agent starting")
     try:
+        _down_since = dt.datetime.fromisoformat(kv_get("heartbeat")) if kv_get("heartbeat") else None
+    except ValueError:
+        _down_since = None
+    try:
         kv_set("running_head", subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True,
                                               timeout=20, creationflags=NO_WINDOW).stdout.strip())
     except Exception:
@@ -3289,4 +3406,4 @@ if __name__ == "__main__":
     sys.path.insert(0, ROOT)
     from dash import server as dash_server  # control panel, also on http://127.0.0.1:8770
     threading.Thread(target=dash_server.serve, args=(8770,), daemon=True).start()
-    sweep_loop()
+    sweep_loop(_down_since)

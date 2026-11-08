@@ -47,7 +47,7 @@
   <span class="presence" id="presence" aria-live="polite"></span>
   <div class="addpop" id="addPop" hidden role="dialog" aria-label="חיבור קבוצה" data-en-aria="Connect a group">
     <h3 data-en="Listen to a WhatsApp group">חבר האזנה לקבוצת ווצאפ</h3>
-    <p class="note tight" data-en="Pick an existing group or create a new one. Each group gets its own session, instructions, model and cap. I answer only your messages there.">בחר קבוצה קיימת או צור חדשה. לכל קבוצה יהיו סשן, הוראות, מודל ותקרה משלה. אני אענה רק להודעות שלך בה.</p>
+    <p class="note tight" data-en="Pick an existing group or create a new one. Each group gets its own session, instructions, model and cap. I answer only your messages there.">בחר קבוצה קיימת או צור חדשה. לכל קבוצה יהיו סשן, הוראות, מודל ותקרת שימוש משלה. אני אענה רק להודעות שלך בה.</p>
     <div class="row tight"><label for="addPurpose" data-en="Purpose:">מטרה:</label>
       <select id="addPurpose" class="btn small sel"><option value="dev" data-en="Developing the bridge">פיתוח הגשר והכלי</option><option value="general" selected data-en="General">כללית</option><option value="4m" data-en="4M work">עבודת 4M</option></select></div>
     <ul class="avail" id="availList" aria-label="קבוצות זמינות" data-en-aria="Available groups"></ul>
@@ -209,7 +209,7 @@
             <div class="row tight"><input id="grpInput" type="text" maxlength="100" placeholder="שם חדש לקבוצה" data-en-ph="New group name" aria-label="שם חדש לקבוצה" style="flex:1;min-width:120px"></div>
             <div class="row tight">
               <button class="btn small" id="grpRename" title="משנה את שם הקבוצה בווצאפ" data-en="✏️ Rename">✏️ שנה שם</button>
-              <button class="btn small" id="grpBudget" title="תקרת עלות יומית לשיחה הזו" data-en="💲 Cap">💲 תקרה</button>
+              <button class="btn small" id="grpBudget" title="תקרת שימוש יומית לשיחה הזו" data-en="💲 Cap">💲 תקרת שימוש</button>
               <button class="btn small danger-soft" id="grpOff" title="הסוכן יפסיק להאזין לקבוצה (הקבוצה נשארת בווצאפ)" data-en="Stop listening">נתק האזנה</button>
             </div>
             <p class="note tight help" data-en="Disconnect = I stop listening to the group (it stays in WhatsApp). Turn it back on below under 'Switched-off groups' or with ➕.">ניתוק = אני מפסיק להאזין לקבוצה (היא נשארת בווצאפ). להחזרה: למטה ב"קבוצות כבויות" או ב-➕.</p>

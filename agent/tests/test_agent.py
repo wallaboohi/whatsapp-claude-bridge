@@ -719,6 +719,7 @@ def test_transcribe_gap_finds_untranscribed_voice_notes(agent):
 
 def test_status_hourglass_flips(agent):
     mod, _ = agent
+    mod._usage_cache.update(at=mod.time.time() + 3600, v={"five_hour": {"utilization": 27}, "seven_day": {"utilization": 70}})
     st = mod.StatusMsg("sonnet", wa=False)
     a = st._text()
     st.tick += 1
@@ -728,6 +729,20 @@ def test_status_hourglass_flips(agent):
     host = mod.CFG.get("host_label") or mod.socket.gethostname()
     assert host in a.split("·")[0] and host in st._final().split("·")[0], "the computer is named first"
     assert "מתוך" in st._final() and "כל הגשר" in st._final(), "usage vs cap after every answer"
+    assert "27%" in st._final() and "70%" in st._final(), "Claude's own meter too"
+    assert "תקרת השימוש" in mod.owner_command("/תקרה") and "27%" in mod.owner_command("/תקרה")
+
+
+def test_downtime_notice_lists_messages_sent_while_down(agent, monkeypatch):
+    mod, db = agent
+    sent = []
+    monkeypatch.setattr(mod, "reply", lambda text, **k: sent.append(text))
+    cur = db.execute("SELECT coalesce(max(rowid),0) FROM messages").fetchone()[0]
+    for i, t in enumerate(("01:02", "01:05")):
+        db.execute("INSERT INTO messages VALUES (?, ?, 'me', 'שאלה', ?, 1, '', '')", (f"D{i}", mod.PRIMARY, f"2026-11-09 {t}:00+02:00"))
+    db.commit()
+    n = mod.downtime_notice(cur, mod.dt.datetime(2026, 11, 9, 1, 0))
+    assert n == 2 and len(sent) == 1 and "01:02" in sent[0] and "01:05" in sent[0] and "01:00" in sent[0]
 
 
 def test_rules_count(agent):
