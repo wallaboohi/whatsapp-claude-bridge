@@ -682,6 +682,18 @@ def rules_rel(chat, g=None):
     return f"groups/{g.get('slug') or re.sub(r'[^0-9a-zA-Z]+', '', chat.split('@')[0])[:12] or 'chat'}.md"
 
 
+def rules_count(text):
+    """Rules in a rules file = its list lines (-, *, •, 1.)."""
+    return sum(1 for ln in (text or "").splitlines() if re.match(r"^\s*([-*•]|\d+[.)])\s+\S", ln))
+
+
+def rules_text(chat):
+    try:
+        return open(os.path.join(HOME, rules_rel(chat)), encoding="utf-8").read().strip()
+    except OSError:
+        return ""
+
+
 def group_prompt(chat):
     """Extra system prompt: the conversation's base-rules file (rules_rel) for every conversation; non-primary ones also get
     their name/purpose and hand-off file name. None when there is nothing to add."""
@@ -1245,6 +1257,22 @@ def cap_lifted(chat, text=""):
     return (text or "").lstrip().startswith("!") or (kv_get(K("override_until", chat)) or "") > dt.datetime.now().isoformat(timespec="seconds")
 
 
+def machine_tag():
+    """Owner 09.11: which computer is working, at the start of every status message (config host_label, else host name)."""
+    return "🖥️ " + (CFG.get("host_label") or socket.gethostname())
+
+
+def usage_line(chat):
+    """Owner 09.11: after every answer — how much of this conversation's cap and of the whole bridge's cap is used today."""
+    try:
+        spent, tot, tcap = spent_today(chat), spent_today(), total_budget()
+        mine = f"💰 השיחה: ${spent:.2f} (ללא תקרה)" if unlimited(chat) else f"💰 השיחה: ${spent:.2f} מתוך ${budget_for(chat):.0f}"
+        return f"{mine} · כל הגשר: ${tot:.2f} מתוך ${tcap:.0f}"
+    except Exception as e:
+        log("usage line failed", e)
+        return ""
+
+
 def unlimited(chat):
     g = load_groups().get(chat or PRIMARY) or {}
     return bool(g.get("unlimited"))
@@ -1521,11 +1549,12 @@ class StatusMsg:
         prefix = CFG["reply_prefix"]
         if self.tick % 2 and prefix.strip() == "🤖":
             prefix = prefix.replace("🤖", "🦾")  # the robot "moves" too while working (owner request 08.11)
-        return prefix + italic(f"{icon} {self.stage} · {self._elapsed()} · {self.model}")
+        return prefix + italic(f"{icon} {machine_tag()} · {self.stage} · {self._elapsed()} · {self.model}")
 
     def _final(self):
         n = len(self.steps)
-        return CFG["reply_prefix"] + italic(f"✅ סיימתי · {self._elapsed()} · {self.model}" + (f" · {n} שלבים" if n else ""))
+        return CFG["reply_prefix"] + italic(f"✅ {machine_tag()} · סיימתי · {self._elapsed()} · {self.model}" + (f" · {n} שלבים" if n else "")
+                                            + (f"\n{usage_line(self.chat)}" if usage_line(self.chat) else ""))
 
     def _start(self):
         if self.done.is_set():
@@ -1588,12 +1617,9 @@ def owner_command(text, chat=None):
         return ("🛞 *הקראה קבועה: פועלת* — כל תשובה בשיחה הזו תגיע גם כהודעה קולית. לביטול: /🛞" if on else
                 "🛞 *הקראה קבועה: כבויה* — תשובות בטקסט בלבד (🛞 על הודעה עדיין מקריא אותה). להפעלה: /🛞")
     if RULE_CMD.match(text.strip()) and not RULE_CMD.match(text.strip()).group(2).strip():
-        rel = rules_rel(chat)
-        try:
-            body = open(os.path.join(HOME, rel), encoding="utf-8").read().strip()
-        except OSError:
-            body = ""
-        return ((f"📜 *כללי הבסיס של השיחה הזו* (`{rel}`):\n{body}" if body else f"📜 עוד אין כללי בסיס לשיחה הזו (`{rel}`).")
+        rel, body = rules_rel(chat), rules_text(chat)
+        return ((f"📜 *כללי הבסיס של השיחה הזו* — יש {rules_count(body)} כללים (`{rel}`):\n{body}" if body
+                 else f"📜 עוד אין כללי בסיס לשיחה הזו — יש 0 כללים (`{rel}`).")
                 + "\n\nלהוספה: /כלל בסיס ואחריו הכלל. אבדוק שהוא ברור ולא סותר כללים קיימים לפני שאוסיף.")
     if re.match(r"^/(הפעל מחדש|אתחל|restart)\s*$", text.strip()):
         RESTART_REQ.set()
@@ -1848,6 +1874,8 @@ def run_command(row):
         if not answer and time.time() - started >= limit_min * 60 - 10:  # killed by the time limit, not a crash
             out = (f"⏱ נעצרתי אחרי {limit_min} דקות (תקרת הזמן של השיחה הזו — אפשר לשנות בלוח). מה שכבר בוצע נשמר; "
                    "כתוב \"המשך\" ואמשיך מאותה נקודה.")
+        if rm and rm.group(2).strip():  # owner 09.11: every rule answer says how many rules there are now
+            out += f"\n\n📜 יש עכשיו {rules_count(rules_text(chat))} כללים בשיחה הזו (/כלל בסיס להצגה)."
         if rec:
             out += f"\n\n💡 כדאי לעבור ל-{MODELS[rec[0]]['he']} ({rec[1]}). פקודה: {MODELS[rec[0]]['cmd']}"
         elif how == "sticky_deep" and not stopped:

@@ -725,6 +725,14 @@ def test_status_hourglass_flips(agent):
     b = st._text()
     st.finish()
     assert "\u23f3" in a and "\u231b" in b, "the hourglass alternates on every edit"
+    host = mod.CFG.get("host_label") or mod.socket.gethostname()
+    assert host in a.split("·")[0] and host in st._final().split("·")[0], "the computer is named first"
+    assert "מתוך" in st._final() and "כל הגשר" in st._final(), "usage vs cap after every answer"
+
+
+def test_rules_count(agent):
+    mod, _ = agent
+    assert mod.rules_count("# כותרת\n- א\n* ב\n1. ג\nטקסט חופשי\n-\n") == 3
 
 
 def test_local_health_alerts_once_after_delay_and_resets(agent):

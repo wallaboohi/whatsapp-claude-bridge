@@ -407,7 +407,7 @@ function render(d) {
   const chat = $("chat"); const atBottom = chat.scrollTop + chat.clientHeight >= chat.scrollHeight - 40;
   const MT = { audio: L("הודעה קולית", "voice note"), image: L("תמונה", "image"), document: L("קובץ", "file"), video: L("וידאו", "video") };
   renderTabs(d);
-  const isStatus = m => m.tool && /^_?(⏳|✅ סיימתי)/.test(m.content || "");
+  const isStatus = m => m.tool && /^_?(⏳|⌛|✅ (🖥️ [^·]+ · )?סיימתי)/.test(m.content || "");
   const conv = d.conversation || [], lastStatus = conv.map(isStatus).lastIndexOf(true);
   const lv = d.live || null, steps = (lv && lv.steps) || [];
   const statusBody = () => {
