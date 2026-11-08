@@ -1126,7 +1126,7 @@ class StatusMsg:
     def __init__(self, model, chat=None, wa=True):
         self.model, self.stage, self.mid, self.t0, self.done = model, "🧠 מתחיל", None, time.time(), threading.Event()
         self.chat, self.wa = chat or PRIMARY, wa
-        self.steps = []
+        self.steps, self.tick = [], 0
         self._save(False)
         self.timer = threading.Timer(8, self._start)
         if wa:  # PC-only conversations show progress in the dashboard only
@@ -1151,7 +1151,9 @@ class StatusMsg:
         return f"{e // 60}:{e % 60:02d}"
 
     def _text(self):
-        return CFG["reply_prefix"] + italic(f"⏳ {self.stage} · {self._elapsed()} · {self.model}")
+        # the hourglass flips (⏳ ↔ ⌛) on every edit so the owner sees it is alive (owner request 08.11)
+        icon = "⏳" if self.tick % 2 == 0 else "⌛"
+        return CFG["reply_prefix"] + italic(f"{icon} {self.stage} · {self._elapsed()} · {self.model}")
 
     def _final(self):
         n = len(self.steps)
@@ -1174,7 +1176,8 @@ class StatusMsg:
                 pass
             time.sleep(1)
         last = text
-        while self.mid and not self.done.wait(10):
+        while self.mid and not self.done.wait(float(CFG.get("status_edit_seconds", 5))):
+            self.tick += 1
             new = self._text()
             if new != last:
                 try:

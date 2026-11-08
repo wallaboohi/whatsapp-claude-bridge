@@ -700,3 +700,13 @@ def test_transcribe_gap_finds_untranscribed_voice_notes(agent):
     mod.kv_set("transcribe_backfill_request", "x")
     mod.transcribe_backfill_check()
     assert mod.kv_get("transcribe_backfill_request") == "" and mod.slow.qsize() >= 1
+
+
+def test_status_hourglass_flips(agent):
+    mod, _ = agent
+    st = mod.StatusMsg("sonnet", wa=False)
+    a = st._text()
+    st.tick += 1
+    b = st._text()
+    st.finish()
+    assert "\u23f3" in a and "\u231b" in b, "the hourglass alternates on every edit"
