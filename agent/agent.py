@@ -611,9 +611,9 @@ def report_restart():
         info = {}
     wait_bridge(300)
     forced = get_override()
-    reply(f"✅ עליתי מחדש ({dt.datetime.now():%H:%M}). "
+    reply(f"✅ עליתי מחדש ({dt.datetime.now():%H:%M}) · {machine_tag()}. "
           f"סשן: {'נקי לכל הודעה' if CFG.get('fresh_sessions') else 'רציף'} · "
-          f"מודל: {forced or 'אוטו'} · תקרת שימוש: ${CFG.get('daily_budget_usd')}"
+          f"מודל: {forced or 'אוטו'}\n{restart_usage()}"
           + (f"\nסיבה: {info['reason']}" if info.get("reason") else ""))
 
 
@@ -1284,6 +1284,40 @@ def claude_usage(max_age=120):
     return v
 
 
+_account_cache = {"at": 0.0, "v": ""}
+
+
+def claude_account(max_age=3600):
+    """Which Claude account this machine runs on — its e-mail and plan (owner 09.11: every Claude limit names the account)."""
+    if time.time() - _account_cache["at"] < max_age and _account_cache["v"]:
+        return _account_cache["v"]
+    v = ""
+    try:
+        o = (json.load(open(os.path.expanduser("~/.claude/.credentials.json"), encoding="utf-8")).get("claudeAiOauth") or {})
+        req = urllib.request.Request("https://api.anthropic.com/api/oauth/profile", headers={
+            "Authorization": "Bearer " + (o.get("accessToken") or ""), "anthropic-beta": "oauth-2025-04-20", "User-Agent": "claude-code"})
+        email = (json.loads(urllib.request.urlopen(req, timeout=10).read().decode()).get("account") or {}).get("email") or ""
+        plan = (o.get("subscriptionType") or "").capitalize()
+        v = email + (f" ({plan})" if plan else "")
+    except Exception as e:
+        log("claude account unavailable", str(e)[:120])
+    _account_cache.update(at=time.time(), v=v)
+    return v or "החשבון של המחשב הזה"
+
+
+def restart_usage():
+    """Owner 09.11 07:20: usage only in the restart message — the bridge's cap, and Claude's 5-hour / weekly / monthly (%)."""
+    try:
+        tot, tcap = spent_today(), total_budget()
+        u = claude_usage() or {}
+        pct = lambda k: f"{(u.get(k) or {}).get('utilization'):.0f}%" if (u.get(k) or {}).get("utilization") is not None else "—"
+        return (f"💰 מגבלת הגשר: ${tot:.2f} מתוך ${tcap:.0f} ({_pct(tot, tcap)})\n"
+                f"☁️ מגבלת Claude · {claude_account()}: 5 שעות {pct('five_hour')} · שבועית {pct('seven_day')} · חודשית —")
+    except Exception as e:
+        log("restart usage failed", e)
+        return ""
+
+
 def _pct(a, b):
     return f"{100 * a / b:.0f}%" if b else "—"
 
@@ -1302,7 +1336,7 @@ def usage_report(chat):
     now = dt.datetime.now()
     out = [f"📊 *תקרת שימוש · {machine_tag()} · נכון ל-{now:%H:%M}*", ""]
     u = claude_usage()
-    out.append("*☁️ מגבלת Claude* " + (f"(מנוי {u.get('plan')}, החשבון של המחשב הזה)" if u and u.get("plan") else "(החשבון של המחשב הזה)") + ":")
+    out.append(f"*☁️ מגבלת Claude · {claude_account()}*:")
     if not u:
         out.append("• לא הצלחתי לקרוא את מד השימוש של Claude כרגע.")
     else:
