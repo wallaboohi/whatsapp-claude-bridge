@@ -48,6 +48,7 @@
   "push_wait_hours": 3,
   "push_important": [],
   "push_people": false,
+  "push_merge_seconds": 20,
   "peer_backup": true,
   "peer_backup_max_mb": 2048
 }

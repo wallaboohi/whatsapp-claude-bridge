@@ -2050,6 +2050,7 @@ def run_command(row):
         if spent >= budget * 0.8 and kv_get(K("budget_warned", chat)) != dt.date.today().isoformat():
             kv_set(K("budget_warned", chat), dt.date.today().isoformat())
             reply(T["budget_warn"].format(spent=spent, budget=budget))
+            push(f"📊 מגבלת הגשר בשיחה הזו הגיעה ל-80% (${spent:.2f} מתוך ${budget:.0f})", chat, "usage")
         gname = g.get("name") or ""
         if chat == PRIMARY and src == "wa":
             where, dest = ("בקבוצת הבקרה בווצאפ", "לקבוצה") if LANG == "he" else ("in the WhatsApp control group", "to the group")
@@ -2599,7 +2600,10 @@ def peer_watch():
                         state = json.loads(kv_get(key) or "{}")
                     except ValueError:
                         state = {}
-                    state, msgs = peer_watch_step(state, peer_fetch(peer), dt.datetime.now(), CFG, name)
+                    brief = peer_fetch(peer)
+                    if brief and brief.get("account"):
+                        kv_set(f"peer_account:{name}", str(brief["account"]))
+                    state, msgs = peer_watch_step(state, brief, dt.datetime.now(), CFG, name)
                     kv_set(key, json.dumps(state, ensure_ascii=False))
                     for m in msgs:
                         if m.startswith("⚠️"):
@@ -3257,11 +3261,11 @@ def watchdog():
 # ---------- phone push alerts (owner 09.11) ----------
 # The bridge talks as the owner, so its messages never ring his phone. A WhatsApp *event* does: at its start time the phone
 # itself shows a reminder notification. push() queues a short text; push_loop() posts it as an event that starts a few
-# seconds later in the conversation's own group. Approved uses: a decision waiting (question before acting, a draft
-# waiting for ✅), a long task finished, faults (other PC down, its bridge off, Claude sign-in, nightly release postponed),
-# people waiting for him (hours without an answer, a missed call from someone important), deadlines (a day and an hour
-# before, and on time). Not for Claude / bridge usage limits. Config: push_alerts (on), push_long_minutes (5),
-# push_wait_hours (3), push_important (names / phones for missed calls).
+# seconds later in the conversation's own group. Owner 09.11: Claude's question before acting, a long task finished,
+# faults (other PC down, its bridge off, Claude sign-in, nightly release postponed), people waiting for him (hours without
+# an answer, a missed call from push_important), a reminder (one push, on time), usage limits at 80%. Not for drafts.
+# Pushes close together are merged. Config: push_alerts, push_long_minutes (5), push_wait_hours (3), push_important,
+# push_merge_seconds (20), push_people.
 
 def push_on():
     return bool(CFG.get("push_alerts", True))
@@ -3283,50 +3287,82 @@ def _running_chats():
         return {r[0] or PRIMARY for r in db.execute("SELECT chat_jid FROM commands WHERE status = 'running'")}
 
 
-def push_send_due():
+def push_send_due(now=None):
     """Post queued pushes. Waits while that conversation's command still runs, so the notification comes after the answer.
-    A row without a chat (queued by Claude's tools/wa_push.py) belongs to the conversation running right now."""
+    A row without a chat (queued by Claude's tools/wa_push.py) belongs to the conversation running right now.
+    Owner 09.11: pushes that come close together are merged into one notification (a 20-second gathering window)."""
+    now = now or time.time()
     with adb() as db:
-        rows = db.execute("SELECT id, chat, text FROM push_queue WHERE status = 'pending' ORDER BY id").fetchall()
+        rows = db.execute("SELECT id, chat, text, created FROM push_queue WHERE status = 'pending' ORDER BY id").fetchall()
     if not rows:
         return
     running = _running_chats()
-    for pid, chat, text in rows:
+    groups = {}
+    for pid, chat, text, created in rows:
         if not chat:
             chat = next(iter(running), PRIMARY) if len(running) == 1 else PRIMARY
             with adb() as db:
                 db.execute("UPDATE push_queue SET chat = ? WHERE id = ?", (chat, pid))
-        if chat == LOCAL:
-            chat = PRIMARY
+        groups.setdefault(PRIMARY if chat == LOCAL else chat, []).append((pid, text, created))
+    gather = float(CFG.get("push_merge_seconds", 20))
+    for chat, items in groups.items():
         if chat in running:
             continue
-        res = bridge("/send_rich", {"jid": chat, "kind": "event", "name": text, "start": int(time.time()) + 5}, timeout=60)
+        try:
+            newest = max(dt.datetime.fromisoformat(c).timestamp() for _, _, c in items)
+            oldest = min(dt.datetime.fromisoformat(c).timestamp() for _, _, c in items)
+        except (TypeError, ValueError):
+            newest = oldest = 0
+        if now - newest < gather and now - oldest < gather * 3:
+            continue  # more may come right now: wait a little and send them together
+        texts = [t for _, t, _ in items]
+        body = {"jid": chat, "kind": "event", "start": int(time.time()) + 5}
+        if len(texts) == 1:
+            body["name"] = texts[0]
+        else:
+            body["name"] = f"🔔 {len(texts)} התראות: " + " · ".join(texts)[:80]
+            body["text"] = "\n".join(texts)[:1000]
+        res = bridge("/send_rich", body, timeout=60)
         ok = bool(res.get("id")) and not res.get("error")
         with adb() as db:
-            db.execute("UPDATE push_queue SET status = ?, sent = ?, result = ? WHERE id = ?",
-                       ("sent" if ok else "failed", dt.datetime.now().isoformat(timespec="seconds"), json.dumps(res, ensure_ascii=False)[:300], pid))
+            for pid, _, _ in items:
+                db.execute("UPDATE push_queue SET status = ?, sent = ?, result = ? WHERE id = ?",
+                           ("sent" if ok else "failed", dt.datetime.now().isoformat(timespec="seconds"),
+                            json.dumps(res, ensure_ascii=False)[:300], pid))
         if not ok:
-            log("push failed", chat, text, res)
+            log("push failed", chat, texts, res)
 
 
-def push_watch_drafts():
-    """A new draft waiting for the owner's ✅ -> one push."""
-    last = kv_get("push_draft_seen") or ""
+def own_account():
+    """This bridge's WhatsApp number (several PCs may share one account, or run different ones)."""
     try:
-        with mdb() as m:
-            rows = m.execute("SELECT created, coalesce(name, recipient) FROM drafts WHERE status = 'pending' AND created > ? ORDER BY created",
-                             (last,)).fetchall()
+        with sqlite3.connect(f"file:{WA_DB}?mode=ro", uri=True, timeout=10) as w:
+            r = w.execute("SELECT jid FROM whatsmeow_device LIMIT 1").fetchone()
+        return (r[0] if r else "").split("@")[0].split(":")[0]
     except sqlite3.Error:
-        return
-    if not last:  # first run: start from now, no burst for old drafts
-        if rows:
-            kv_set("push_draft_seen", str(rows[-1][0]))
-        else:
-            kv_set("push_draft_seen", dt.datetime.now().astimezone().isoformat())
-        return
-    for created, name in rows:
-        push(f"📝 טיוטה ל{name} מחכה לאישור ✅", PRIMARY, "draft")
-        kv_set("push_draft_seen", str(created))
+        return ""
+
+
+def watches_people():
+    """People waiting / missed calls are watched once per WhatsApp account. A PC whose account no other PC shares watches
+    them itself. When PCs share an account, the one with push_people (default: the nightly-release machine) watches, and
+    the others take over while it is unreachable (owner 09.11: laptop off → the desktop sends these)."""
+    mine = own_account()
+    same = []
+    for peer in CFG.get("peers") or []:
+        name = peer.get("name") or peer_alias(peer) or "?"
+        if mine and kv_get(f"peer_account:{name}") == mine:
+            same.append(name)
+    if not same or CFG.get("push_people", bool(CFG.get("auto_release"))):
+        return True
+    for name in same:
+        try:
+            st = json.loads(kv_get(f"peerwatch:{name}") or "{}")
+        except ValueError:
+            st = {}
+        if not st.get("off_since"):
+            return False  # a sharing PC that leads is up: it watches
+    return True
 
 
 def push_watch_waiting(now=None):
@@ -3349,7 +3385,7 @@ def push_watch_waiting(now=None):
                     waiting.append((cj, ts))
             calls = m.execute("SELECT call_id, caller, min(at) FROM calls c WHERE event = 'offer' AND at >= ? AND NOT EXISTS "
                               "(SELECT 1 FROM calls a WHERE a.call_id = c.call_id AND a.event = 'accept') GROUP BY call_id",
-                              ((now - dt.timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S"),)).fetchall()
+                              ((now - dt.timedelta(hours=6)).strftime("%Y-%m-%d %H:%M:%S"),)).fetchall()
     except sqlite3.Error:
         return
     own = set(control_chats())
@@ -3369,29 +3405,27 @@ def push_watch_waiting(now=None):
         key = f"push_call:{call_id}"
         num = str(caller).split("@")[0]
         who = names.get(num) or num
+        if first:
+            kv_set(key, "1")
+            continue
         if kv_get(key) or not any(x in (num, who) or (x.isdigit() and num.endswith(x[-9:])) or (not x.isdigit() and x in who) for x in important):
             continue
         kv_set(key, "1")
         push(f"📞 שיחה שלא נענתה מ{who}", PRIMARY, "call")
 
 
-def push_watch_deadlines(now=None):
-    """Reminders set well ahead get a push a day before and an hour before (the reminder itself pushes on time)."""
-    now = now or dt.datetime.now().astimezone()
-    with adb() as db:
-        rows = db.execute("SELECT id, text, due, created FROM reminders WHERE status = 'active' AND kind = 'time'").fetchall()
-    for rid, text, due, created in rows:
-        try:
-            d = dt.datetime.fromisoformat(due)
-            c = dt.datetime.fromisoformat(created) if created else now
-            d, c = (x if x.tzinfo else x.astimezone() for x in (d, c))
-        except (TypeError, ValueError):
+def push_watch_usage():
+    """Owner 09.11: a push when a usage limit reaches 80% — Claude's plan meter (5 hours / weekly), once per window."""
+    u = claude_usage() or {}
+    for key, name in (("five_hour", "חלון 5 השעות"), ("seven_day", "המגבלה השבועית")):
+        x = u.get(key) or {}
+        pct = x.get("utilization")
+        if pct is None or pct < 80:
             continue
-        for ahead, label in ((dt.timedelta(days=1), "מחר"), (dt.timedelta(hours=1), "בעוד שעה")):
-            key = f"push_pre:{rid}:{int(ahead.total_seconds())}"
-            if d - c > ahead * 1.1 and d - ahead <= now < d and not kv_get(key):
-                kv_set(key, "1")
-                push(f"⏰ {label} ({d:%H:%M}): {text}", PRIMARY, "deadline")
+        k = f"push_usage:{key}:{x.get('resets_at') or ''}"
+        if not kv_get(k):
+            kv_set(k, "1")
+            push(f"📊 Claude: {name} הגיע ל-{pct:.0f}%", PRIMARY, "usage")
 
 
 def push_loop():
@@ -3401,18 +3435,14 @@ def push_loop():
         try:
             if push_on():
                 push_send_due()
-                if n % 6 == 0:  # every minute
-                    push_watch_drafts()
-                    push_watch_deadlines()
-                # both PCs are linked to the same WhatsApp account: people waiting are watched by one machine only
-                # (config push_people; default = the machine that does the nightly release)
-                if n % 60 == 0 and CFG.get("push_people", bool(CFG.get("auto_release"))):  # every 10 minutes
-                    push_watch_waiting()
+                if n % 60 == 0:  # every 10 minutes
+                    if watches_people():
+                        push_watch_waiting()
+                    push_watch_usage()
         except Exception:
             log("push_loop error", traceback.format_exc())
         n += 1
         time.sleep(10)
-
 
 
 def reminders_check():

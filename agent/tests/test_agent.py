@@ -1001,48 +1001,49 @@ def test_group_name_single_source_and_owner_rename(agent, monkeypatch):
     assert mod.kv_get(mod.K("name_tpl", g)) == "ויוי {model} פיתוח"
 
 
-def test_push_alerts_queue_and_triggers(agent, monkeypatch):
+def test_push_alerts_queue_merge_and_usage(agent, monkeypatch):
     mod, db = agent
     sent = []
     monkeypatch.setattr(mod, "bridge", lambda path, body=None, **k: sent.append((path, body)) or {"success": True, "id": "E1"})
     mod.push("*שלום*   עולם", "g1@g.us")
     mod.push("", "g1@g.us")  # empty -> nothing
+    later = mod.time.time() + 120
     with mod.adb() as a:  # a running command holds its own conversation's push until the answer is out
         a.execute("INSERT INTO commands (msg_id, text, status, chat_jid) VALUES ('m', 't', 'running', 'g1@g.us')")
-    mod.push_send_due()
+    mod.push_send_due(later)
     assert sent == []
     with mod.adb() as a:
         a.execute("UPDATE commands SET status = 'done'")
-    mod.push_send_due()
+    mod.push_send_due(mod.time.time())  # just queued: still gathering
+    assert sent == []
+    mod.push_send_due(later)
     assert len(sent) == 1 and sent[0][0] == "/send_rich"
     b = sent[0][1]
     assert b["kind"] == "event" and b["jid"] == "g1@g.us" and b["name"] == "שלום עולם" and b["start"] > mod.time.time()
-    mod.push_send_due()
+    mod.push_send_due(later)
     assert len(sent) == 1, "sent once"
-    # drafts: first look only sets the starting point; a new draft afterwards -> one push
-    db.execute("CREATE TABLE drafts (id INTEGER PRIMARY KEY, recipient TEXT, name TEXT, status TEXT, created TEXT)")
-    db.execute("INSERT INTO drafts VALUES (1, 'x', 'ישן', 'pending', '2026-11-09 10:00:00+02:00')")
-    db.commit()
-    mod.push_watch_drafts()
-    db.execute("INSERT INTO drafts VALUES (2, 'x', 'צגאי', 'pending', '2026-11-09 10:05:00+02:00')")
-    db.commit()
-    mod.push_watch_drafts()
-    mod.push_watch_drafts()
+    # pushes close together -> one notification
+    mod.push("א", "g1@g.us")
+    mod.push("ב", "g1@g.us")
+    mod.push_send_due(later)
+    assert len(sent) == 2 and sent[1][1]["name"].startswith("🔔 2 התראות") and sent[1][1]["text"] == "א\nב"
+    # usage at 80%: once per window
+    monkeypatch.setattr(mod, "claude_usage", lambda: {"five_hour": {"utilization": 85, "resets_at": "R1"}, "seven_day": {"utilization": 40}})
+    mod.push_watch_usage()
+    mod.push_watch_usage()
     with mod.adb() as a:
-        texts = [r[0] for r in a.execute("SELECT text FROM push_queue WHERE kind = 'draft'")]
-    assert texts == ["📝 טיוטה לצגאי מחכה לאישור ✅"]
-    # deadlines: a reminder set two days ahead pushes a day before and an hour before, once each
-    now = mod.dt.datetime(2026, 11, 9, 12, 0).astimezone()
-    due = now + mod.dt.timedelta(hours=23)
-    with mod.adb() as a:
-        a.execute("INSERT INTO reminders (kind, text, due, created) VALUES ('time', 'סיור', ?, ?)",
-                  (due.isoformat(), (now - mod.dt.timedelta(days=1)).isoformat()))
-    mod.push_watch_deadlines(now)
-    mod.push_watch_deadlines(now)
-    mod.push_watch_deadlines(due - mod.dt.timedelta(minutes=50))
-    with mod.adb() as a:
-        texts = [r[0] for r in a.execute("SELECT text FROM push_queue WHERE kind = 'deadline'")]
-    assert len(texts) == 2 and texts[0].startswith("⏰ מחר") and texts[1].startswith("⏰ בעוד שעה")
+        texts = [r[0] for r in a.execute("SELECT text FROM push_queue WHERE kind = 'usage'")]
+    assert len(texts) == 1 and "85%" in texts[0]
+    # a PC alone on its WhatsApp account watches people itself; a sharer waits while the leader is up
+    monkeypatch.setattr(mod, "own_account", lambda: "972500000000")
+    mod.CFG["peers"] = [{"name": "pc2", "tunnel": "x"}]
+    mod.CFG["auto_release"] = False
+    assert mod.watches_people()
+    mod.kv_set("peer_account:pc2", "972500000000")
+    mod.kv_set("peerwatch:pc2", "{}")
+    assert not mod.watches_people()
+    mod.kv_set("peerwatch:pc2", '{"off_since": "2026-11-09T10:00:00"}')
+    assert mod.watches_people()
     mod.CFG["push_alerts"] = False
     mod.push("x", "g1@g.us")
     with mod.adb() as a:
