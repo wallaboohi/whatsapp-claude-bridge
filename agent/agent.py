@@ -2261,9 +2261,9 @@ def read_aloud(chat, mid=None):
 
 
 def read_other(chat, mid, wait=90):
-    """Owner 09.11 17:25: 🛞 on someone else's message in any chat → a voice note (the bot's voice) reading it, sent into
-    that same chat quoting it, without a draft (the bridge allows exactly that one voice note, see readaloud.go). Text is
-    read as written; a voice note is read from its transcript; images and anything else: nothing. One PC per account
+    """Owner 09.11 17:25/17:27: 🛞 on someone else's message in any chat, without a draft: a text message → a voice note (the
+    bot's voice) reading it, sent into that same chat quoting it (the bridge allows exactly that one voice note, see
+    readaloud.go); a voice note → its transcript as a text message there (/api/send_transcript); images etc.: nothing. One PC per account
     sends it (watches_people), so two bridges on the same number never send it twice."""
     try:
         with mdb() as db:
@@ -2275,14 +2275,16 @@ def read_other(chat, mid, wait=90):
         return
     content, _, mtype = r
     if mtype in ("audio", "ptt", "voice"):
-        text, deadline = "", time.time() + wait
-        while True:  # voice notes are transcribed as they arrive; a fresh one may still be in progress
-            with adb() as db:
-                t = db.execute("SELECT text FROM transcripts WHERE id = ? ORDER BY rowid DESC LIMIT 1", (mid,)).fetchone()
-            text = (t[0] if t else "") or ""
-            if text.strip() or time.time() > deadline:
-                break
-            time.sleep(5)
+        # owner 09.11 17:27: 🛞 on a voice note = its transcript as a text message in that chat (not automatic, not a voice)
+        with mdb() as db:
+            r2 = db.execute("SELECT sender, timestamp FROM messages WHERE id = ? AND chat_jid = ?", (mid, chat)).fetchone()
+        text = (transcript_of(chat, mid, r2[0] if r2 else "", r2[1] if r2 else "") or "").strip()
+        if not text:
+            log("read_other: no transcript", chat, mid)
+            return
+        res = bridge("/send_transcript", {"jid": chat, "id": mid, "text": f"🤖 תמלול: {text}"[:3900]}, timeout=120)
+        log("wheel transcript", chat, mid, json.dumps(res, ensure_ascii=False)[:160])
+        return
     elif mtype:
         return  # image / video / document / sticker: unchanged (owner 09.11)
     else:

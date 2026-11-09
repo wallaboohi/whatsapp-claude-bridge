@@ -1119,3 +1119,15 @@ def test_wheel_on_someone_elses_message_reads_it_in_that_chat(agent, monkeypatch
     db.commit()
     mod.read_other("972500000009@s.whatsapp.net", "I1")
     assert len(sent) == 1, "an image: nothing"
+
+
+def test_wheel_on_a_voice_note_posts_its_transcript(agent, monkeypatch):
+    mod, db = agent
+    calls = []
+    monkeypatch.setattr(mod, "bridge", lambda path, body=None, **k: calls.append((path, body)) or {"success": True})
+    monkeypatch.setattr(mod, "transcript_of", lambda cj, mid, sender, ts: "אני בדרך")
+    monkeypatch.setattr(mod, "tts_ogg", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no voice for a voice note")))
+    db.execute("INSERT INTO messages VALUES ('A1', '972500000009@s.whatsapp.net', 'x', '', '2026-11-09 17:30:00+02:00', 0, 'audio', '')")
+    db.commit()
+    mod.read_other("972500000009@s.whatsapp.net", "A1")
+    assert calls == [("/send_transcript", {"jid": "972500000009@s.whatsapp.net", "id": "A1", "text": "🤖 תמלול: אני בדרך"})]
