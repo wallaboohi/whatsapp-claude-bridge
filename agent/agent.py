@@ -1118,6 +1118,8 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
         cmd += ["--strict-mcp-config"]  # skip the heavy connector tool lists (Gmail, Shopify...) to cut tokens
     if max_budget:
         cmd += ["--max-budget-usd", f"{float(max_budget):.2f}"]
+    if CFG.get("chrome") and tools is None:
+        cmd += ["--chrome"]  # owner 09.11: Claude in Chrome (needs the extension signed in with this PC's Claude account)
     if resume:
         cmd += ["--resume", resume]
     chat = chat or PRIMARY
