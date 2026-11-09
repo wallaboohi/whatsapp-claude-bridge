@@ -934,14 +934,15 @@ def test_group_name_follows_model(agent, monkeypatch):
         return {"success": True}
     monkeypatch.setattr(mod, "bridge", fake_bridge)
     mod.CFG["group_name_model"] = True
+    mod.CFG["name_prefix"] = "LP"
     mod.sync_group_name(mod.PRIMARY, "claude-opus-5-5")
     names = [b["name"] for p, b in calls if p == "/set_group"]
-    assert names == ["\u05d2\u05e9\u05e8 \u05d0\u05d5\u05e4\u05d5\u05e1 \u05d5\u05d5\u05e6\u05d0\u05e4"], names  # גשר אופוס ווצאפ
+    assert names == ["LP \u05d2\u05e9\u05e8 \u05d0\u05d5\u05e4\u05d5\u05e1 \u05d5\u05d5\u05e6\u05d0\u05e4"], names  # גשר אופוס ווצאפ
     mod.sync_group_name(mod.PRIMARY, "opus")  # same name: no second rename
     assert len([1 for p, b in calls if p == "/set_group"]) == 1
     mod.kv_set(mod.K("name_set_at", mod.PRIMARY), "0")
     mod.sync_group_name(mod.PRIMARY, "sonnet")
-    assert [b["name"] for p, b in calls if p == "/set_group"][-1].split()[1] == "\u05e1\u05d5\u05e0\u05d8"  # סונט
+    assert [b["name"] for p, b in calls if p == "/set_group"][-1].split()[2] == "\u05e1\u05d5\u05e0\u05d8"  # סונט
 
 
 def test_sunglasses_reads_last_answer(agent, monkeypatch, tmp_path):
@@ -985,20 +986,29 @@ def test_group_name_single_source_and_owner_rename(agent, monkeypatch):
     # only the model differs -> same name; a real rename -> model goes after the first word
     assert mod.name_core("גשר סונט ויוי") == mod.name_core("גשר {model} ויוי")
     assert mod.name_core("אוטומציה 4M-D · הייקו") == mod.name_core("אוטומציה 4M-D · {model}")
-    assert mod.template_after_first_word("פיתוח הכלי שלי") == "פיתוח {model} הכלי שלי"
-    assert mod.template_after_first_word("גשר אופוס דב") == "גשר {model} דב"
+    mod.CFG["name_prefix"] = "LP"  # owner 09.11: computer prefix first, model after the first word, for every group
+    assert mod.template_after_first_word("פיתוח הכלי שלי") == "LP פיתוח {model} הכלי שלי"
+    assert mod.template_after_first_word("LP גשר אופוס דב") == "LP גשר {model} דב"
+    assert mod.template_after_first_word("אוטומציה 4M-D · {model}") == "LP אוטומציה {model} 4M-D"
+    assert mod.name_core("LP גשר אופוס דב") == "גשר דב"
     sent = []
     monkeypatch.setattr(mod, "bridge", lambda path, body, timeout=0: sent.append(body) or {"success": True})
-    mod.kv_set(mod.K("name_tpl", g), "גשר {model} ויוי")
+    mod.kv_set(mod.K("name_tpl", g), "גשר {model} ויוי")  # an old template (no prefix) is upgraded
     mod.kv_set(mod.K("name_set", g), "גשר אופוס ויוי")
     mod.sync_group_name(g, "opus")
-    assert sent == []  # nothing changed, no rename
+    assert sent[-1]["name"] == "LP גשר אופוס ויוי"
+    db.execute("UPDATE chats SET name = 'LP גשר אופוס ויוי' WHERE jid = ?", (g,))
+    db.commit()
+    mod._live_cache[0] = 0
+    mod.kv_set(mod.K("name_set_at", g), "0")
+    mod.sync_group_name(g, "opus")
+    assert len(sent) == 1  # nothing changed, no rename
     db.execute("UPDATE chats SET name = 'ויוי פיתוח' WHERE jid = ?", (g,))
     db.commit()
     mod._live_cache[0] = 0
     mod.sync_group_name(g, "opus")
-    assert sent and sent[-1]["name"] == "ויוי אופוס פיתוח"
-    assert mod.kv_get(mod.K("name_tpl", g)) == "ויוי {model} פיתוח"
+    assert sent[-1]["name"] == "LP ויוי אופוס פיתוח"
+    assert mod.kv_get(mod.K("name_tpl", g)) == "LP ויוי {model} פיתוח"
 
 
 def test_push_alerts_queue_merge_and_usage(agent, monkeypatch):

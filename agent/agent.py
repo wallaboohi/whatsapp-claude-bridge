@@ -1541,22 +1541,21 @@ def model_he(model):
 
 
 def group_name_template(chat):
-    """The group's name with a {model} slot, learned once from its current name: "קלאוד" → the model
-    ("גשר קלאוד ווצאפ" → "גשר {model} ווצאפ"); a name that already holds a model name keeps that slot; any other
-    name gets " · {model}" appended. Stored in kv name_tpl:<chat> (delete it to re-learn after a manual rename)."""
+    """The group's name with a {model} slot, learned from its current name: computer prefix + first word + {model} + the
+    rest ("גשר קלאוד ווצאפ" → "LP גשר {model} ווצאפ"). Stored in kv name_tpl:<chat>; an owner rename is re-learned."""
     tpl = kv_get(K("name_tpl", chat))
     if tpl:
-        return tpl
+        want = template_after_first_word(tpl)  # owner 09.11: every group = computer prefix + model after the first word
+        if want and want != tpl:
+            kv_set(K("name_tpl", chat), want)
+        return want or tpl
     res = bridge("/group_info", {"jid": chat}, timeout=30)
     name = (res.get("name") or "").strip() if res.get("success") else ""
     if not name:
         return ""
-    for word in ("קלאוד", *MODEL_HE.values()):
-        if word in name:
-            tpl = name.replace(word, "{model}", 1)
-            break
-    else:
-        tpl = name + " · {model}"
+    tpl = template_after_first_word(name)
+    if not tpl:
+        return ""
     kv_set(K("name_tpl", chat), tpl)
     return tpl
 
@@ -1564,17 +1563,32 @@ def group_name_template(chat):
 _MODEL_WORDS = {"קלאוד", "{model}", *MODEL_HE.values()}
 
 
+def name_prefix():
+    """Owner 09.11: two letters of the computer at the start of every group name it answers in (config name_prefix,
+    else the first two letters of host_label / the host name)."""
+    p = str(CFG.get("name_prefix") or "").strip()
+    if not p:
+        p = re.sub(r"[^A-Za-z0-9]", "", CFG.get("host_label") or socket.gethostname())[:2].upper()
+    return p
+
+
+def _name_words(name):
+    pre = name_prefix()
+    return [w for w in name.replace("·", " ").split() if w not in _MODEL_WORDS and w != pre]
+
+
 def name_core(name):
-    """A group name without its model word(s) and separators — equal cores = the same name, only the model differs."""
-    return " ".join(w for w in name.replace("·", " ").split() if w not in _MODEL_WORDS)
+    """A group name without the computer prefix, model word(s) and separators — equal cores = the same name."""
+    return " ".join(_name_words(name))
 
 
 def template_after_first_word(name):
-    """Owner rule 09.11: whatever name he gives, the model is written right after its first word ("גשר ויוי" → "גשר {model} ויוי")."""
-    words = [w for w in name.replace("·", " ").split() if w not in _MODEL_WORDS]
+    """Owner rule 09.11: whatever name he gives — the computer prefix first, then his first word, the model, and the rest
+    ("גשר ויוי" → "LP גשר {model} ויוי")."""
+    words = _name_words(name)
     if not words:
         return ""
-    return " ".join([words[0], "{model}", *words[1:]])
+    return " ".join([w for w in (name_prefix(), words[0], "{model}", *words[1:]) if w])
 
 
 def sync_group_name(chat, model):
