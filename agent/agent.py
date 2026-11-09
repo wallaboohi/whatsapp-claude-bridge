@@ -1853,7 +1853,7 @@ def owner_command(text, chat=None):
     if re.match(r"^/(הפעל מחדש|אתחל|restart)\s*$", text.strip()):
         RESTART_REQ.set()
         return "🔄 מפעיל את הסוכן מחדש. אכתוב כאן כשאעלה (בערך 20 שניות)."
-    m = re.match(r"^/\s*(מודל|model|מודלים|סשן|session)\s*(.*)$", text.strip(), re.S)
+    m = re.match(r"^/\s*(מודלים|מודל|models|model|סשן|session)\s*(.*)$", text.strip(), re.S)
     if not m:
         return None
     cmd, arg = m.group(1), m.group(2).strip().lower()
@@ -2057,6 +2057,7 @@ def run_command(row):
     """Answer one owner command (in the calling thread; _ctx = its conversation)."""
     cid, mid, text, when, chat, src, sync = row
     chat, src, sync = chat or PRIMARY, src or "wa", sync or 0
+    text = re.sub(r"^(\s*!*)\s*/\s+", r"\1/", text or "")  # "/ מודל" == "/מודל" for every slash command (owner 09.11)
     _ctx.chat, _ctx.src, _ctx.sync, _ctx.auto_pick = chat, src, sync, False
     g = load_groups().get(chat) or {}
     parked = False
