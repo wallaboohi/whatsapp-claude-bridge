@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"go.mau.fi/whatsmeow"
@@ -216,6 +217,42 @@ func registerExtras2API(client *whatsmeow.Client) {
 			recordSent(to, resp.ID, desc, "", "", true, "poll")
 		}
 		return map[string]any{"id": resp.ID}, err
+	})
+
+	// {"jid","id","text"} — owner rule 09.11.2026: a voice message someone ELSE sent him is transcribed right after it, in
+	// the same chat, without a draft. Narrow on purpose: only as a quoted reply to an incoming audio message that is in
+	// the store, text must start with 🤖, once per recording; a pause still wins (sendCore checks it).
+	adminHandler("/api/send_transcript", func(ctx context.Context, b map[string]any) (map[string]any, error) {
+		chat, err := types.ParseJID(str(b, "jid"))
+		if err != nil {
+			return nil, err
+		}
+		id, text := str(b, "id"), str(b, "text")
+		if id == "" || !strings.HasPrefix(text, "🤖") || len(text) > 4000 {
+			return nil, errString("need jid, id and a text that starts with 🤖")
+		}
+		if err := textOK(text); err != nil {
+			return nil, err
+		}
+		if globalStore == nil {
+			return nil, errString("store not ready")
+		}
+		var mt string
+		var fromMe bool
+		if globalStore.db.QueryRow("SELECT coalesce(media_type,''), is_from_me FROM messages WHERE id=? AND chat_jid=?", id, chat.String()).Scan(&mt, &fromMe) != nil ||
+			mt != "audio" || fromMe {
+			return nil, errString("not an incoming voice message in this chat")
+		}
+		var n int
+		globalStore.db.QueryRow("SELECT count(*) FROM messages WHERE chat_jid=? AND is_from_me=1 AND quoted_id=? AND content LIKE '🤖%'", chat.String(), id).Scan(&n)
+		if n > 0 {
+			return map[string]any{"skipped": "already transcribed"}, nil
+		}
+		ok, msg := sendCore(client, chat.String(), text, "", id, true)
+		if !ok {
+			return nil, errString(msg)
+		}
+		return map[string]any{"message": msg}, nil
 	})
 
 	// {"jid","kind":"event|mention|location", event: name,text,start,end,guests,address,lat,lng; mention: text,mentions[];

@@ -1060,3 +1060,22 @@ def test_push_alerts_queue_merge_and_usage(agent, monkeypatch):
     mod.push("x", "g1@g.us")
     with mod.adb() as a:
         assert not a.execute("SELECT 1 FROM push_queue WHERE text = 'x'").fetchone()
+
+
+def test_auto_transcript_posts_in_same_chat_once(agent, monkeypatch):
+    mod, db = agent
+    calls = []
+    monkeypatch.setattr(mod, "bridge", lambda path, body=None, **k: calls.append((path, body)) or {"success": True})
+    monkeypatch.setattr(mod, "voice_enabled", lambda: True)
+    monkeypatch.setattr(mod, "watches_people", lambda: True)
+    monkeypatch.setattr(mod, "transcript_of", lambda cj, mid, sender, ts: "שלום יקיר")
+    now = mod.dt.datetime.now().astimezone().isoformat(sep=" ", timespec="seconds")
+    mod.auto_transcript("972500000001@s.whatsapp.net", "V1", "972500000001", now)
+    mod.auto_transcript("972500000001@s.whatsapp.net", "V1", "972500000001", now)  # once per recording
+    assert calls == [("/send_transcript", {"jid": "972500000001@s.whatsapp.net", "id": "V1", "text": "🤖 תמלול: שלום יקיר"})]
+    old = (mod.dt.datetime.now().astimezone() - mod.dt.timedelta(hours=2)).isoformat(sep=" ", timespec="seconds")
+    mod.auto_transcript("972500000001@s.whatsapp.net", "V2", "972500000001", old)  # an old recording from a sync: no
+    assert len(calls) == 1
+    monkeypatch.setattr(mod, "watches_people", lambda: False)  # the other PC on the same account does it
+    mod.auto_transcript("972500000001@s.whatsapp.net", "V3", "972500000001", now)
+    assert len(calls) == 1

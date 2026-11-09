@@ -913,6 +913,33 @@ def transcript_of(chat_jid, msg_id, sender, ts):
     return text
 
 
+def auto_transcript(cj, mid, sender, ts):
+    """Owner rule 09.11.2026 (config auto_transcript): a voice message someone else sends him, in any chat or group, is
+    transcribed and the text posted right after it in the same chat, as a quoted reply starting with 🤖 — no draft
+    (the bridge's narrow /api/send_transcript). Recent recordings only (not old ones arriving in a sync), once per
+    recording, by one PC per WhatsApp account."""
+    try:
+        when = dt.datetime.fromisoformat(str(ts).replace(" ", "T"))
+        when = when if when.tzinfo else when.astimezone()
+        if (dt.datetime.now().astimezone() - when).total_seconds() > 30 * 60:
+            return
+    except ValueError:
+        return
+    if kv_get(f"auto_tr:{mid}") or not voice_enabled() or not watches_people():
+        return
+    kv_set(f"auto_tr:{mid}", "1")
+    text = (transcript_of(cj, mid, sender, ts) or "").strip()
+    if not text:
+        return
+    res = bridge("/send_transcript", {"jid": cj, "id": mid, "text": f"🤖 תמלול: {text}"[:3900]}, timeout=120)
+    try:
+        with open(os.path.join(HERE, "actions.log"), "a", encoding="utf-8") as f:
+            f.write(f"{dt.datetime.now().isoformat(timespec='seconds')} | agent | auto transcript | to={cj} | id={mid} | "
+                    f"{json.dumps(res, ensure_ascii=False)[:160]}\n")
+    except OSError:
+        pass
+
+
 # ---------- headless Claude ----------
 
 def _detail_of(name, inp):
@@ -3047,7 +3074,9 @@ def handle(row):
             except Exception as e:
                 intake_failed(cj, mid, e)
         return
-    if mtype == "audio" and CFG.get("transcribe_all_chats") and voice_enabled():
+    if mtype == "audio" and not me and CFG.get("auto_transcript") and cj not in control_chats() and cj != "status@broadcast":
+        slow.put(lambda: auto_transcript(cj, mid, sender, ts))
+    elif mtype == "audio" and CFG.get("transcribe_all_chats") and voice_enabled():
         slow.put(lambda: transcript_of(cj, mid, sender, ts))
     for hook in _hooks:
         try:
