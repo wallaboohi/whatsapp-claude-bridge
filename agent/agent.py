@@ -556,7 +556,7 @@ def auto_release():
 
     def say(t):
         if not t.startswith("🚀"):
-            push("⏸️ השחרור הלילי לא בוצע (הפרטים בקבוצה)", PRIMARY, "fault")
+            push("⏸️ השחרור הלילי לא בוצע (הפרטים בקבוצה)", PRIMARY, "release")
         _ctx.chat = PRIMARY
         try:
             reply(t)
@@ -3287,18 +3287,31 @@ def _running_chats():
         return {r[0] or PRIMARY for r in db.execute("SELECT chat_jid FROM commands WHERE status = 'running'")}
 
 
+def in_quiet_hours(t):
+    """Owner 09.11: no pushes 23:00–07:00 (config push_quiet "23:00-07:00"; empty = none), except urgent faults."""
+    q = str(CFG.get("push_quiet", "23:00-07:00") or "")
+    if "-" not in q:
+        return False
+    a, b = q.split("-", 1)
+    hm = t.strftime("%H:%M")
+    return (a <= hm < b) if a <= b else (hm >= a or hm < b)
+
+
 def push_send_due(now=None):
     """Post queued pushes. Waits while that conversation's command still runs, so the notification comes after the answer.
     A row without a chat (queued by Claude's tools/wa_push.py) belongs to the conversation running right now.
     Owner 09.11: pushes that come close together are merged into one notification (a 20-second gathering window)."""
     now = now or time.time()
     with adb() as db:
-        rows = db.execute("SELECT id, chat, text, created FROM push_queue WHERE status = 'pending' ORDER BY id").fetchall()
+        rows = db.execute("SELECT id, chat, text, created, kind FROM push_queue WHERE status = 'pending' ORDER BY id").fetchall()
     if not rows:
         return
+    quiet = in_quiet_hours(dt.datetime.fromtimestamp(now))
     running = _running_chats()
     groups = {}
-    for pid, chat, text, created in rows:
+    for pid, chat, text, created, kind in rows:
+        if quiet and kind != "fault":
+            continue  # quiet hours: kept and sent (merged) when they end; only an urgent fault rings now
         if not chat:
             chat = next(iter(running), PRIMARY) if len(running) == 1 else PRIMARY
             with adb() as db:

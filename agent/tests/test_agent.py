@@ -1044,6 +1044,18 @@ def test_push_alerts_queue_merge_and_usage(agent, monkeypatch):
     assert not mod.watches_people()
     mod.kv_set("peerwatch:pc2", '{"off_since": "2026-11-09T10:00:00"}')
     assert mod.watches_people()
+    # quiet hours: only an urgent fault goes out, the rest waits for the morning
+    night = mod.time.mktime(mod.dt.datetime(2026, 11, 10, 2, 0).timetuple())
+    with mod.adb() as a:
+        a.execute("DELETE FROM push_queue")
+    mod.push("לילה", "g1@g.us", "done")
+    mod.push("תקלה", "g2@g.us", "fault")
+    with mod.adb() as a:
+        a.execute("UPDATE push_queue SET created = '2026-11-10T01:00:00'")
+    n = len(sent)
+    mod.push_send_due(night)
+    assert len(sent) == n + 1 and sent[-1][1]["name"] == "תקלה"
+    assert mod.in_quiet_hours(mod.dt.datetime(2026, 11, 9, 23, 30)) and not mod.in_quiet_hours(mod.dt.datetime(2026, 11, 9, 7, 0))
     mod.CFG["push_alerts"] = False
     mod.push("x", "g1@g.us")
     with mod.adb() as a:

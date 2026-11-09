@@ -49,6 +49,7 @@
   "push_important": [],
   "push_people": false,
   "push_merge_seconds": 20,
+  "push_quiet": "23:00-07:00",
   "peer_backup": true,
   "peer_backup_max_mb": 2048
 }
