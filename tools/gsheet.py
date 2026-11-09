@@ -102,6 +102,8 @@ def main(argv):
         with open(argv[1], "wb") as f:
             f.write(s.export_xlsx())
         print(argv[1])
+    elif cmd == "info":
+        print(json.dumps(s.file_info(), ensure_ascii=False))
     elif cmd == "revisions":
         print(json.dumps(s.revisions(), ensure_ascii=False, indent=1))
     elif cmd == "activity":
