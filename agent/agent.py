@@ -1296,38 +1296,46 @@ def _reset_at(iso):
         return "?"
 
 
-def internal_usage(chat):
-    """'תקרת שימוש · מגבלה פנימית' of this conversation: % of its daily cap (the bridge's own limit)."""
-    spent, cap = spent_today(chat), budget_for(chat)
-    if unlimited(chat):
-        return f"💰 תקרת שימוש · מגבלה פנימית: ללא מגבלה (${spent:.2f} היום)"
-    return f"💰 תקרת שימוש · מגבלה פנימית: {_pct(spent, cap)} (${spent:.2f} מתוך ${cap:.0f})"
-
-
-def claude_limit(with_week=False):
-    """'תקרת שימוש · מגבלת Claude': the account's 5-hour window % (and the weekly one in /תקרה)."""
-    u = claude_usage() or {}
-    f, w = u.get("five_hour") or {}, u.get("seven_day") or {}
-    if f.get("utilization") is None:
-        return "☁️ תקרת שימוש · מגבלת Claude: לא זמין כרגע"
-    line = f"☁️ תקרת שימוש · מגבלת Claude: {f['utilization']:.0f}% (מתאפס {_reset_at(f.get('resets_at') or '')})"
-    if with_week and w.get("utilization") is not None:
-        line += f"\n   שבועי: {w['utilization']:.0f}% (מתאפס {_reset_at(w.get('resets_at') or '')})"
-    return line
-
-
-def usage_line(chat):
-    """Owner 09.11 (simplified 06:26): after every answer, two lines only — the internal limit and Claude's limit."""
-    try:
-        return internal_usage(chat) + "\n" + claude_limit()
-    except Exception as e:
-        log("usage line failed", e)
-        return ""
-
-
 def usage_report(chat):
-    """/תקרה: the same two limits, with Claude's weekly window too."""
-    return "📊 *תקרת שימוש נכון ל-" + dt.datetime.now().strftime("%H:%M") + "*\n" + internal_usage(chat) + "\n" + claude_limit(True)
+    """/תקרה (owner 09.11 07:14: not in the regular chat any more — everything here): Claude's account limits and the
+    bridge's usage caps, in full."""
+    now = dt.datetime.now()
+    out = [f"📊 *תקרת שימוש · {machine_tag()} · נכון ל-{now:%H:%M}*", ""]
+    u = claude_usage()
+    out.append("*☁️ מגבלת Claude* " + (f"(מנוי {u.get('plan')}, החשבון של המחשב הזה)" if u and u.get("plan") else "(החשבון של המחשב הזה)") + ":")
+    if not u:
+        out.append("• לא הצלחתי לקרוא את מד השימוש של Claude כרגע.")
+    else:
+        for key, name in (("five_hour", "חלון 5 שעות (המגבלה הנוכחית)"), ("seven_day", "שבועי"), ("seven_day_opus", "שבועי Opus"),
+                          ("seven_day_sonnet", "שבועי Sonnet")):
+            x = u.get(key) or {}
+            if x.get("utilization") is not None:
+                out.append(f"• {name}: {x['utilization']:.0f}% (מתאפס {_reset_at(x.get('resets_at') or '')})")
+        out.append("• חודשי: Claude לא מספק נתון כזה.")
+    lu = limit_until()
+    if lu:
+        out.append(f"• 🔒 המגבלה הגיעה — ההודעות נשמרות ויטופלו ב-{lu:%H:%M}.")
+    tot, tcap = spent_today(), total_budget()
+    out += ["", "*💰 מגבלת הגשר* (פנימית, מתאפסת בחצות):", f"• כל הגשר: ${tot:.2f} מתוך ${tcap:.0f} ({_pct(tot, tcap)})"]
+    for jid, g in load_groups().items():
+        spent = spent_today(jid)
+        if jid == LOCAL and not spent:
+            continue
+        try:  # the name WhatsApp shows (groups.json keeps an internal one, e.g. "4M")
+            with mdb() as db:
+                r = db.execute("SELECT name FROM chats WHERE jid = ?", (jid,)).fetchone()
+        except sqlite3.Error:
+            r = None
+        name = (r[0] if r and r[0] else "") or g.get("name") or jid
+        here = " ← השיחה הזו" if jid == (chat or PRIMARY) else ""
+        if unlimited(jid):
+            out.append(f"• {name}: ${spent:.2f} · ללא מגבלה{here}")
+        else:
+            cap = budget_for(jid)
+            out.append(f"• {name}: ${spent:.2f} מתוך ${cap:.0f} ({_pct(spent, cap)}){' 🔒' if spent >= cap else ''}{here}")
+    out += ["", "_עקיפת מגבלת הגשר: ! להודעה אחת, !!! לשעה. שינוי הסכומים: בלוח ← ⚙️ הגדרות ← עלות._",
+            "_הדולרים הם הערכה של Claude Code לפי מחירון ה-API. במנוי Pro לא משלמים לפיהם; מה שמגביל בפועל הוא האחוזים של Claude._"]
+    return "\n".join(out)
 
 
 def unlimited(chat):
@@ -1610,8 +1618,7 @@ class StatusMsg:
 
     def _final(self):
         n = len(self.steps)
-        return CFG["reply_prefix"] + italic(f"✅ {machine_tag()} · סיימתי · {self._elapsed()} · {self.model}" + (f" · {n} שלבים" if n else "")
-                                            + (f"\n{usage_line(self.chat)}" if usage_line(self.chat) else ""))
+        return CFG["reply_prefix"] + italic(f"✅ {machine_tag()} · סיימתי · {self._elapsed()} · {self.model}" + (f" · {n} שלבים" if n else ""))
 
     def _start(self):
         if self.done.is_set():
