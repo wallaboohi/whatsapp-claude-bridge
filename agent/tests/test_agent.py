@@ -542,7 +542,7 @@ def test_reply_to_card_schedules_and_sends(agent, monkeypatch):
     monkeypatch.setattr(mod, "react", lambda *a: None)
     monkeypatch.setattr(mod, "bridge", lambda path, body=None, **k: decided.append((path, body)) or {"success": True})
     assert mod.schedule_from_reply(mod.PRIMARY, "R1", "20:00")
-    assert "טיוטה #7" in sent[-1]
+    assert "הטיוטה תישלח" in sent[-1] and "#" not in sent[-1]
     with mod.adb() as a:
         a.execute("UPDATE scheduled_drafts SET send_at = '2000-01-01T00:00:00'")
     mod.scheduled_check()

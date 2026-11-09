@@ -92,7 +92,7 @@ func TestSendToOthersIsADraft(t *testing.T) {
 
 func TestDraftCardMentionsScheduling(t *testing.T) {
 	c := draftCardText(5, "דני", types.NewJID("972500000009", types.DefaultUserServer), "שלום", "")
-	if lines := strings.Split(c, "\n"); !strings.Contains(lines[2], "שעה") {
-		t.Fatalf("third line should explain scheduled sending, got %q", lines[2])
+	if lines := strings.Split(c, "\n"); !strings.Contains(lines[5], "שעה") {
+		t.Fatalf("line 6 should explain scheduled sending, got %q", lines[5])
 	}
 }

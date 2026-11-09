@@ -170,30 +170,29 @@ var serverCodeRe = regexp.MustCompile(`server returned error (\d+)`)
 // draftCardText is the draft card posted in the control group. The approval hint comes first, so it is the first
 // thing seen on a phone: long-press this message → ✅ (or 👍) sends exactly this one message; ❌ cancels.
 func draftCardText(draftID int64, name string, jid types.JID, message, mediaPath string) string {
+	// Owner layout (09.11): the text to approve first, then the approval hint, and the long wa.me link last (WhatsApp
+	// folds it under "read more"). No draft number on the card; draftID stays in the drafts table.
+	_ = draftID
 	var card strings.Builder
-	num := ""
-	if draftID > 0 {
-		num = fmt.Sprintf(" #%d", draftID)
+	card.WriteString(fmt.Sprintf("🤖 📝 *טיוטה → %s*\n", name))
+	card.WriteString("━━━━━━━━━━\n" + message + "\n━━━━━━━━━━\n")
+	card.WriteString("👆 *לחיצה ארוכה ← ✅ לאישור* (הודעה אחת, לנמען הזה בלבד) · ❌ לביטול\n")
+	card.WriteString("🕗 או השב לכרטיס עם שעה (08:00) — שליחה מתוזמנת")
+	if mediaPath != "" {
+		card.WriteString("\n📎 הקובץ המצורף מוצג כאן בהודעה נפרדת.")
 	}
-	card.WriteString(fmt.Sprintf("🤖 📝 *טיוטה%s → %s*\n", num, name))
-	card.WriteString("👆 *לאישור: לחיצה ארוכה על ההודעה הזו ← ✅ או 👍* (הודעה אחת, לנמען הזה בלבד) · ❌ לביטול\n")
-	card.WriteString("🕗 או השב לכרטיס עם שעה (08:00) — שליחה מתוזמנת\n")
 	if jid.Server == types.DefaultUserServer {
 		// %20 instead of '+' (safer in wa.me); long links get cut by WhatsApp's link detection, so skip them
 		q := strings.ReplaceAll(url.QueryEscape(message), "+", "%20")
 		if len(q) <= 1200 && mediaPath == "" {
-			card.WriteString("או לשלוח בעצמך — הקישור פותח את השיחה עם הטקסט מוכן:\n")
-			card.WriteString("https://wa.me/" + jid.User + "?text=" + q + "\n")
+			card.WriteString("\n\n🔗 לשליחה בעצמך (פותח את השיחה עם הטקסט מוכן):\n")
+			card.WriteString("https://wa.me/" + jid.User + "?text=" + q)
 		} else {
-			card.WriteString("הטקסט ארוך / יש קובץ — אין קישור אוטומטי (שיחה: https://wa.me/" + jid.User + ")\n")
+			card.WriteString("\n\n🔗 הטקסט ארוך / יש קובץ, אין קישור עם טקסט. השיחה: https://wa.me/" + jid.User)
 		}
 	} else {
-		card.WriteString("(קבוצה / מזהה ללא מספר — אישור ✅ שולח; לשליחה ידנית העתק את הטקסט)\n")
+		card.WriteString("\n(קבוצה / מזהה ללא מספר: ✅ שולח; לשליחה ידנית העתק את הטקסט)")
 	}
-	if mediaPath != "" {
-		card.WriteString("📎 הקובץ המצורף מוצג כאן בהודעה נפרדת.\n")
-	}
-	card.WriteString("━━━━━━━━━━\n" + message + "\n━━━━━━━━━━")
 	return card.String()
 }
 

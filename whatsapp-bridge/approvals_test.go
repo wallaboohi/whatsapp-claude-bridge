@@ -44,11 +44,17 @@ func TestDraftCardText(t *testing.T) {
 	who := types.NewJID("972500000009", types.DefaultUserServer)
 	c := draftCardText(21, "דני", who, "שלום עולם", "")
 	lines := strings.Split(c, "\n")
-	if !strings.Contains(lines[0], "#21") || !strings.Contains(lines[0], "דני") {
-		t.Fatalf("first line must carry the draft number and recipient: %q", lines[0])
+	if strings.Contains(lines[0], "#") || !strings.Contains(lines[0], "דני") {
+		t.Fatalf("first line: recipient, no draft number: %q", lines[0])
 	}
-	if !strings.Contains(lines[1], "לחיצה ארוכה") || !strings.Contains(lines[1], "✅") {
-		t.Fatalf("second line must explain how to approve: %q", lines[1])
+	if lines[2] != "שלום עולם" {
+		t.Fatalf("the text to approve comes right after the title: %q", lines[2])
+	}
+	if !strings.Contains(lines[4], "לחיצה ארוכה") || !strings.Contains(lines[4], "✅") || !strings.Contains(lines[4], "❌") {
+		t.Fatalf("approval hint right after the text: %q", lines[4])
+	}
+	if !strings.HasPrefix(lines[len(lines)-1], "https://wa.me/") {
+		t.Fatalf("the link comes last: %q", lines[len(lines)-1])
 	}
 	if !strings.Contains(c, "https://wa.me/972500000009?text=%D7%A9%D7%9C%D7%95%D7%9D%20") {
 		t.Fatalf("missing wa.me link with %%20 spaces:\n%s", c)

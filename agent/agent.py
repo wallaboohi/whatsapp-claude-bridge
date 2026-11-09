@@ -2927,10 +2927,10 @@ def schedule_from_reply(chat, mid, content):
         if cancel:
             if not n:
                 return False  # nothing was scheduled: let Claude read it
-            reply(f"🕗 התזמון של טיוטה #{did} בוטל — הטיוטה עדיין ממתינה." if LANG == "he" else f"🕗 Schedule of draft #{did} cancelled — the draft is still pending.", quoted=mid)
+            reply("🕗 התזמון של הטיוטה בוטל — הטיוטה עדיין ממתינה." if LANG == "he" else f"🕗 Schedule of draft #{did} cancelled — the draft is still pending.", quoted=mid)
         else:
             day = "" if at.date() == dt.date.today() else (" מחר" if LANG == "he" else " tomorrow")
-            reply(f"🕗 טיוטה #{did} תישלח{day} ב-{at:%H:%M}" if LANG == "he" else f"🕗 Draft #{did} will be sent{day} at {at:%H:%M}", quoted=mid)
+            reply(f"🕗 הטיוטה תישלח{day} ב-{at:%H:%M}" if LANG == "he" else f"🕗 Draft #{did} will be sent{day} at {at:%H:%M}", quoted=mid)
         react(mid, "✅")
     finally:
         _ctx.chat = None
@@ -2950,14 +2950,19 @@ def scheduled_check():
         try:
             with mdb() as m:
                 st = (m.execute("SELECT status FROM drafts WHERE id = ?", (did,)).fetchone() or [""])[0]
+                try:  # owner 09.11: no draft numbers in messages, the recipient's name instead
+                    to = (m.execute("SELECT coalesce(name, '') FROM drafts WHERE id = ?", (did,)).fetchone() or [""])[0]
+                except sqlite3.Error:
+                    to = ""
+            to = f" ל{to}" if to else ""
             if st != "pending":
                 status = "skipped"
-                reply(f"🕗 טיוטה #{did} כבר לא ממתינה ({st or 'לא נמצאה'}) — לא נשלחה בתזמון." if LANG == "he" else f"🕗 Draft #{did} is no longer pending — not sent.")
+                reply(f"🕗 הטיוטה{to} כבר לא ממתינה ({st or 'לא נמצאה'}) — לא נשלחה בתזמון." if LANG == "he" else f"🕗 Draft #{did} is no longer pending — not sent.")
             else:
                 res = bridge("/draft_decide", {"id": int(did), "approve": True}, timeout=30)
                 status = "sent" if res.get("success", True) and not res.get("error") else "failed"
                 if status == "failed":
-                    reply(f"⚠️ השליחה המתוזמנת של טיוטה #{did} נכשלה: {res.get('error') or res}" if LANG == "he" else f"⚠️ Scheduled send of draft #{did} failed: {res}")
+                    reply(f"⚠️ השליחה המתוזמנת של הטיוטה{to} נכשלה: {res.get('error') or res}" if LANG == "he" else f"⚠️ Scheduled send of draft #{did} failed: {res}")
         except Exception as e:
             status = "failed"
             log("scheduled draft failed", did, e)
