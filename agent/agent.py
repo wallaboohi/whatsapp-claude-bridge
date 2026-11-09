@@ -47,9 +47,9 @@ OWNER = CFG.get("owner_name") or ("הבעלים" if LANG == "he" else "the owner
 # every text the agent itself writes to WhatsApp / Windows, in Hebrew and English
 T = {
     "he": {
-        "budget_stop": "🔒 *תקרת השימוש היומית ננעלה* (${spent:.2f} מתוך ${budget:.0f}).\nאיך עוקפים:\n• ! בתחילת ההודעה — הודעה אחת בלי תקרת שימוש\n• !!! בתחילת ההודעה — שעה שלמה בלי תקרת שימוש (🔓)\n• בלוח הבקרה ← הגדרות ← עלות — להעלות את תקרת השימוש (קבוע)\nבחצות תקרת השימוש מתאפסת לבד.",
+        "budget_stop": "🔒 *תקרת השימוש היומית ננעלה* ({spent} מתוך {budget}).\nאיך עוקפים:\n• ! בתחילת ההודעה — הודעה אחת בלי תקרת שימוש\n• !!! בתחילת ההודעה — שעה שלמה בלי תקרת שימוש (🔓)\n• בלוח הבקרה ← הגדרות ← עלות — להעלות את תקרת השימוש (קבוע)\nבחצות תקרת השימוש מתאפסת לבד.",
         "override_hour": "🔓 בלי תקרת שימוש עד {until}.",
-        "budget_warn": "⚠️ נוצלו ${spent:.2f} מתוך תקרת שימוש יומית של ${budget:.0f}. בהגעה לתקרת השימוש ננעל 🔒 — עקיפה: ! להודעה אחת, !!! לשעה.",
+        "budget_warn": "⚠️ נוצלו {spent} מתוך תקרת שימוש יומית של {budget}. בהגעה לתקרת השימוש ננעל 🔒 — עקיפה: ! להודעה אחת, !!! לשעה.",
         "working": "⏳ עובד על זה, זה לוקח קצת יותר זמן…",
         "failed": "לא הצלחתי לעבד את ההודעה, נסה שוב.",
         "voice": "(הודעה קולית, תמלול)",
@@ -66,9 +66,9 @@ T = {
                   "אם צריך להחזיר קובץ (אקסל, תמונה, PDF) — שמור אותו בתיקייה outbox והוא יישלח אחרי התשובה.",
     },
     "en": {
-        "budget_stop": "🔒 *Daily cost cap locked* (${spent:.2f} of ${budget:.0f}).\nTo bypass:\n• ! at the start — one message without the cap\n• !!! at the start — one hour without the cap (🔓)\n• Dashboard → Settings → Cost — raise the cap\nIt resets at midnight.",
+        "budget_stop": "🔒 *Daily cost cap locked* ({spent} of {budget}).\nTo bypass:\n• ! at the start — one message without the cap\n• !!! at the start — one hour without the cap (🔓)\n• Dashboard → Settings → Cost — raise the cap\nIt resets at midnight.",
         "override_hour": "🔓 No cost cap until {until}.",
-        "budget_warn": "⚠️ ${spent:.2f} used of the ${budget:.0f} daily cap.",
+        "budget_warn": "⚠️ {spent} used of the {budget} daily cap.",
         "working": "⏳ Working on it, this takes a bit longer…",
         "failed": "I couldn't process that message, please try again.",
         "voice": "(voice message, transcript)",
@@ -1393,7 +1393,9 @@ def restart_usage():
         tot, tcap = spent_today(), total_budget()
         u = claude_usage() or {}
         pct = lambda k: f"{(u.get(k) or {}).get('utilization'):.0f}%" if (u.get(k) or {}).get("utilization") is not None else "—"
-        return (f"💰 מגבלת הגשר: ${tot:.2f} מתוך ${tcap:.0f} ({_pct(tot, tcap)})\n"
+        line = (f"💰 שימוש הגשר היום: {money(tot)} · ללא תקרה (ייחוס: התקרה הקודמת {money(tcap, 0)}, {_pct(tot, tcap)})"
+                if CFG.get("unlimited_all") else f"💰 מגבלת הגשר: {money(tot)} מתוך {money(tcap, 0)} ({_pct(tot, tcap)})")
+        return (line + "\n"
                 f"☁️ מגבלת Claude · {claude_account()}: 5 שעות {pct('five_hour')} · שבועית {pct('seven_day')} · חודשית —")
     except Exception as e:
         log("restart usage failed", e)
@@ -1432,7 +1434,11 @@ def usage_report(chat):
     if lu:
         out.append(f"• 🔒 המגבלה הגיעה — ההודעות נשמרות ויטופלו ב-{lu:%H:%M}.")
     tot, tcap = spent_today(), total_budget()
-    out += ["", "*💰 מגבלת הגשר* (פנימית, מתאפסת בחצות):", f"• כל הגשר: ${tot:.2f} מתוך ${tcap:.0f} ({_pct(tot, tcap)})"]
+    if CFG.get("unlimited_all"):
+        out += ["", "*💰 שימוש הגשר היום* (ללא תקרה בכל הגשר; הייחוס = התקרה הקודמת):",
+                f"• כל הגשר: {money(tot)} · ייחוס {money(tcap, 0)} ({_pct(tot, tcap)})"]
+    else:
+        out += ["", "*💰 מגבלת הגשר* (פנימית, מתאפסת בחצות):", f"• כל הגשר: {money(tot)} מתוך {money(tcap, 0)} ({_pct(tot, tcap)})"]
     for jid, g in load_groups().items():
         spent = spent_today(jid)
         if jid == LOCAL and not spent:
@@ -1445,18 +1451,32 @@ def usage_report(chat):
         name = (r[0] if r and r[0] else "") or g.get("name") or jid
         here = " ← השיחה הזו" if jid == (chat or PRIMARY) else ""
         if unlimited(jid):
-            out.append(f"• {name}: ${spent:.2f} · ללא מגבלה{here}")
+            out.append(f"• {name}: {money(spent)} · ללא מגבלה{here}")
         else:
             cap = budget_for(jid)
-            out.append(f"• {name}: ${spent:.2f} מתוך ${cap:.0f} ({_pct(spent, cap)}){' 🔒' if spent >= cap else ''}{here}")
+            out.append(f"• {name}: {money(spent)} מתוך {money(cap, 0)} ({_pct(spent, cap)}){' 🔒' if spent >= cap else ''}{here}")
     out += ["", "_עקיפת מגבלת הגשר: ! להודעה אחת, !!! לשעה. שינוי הסכומים: בלוח ← ⚙️ הגדרות ← עלות._",
-            "_הדולרים הם הערכה של Claude Code לפי מחירון ה-API. במנוי Pro לא משלמים לפיהם; מה שמגביל בפועל הוא האחוזים של Claude._"]
+            f"_הסכומים הם הערכה של Claude Code לפי מחירון ה-API, בשקלים לפי שער {usd_ils():.2f} (הגדרה usd_ils). "
+            "במנוי לא משלמים לפיהם; מה שמגביל בפועל הוא האחוזים של Claude._"]
     return "\n".join(out)
 
 
 def unlimited(chat):
+    """Owner 09.11 21:50: no usage cap anywhere in the bridge (config "unlimited_all"); per-conversation "unlimited" still works."""
+    if CFG.get("unlimited_all"):
+        return True
     g = load_groups().get(chat or PRIMARY) or {}
     return bool(g.get("unlimited"))
+
+
+def usd_ils():
+    return float(CFG.get("usd_ils") or 3.1)
+
+
+def money(usd, digits=2):
+    """Owner 09.11 21:50: amounts in shekels (Hebrew), converted at config "usd_ils"; English keeps dollars."""
+    v = float(usd or 0)
+    return f"₪{v * usd_ils():.{digits}f}" if LANG == "he" else f"${v:.{digits}f}"
 
 
 def over_budget(chat, text=""):
@@ -2079,7 +2099,7 @@ def run_command(row):
         stop = over_budget(chat, text)
         if stop:
             kind, spent, cap = stop
-            msg = T["budget_stop"].format(spent=spent, budget=cap)
+            msg = T["budget_stop"].format(spent=money(spent), budget=money(cap, 0))
             if kind == "total":
                 msg = ("(תקרת שימוש כוללת לכל השיחות) " if LANG == "he" else "(total cap, all conversations) ") + msg
             # keep the command: it runs by itself when the cap allows again (midnight, a raised cap) — owner request 08.11
@@ -2095,8 +2115,8 @@ def run_command(row):
         budget, spent = budget_for(chat), spent_today(chat)
         if not unlimited(chat) and spent >= budget * 0.8 and kv_get(K("budget_warned", chat)) != dt.date.today().isoformat():
             kv_set(K("budget_warned", chat), dt.date.today().isoformat())
-            reply(T["budget_warn"].format(spent=spent, budget=budget))
-            push(f"📊 מגבלת הגשר בשיחה הזו הגיעה ל-80% (${spent:.2f} מתוך ${budget:.0f})", chat, "usage")
+            reply(T["budget_warn"].format(spent=money(spent), budget=money(budget, 0)))
+            push(f"📊 מגבלת הגשר בשיחה הזו הגיעה ל-80% ({money(spent)} מתוך {money(budget, 0)})", chat, "usage")
         gname = g.get("name") or ""
         if chat == PRIMARY and src == "wa":
             where, dest = ("בקבוצת הבקרה בווצאפ", "לקבוצה") if LANG == "he" else ("in the WhatsApp control group", "to the group")

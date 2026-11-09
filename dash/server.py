@@ -616,7 +616,7 @@ def data(chat=None):
         "agent": {"heartbeat": kv("heartbeat"), "session_started": kv("session_started"), "backup_done": kv("backup_done"),
                   "events_connected": kv("events_connected"), "plugins": [os.path.basename(x) for x in c.get("plugins", [])],
                   "pending": (rows(p["agent"], "SELECT count(*) n FROM commands WHERE status IN ('pending','running')") or [{"n": 0}])[0]["n"],
-                  "budget": c.get("daily_budget_usd", 5), "spent_today": round(spent[0]["s"], 2) if spent else 0,
+                  "budget": c.get("daily_budget_usd", 5), "spent_today": round(spent[0]["s"], 2) if spent else 0, "usd_ils": float(c.get("usd_ils") or 3.1),
                   "heartbeat_age": None},
         "chat": group, "groups": glist, "rules": rules_of(group),
         "presence": {"pc_last": str(pc_last).replace("T", " ") if pc_last else None, "phone_last": str(phone_last)[:19] if phone_last else None},
