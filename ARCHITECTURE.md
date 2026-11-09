@@ -25,7 +25,7 @@
 | **הסוכן** | Python · `agent/agent.py` | מאזין לקבוצת הבקרה, מריץ Claude Code על כל הודעה, מתמלל קוליות, תזכורות, גיבוי, מארח את הלוח על 8770 | `run-agent.cmd` (לולאה, 15 שנ'), משימה "WhatsApp agent" |
 | **לוח הבקרה** | `dash/` — `server.py` (HTTP) + `static/` (HTML/JS/CSS) | מצב, שיחה, טיוטות, עלות, מודל, תצוגה, עדכונים/שחרור | בתוך הסוכן (http://127.0.0.1:8770) **וגם** כאפליקציה `WhatsAppDash.exe` (pywebview, פורט חופשי, קבצי static ארוזים בתוך ה-exe) |
 | **שרת MCP** | Python · `whatsapp-mcp-server/` | כלים ל-Claude Code אינטראקטיבי: חיפוש, קריאה, שליחה (דרך הגשר), תמלולים, סקרים, טיוטות | נטען ע"י תוסף Claude Code (`.claude-plugin/`, סקיל `skills/whatsapp`) |
-| **כלים** | `tools/` | `wa_send.py` (שליחה + יומן), `wa_admin.py` (קריאה לכל endpoint מקובץ UTF-8), `wa_remind.py` (תזכורות), `ocr.ps1` (Tesseract עב+אנג / OCR ווינדוס), `selftest.py` (21 בדיקות חיות), `setup.py` (אשף התקנה), `update.py` (עדכון עם חזרה), `release.py` (שחרור), `migrate_lid.py` | ידני / ע"י Claude |
+| **כלים** | `tools/` | `wa_send.py` (שליחה + יומן), `wa_admin.py` (קריאה לכל endpoint מקובץ UTF-8), `wa_remind.py` (תזכורות), `wa_push.py` (התראת פוש לטלפון), `ocr.ps1` (Tesseract עב+אנג / OCR ווינדוס), `selftest.py` (21 בדיקות חיות), `setup.py` (אשף התקנה), `update.py` (עדכון עם חזרה), `release.py` (שחרור), `migrate_lid.py` | ידני / ע"י Claude |
 
 ## 2. הגשר (Go)
 
@@ -79,6 +79,7 @@
 עדכון אוטומטי לילי (`auto_update_time` 23:50): אם יש גרסה חדשה — הודעה, `tools/update.py` מנותק (עוצר, מעדכן, מפעיל מחדש גשר+סוכן, בדיקה, חזרה אחורה בכשל); הסוכן החדש מדווח את התוצאה. במחשב מפתח (ענף) — fast-forward בלבד.
 **סשן:** `fresh_sessions:false` = רציף (`kv session_id`), מתחלף בחצות או אחרי `session_max_runs` (60) בעבודה שאינה פיתוח (`is_dev_work`), עם `write_handoff`.
 **עלות:** `claude_runs.cost` = עלות הריצה בלבד; `cum` = המצטבר ש-Claude מדווח בסשן רציף (`run_cost`).
+**התראות פוש (09.11):** הגשר מדבר בשם הבעלים, ולכן הודעות שלו לא מצלצלות. אירוע ווצאפ כן: הטלפון מתריע בשעת ההתחלה. `push()` → `push_queue` (agent.db) → `push_loop` שולח אירוע שמתחיל 5 שנ' אחר כך, בקבוצה של השיחה, אחרי שהתשובה יצאה; התראות בתוך 20 שנ' מאוחדות; שעות שקט `push_quiet` (23–07, חוץ מ-fault). מקורות: `tools/wa_push.py` (Claude בכל שיחה), סיום משימה מעל `push_long_minutes`, תקלות, אנשים מחכים `push_wait_hours` + שיחה שלא נענתה מ-`push_important` (פעם אחת לכל חשבון ווצאפ; מחשב שותף לוקח כשהמוביל לא זמין, `/brief.account`), תזכורת בזמנה, מגבלת שימוש 80%. לא על טיוטות. כיבוי: `push_alerts:false`.
 **תוספים:** `config.plugins` — קבצי Python עם hooks (למשל קליטת טפסים), נטענים ב-`load_plugins`.
 
 ## 4. נתונים
