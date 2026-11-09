@@ -2629,8 +2629,8 @@ def peer_watch():
                     except ValueError:
                         state = {}
                     brief = peer_fetch(peer)
-                    if brief and brief.get("account"):
-                        kv_set(f"peer_account:{name}", str(brief["account"]))
+                    if brief and brief.get("wa_account"):  # its WhatsApp number ("account" in /brief is the Claude account)
+                        kv_set(f"peer_account:{name}", str(brief["wa_account"]))
                     state, msgs = peer_watch_step(state, brief, dt.datetime.now(), CFG, name)
                     kv_set(key, json.dumps(state, ensure_ascii=False))
                     for m in msgs:
