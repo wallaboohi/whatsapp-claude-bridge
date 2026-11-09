@@ -1105,3 +1105,17 @@ def test_reaction_counts_as_an_answer(agent):
     mod.note_reaction("972500000009@s.whatsapp.net", "W1", "")
     _, waiting = mod.summary_extract(now - mod.dt.timedelta(days=1), now)
     assert len(waiting) == 1, "a removed reaction is not an answer"
+
+
+def test_wheel_on_someone_elses_message_reads_it_in_that_chat(agent, monkeypatch):
+    mod, db = agent
+    sent, made = [], []
+    monkeypatch.setattr(mod, "tts_ogg", lambda text, path, **k: made.append(text) or path)
+    monkeypatch.setattr(mod, "send", lambda chat, text, media=None, quoted=None, read_aloud_of=None: sent.append((chat, quoted, read_aloud_of)))
+    add(db, "T1", "2026-11-09 17:00:00+02:00", "אני מאחר בעשר דקות", chat="972500000009@s.whatsapp.net")
+    mod.read_other("972500000009@s.whatsapp.net", "T1")
+    assert made == ["אני מאחר בעשר דקות"] and sent == [("972500000009@s.whatsapp.net", "T1", "T1")]
+    db.execute("INSERT INTO messages VALUES ('I1', '972500000009@s.whatsapp.net', 'x', '', '2026-11-09 17:01:00+02:00', 0, 'image', '')")
+    db.commit()
+    mod.read_other("972500000009@s.whatsapp.net", "I1")
+    assert len(sent) == 1, "an image: nothing"

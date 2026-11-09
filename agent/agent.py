@@ -229,9 +229,12 @@ def bridge(path, body=None, timeout=180, tok=None):
             return {"success": False, "message": f"HTTP {e.code}"}
 
 
-def send(recipient, text, media=None, quoted=None):
-    """Send through the bridge (send policy + pacing apply there). Never retried: a retry could double-send."""
+def send(recipient, text, media=None, quoted=None, read_aloud_of=None):
+    """Send through the bridge (send policy + pacing apply there). Never retried: a retry could double-send.
+    read_aloud_of = the message the owner reacted 🛞 on: the bridge lets that one voice note skip the draft."""
     body = {"recipient": recipient, "message": text}
+    if read_aloud_of:
+        body["read_aloud_of"] = read_aloud_of
     if media:
         body["media_path"] = media
     if quoted:
@@ -2257,6 +2260,45 @@ def read_aloud(chat, mid=None):
         log("read_aloud failed", e)
 
 
+def read_other(chat, mid, wait=90):
+    """Owner 09.11 17:25: 🛞 on someone else's message in any chat → a voice note (the bot's voice) reading it, sent into
+    that same chat quoting it, without a draft (the bridge allows exactly that one voice note, see readaloud.go). Text is
+    read as written; a voice note is read from its transcript; images and anything else: nothing. One PC per account
+    sends it (watches_people), so two bridges on the same number never send it twice."""
+    try:
+        with mdb() as db:
+            r = db.execute("SELECT content, is_from_me, media_type FROM messages WHERE id = ? AND chat_jid = ?", (mid, chat)).fetchone()
+    except sqlite3.Error as e:
+        log("read_other db", e)
+        return
+    if not r or r[1]:
+        return
+    content, _, mtype = r
+    if mtype in ("audio", "ptt", "voice"):
+        text, deadline = "", time.time() + wait
+        while True:  # voice notes are transcribed as they arrive; a fresh one may still be in progress
+            with adb() as db:
+                t = db.execute("SELECT text FROM transcripts WHERE id = ? ORDER BY rowid DESC LIMIT 1", (mid,)).fetchone()
+            text = (t[0] if t else "") or ""
+            if text.strip() or time.time() > deadline:
+                break
+            time.sleep(5)
+    elif mtype:
+        return  # image / video / document / sticker: unchanged (owner 09.11)
+    else:
+        text = content or ""
+    t = tts_clean(text)
+    if len(t) < 2:
+        log("read_other: nothing to read", chat, mid)
+        return
+    try:
+        os.makedirs(VOICE_DIR, exist_ok=True)
+        path = tts_ogg(t, os.path.join(VOICE_DIR, f"read_{int(time.time() * 1000)}.ogg"))
+        send(chat, "", media=path, quoted=mid, read_aloud_of=mid)
+    except Exception as e:
+        log("read_other failed", e)
+
+
 def read_text(chat, text):
     """A voice note of `text` in this chat (🛞 modes) — independent of the voice_replies setting."""
     t = tts_clean(text)
@@ -3120,6 +3162,8 @@ def event_listener():
                                 note_reaction(cj, ev.get("message_id", ""), ev.get("emoji", ""))
                                 if ev.get("emoji") == READ_ALOUD and (cj == PRIMARY or cj in load_groups()):
                                     work.put(lambda cj=cj, m=ev.get("message_id"): read_aloud(cj, m))
+                                elif ev.get("emoji") == READ_ALOUD and cj and CFG.get("read_aloud_others", True) and watches_people():
+                                    work.put(lambda cj=cj, m=ev.get("message_id"): read_other(cj, m))
                             except Exception as e:
                                 log("reaction event", e)
         except Exception:

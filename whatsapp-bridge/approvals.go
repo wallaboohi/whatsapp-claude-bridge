@@ -23,7 +23,11 @@ func handleReaction(client *whatsmeow.Client, msg *events.Message) bool {
 	if !msg.Info.IsFromMe || globalStore == nil { // only the owner's own reactions count
 		return true
 	}
-	publish(map[string]any{"type": "reaction", "chat_jid": normalizeChat(client, msg.Info.Chat).String(),
+	chatJID := normalizeChat(client, msg.Info.Chat).String()
+	if r.GetText() == readAloudEmoji && !r.GetKey().GetFromMe() {
+		grantReadAloud(chatJID, r.GetKey().GetID()) // one voice note into this chat may skip the draft (readaloud.go)
+	}
+	publish(map[string]any{"type": "reaction", "chat_jid": chatJID,
 		"message_id": r.GetKey().GetID(), "emoji": r.GetText()})
 	policyMu.Lock()
 	control := loadPolicy().ControlGroup

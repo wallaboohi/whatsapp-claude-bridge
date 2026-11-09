@@ -35,6 +35,8 @@ type SendMessageRequest struct {
 	Message   string `json:"message"`
 	MediaPath string `json:"media_path,omitempty"`
 	QuotedID  string `json:"quoted_id,omitempty"` // optional: reply quoting this message (same chat)
+	// optional: the message the owner reacted 🛞 on — a voice note reading it may skip the draft once (readaloud.go)
+	ReadAloudOf string `json:"read_aloud_of,omitempty"`
 }
 
 // Function to send a WhatsApp message

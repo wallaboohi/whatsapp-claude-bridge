@@ -64,7 +64,13 @@ func registerAllAPI(client *whatsmeow.Client, messageStore *MessageStore) {
 		fmt.Println("Received request to send message", req.Message, req.MediaPath)
 
 		// Send the message
-		success, message := sendWhatsAppMessageQuoted(client, req.Recipient, req.Message, req.MediaPath, req.QuotedID)
+		var success bool
+		var message string
+		if req.ReadAloudOf != "" && consumeReadAloud(req.Recipient, req.ReadAloudOf, req.Message, req.MediaPath) {
+			success, message = sendCore(client, req.Recipient, req.Message, req.MediaPath, req.QuotedID, true)
+		} else {
+			success, message = sendWhatsAppMessageQuoted(client, req.Recipient, req.Message, req.MediaPath, req.QuotedID)
+		}
 		fmt.Println("Message sent", success, message)
 		// Set response headers
 		w.Header().Set("Content-Type", "application/json")
