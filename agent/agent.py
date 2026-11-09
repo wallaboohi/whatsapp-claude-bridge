@@ -143,6 +143,8 @@ def _create_schema(db):
         CREATE TABLE IF NOT EXISTS local_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, chat TEXT, at TEXT, role TEXT, text TEXT, files TEXT);
         CREATE TABLE IF NOT EXISTS scheduled_drafts (id INTEGER PRIMARY KEY AUTOINCREMENT, draft_id INTEGER, send_at TEXT,
             status TEXT DEFAULT 'scheduled', chat TEXT, created TEXT, done TEXT);
+        CREATE TABLE IF NOT EXISTS push_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT, chat TEXT, kind TEXT, text TEXT,
+            status TEXT DEFAULT 'pending', sent TEXT, result TEXT);
     """)
 
 
@@ -553,6 +555,8 @@ def auto_release():
                               timeout=timeout, creationflags=NO_WINDOW)
 
     def say(t):
+        if not t.startswith("🚀"):
+            push("⏸️ השחרור הלילי לא בוצע (הפרטים בקבוצה)", PRIMARY, "fault")
         _ctx.chat = PRIMARY
         try:
             reply(t)
@@ -2097,6 +2101,12 @@ def run_command(row):
                     if LANG == "he" else "\n\n💡 For deep analysis start the message with !! (strongest model for one message).")
         reply(out, quoted=mid if (CFG.get("quote_replies", True) and src == "wa") else None)
         send_outbox(started)
+        if answer and not stopped and time.time() - started >= float(CFG.get("push_long_minutes", 5)) * 60:
+            with adb() as db:  # Claude may already have queued its own push (a question waiting for the owner)
+                own = db.execute("SELECT 1 FROM push_queue WHERE created >= ? AND (chat IS NULL OR chat = ?)",
+                                 (dt.datetime.fromtimestamp(started).isoformat(timespec="seconds"), chat)).fetchone()
+            if not own:
+                push(f"✅ סיימתי: {' '.join(raw_text(text.lstrip('!')).split())[:60]}", chat, "done")
         if answer and not stopped and src == "wa" and not pc_only():
             if kv_get(K("read_all", chat)):  # /🛞 mode: every answer is also read aloud
                 read_text(chat, out)
@@ -2592,6 +2602,8 @@ def peer_watch():
                     state, msgs = peer_watch_step(state, peer_fetch(peer), dt.datetime.now(), CFG, name)
                     kv_set(key, json.dumps(state, ensure_ascii=False))
                     for m in msgs:
+                        if m.startswith("⚠️"):
+                            push(m.split(" — ")[0].split(". ")[0].split(" (")[0], PRIMARY, "fault")
                         _ctx.chat = PRIMARY
                         try:
                             reply(m)
@@ -3242,6 +3254,167 @@ def watchdog():
         time.sleep(60)
 
 
+# ---------- phone push alerts (owner 09.11) ----------
+# The bridge talks as the owner, so its messages never ring his phone. A WhatsApp *event* does: at its start time the phone
+# itself shows a reminder notification. push() queues a short text; push_loop() posts it as an event that starts a few
+# seconds later in the conversation's own group. Approved uses: a decision waiting (question before acting, a draft
+# waiting for ✅), a long task finished, faults (other PC down, its bridge off, Claude sign-in, nightly release postponed),
+# people waiting for him (hours without an answer, a missed call from someone important), deadlines (a day and an hour
+# before, and on time). Not for Claude / bridge usage limits. Config: push_alerts (on), push_long_minutes (5),
+# push_wait_hours (3), push_important (names / phones for missed calls).
+
+def push_on():
+    return bool(CFG.get("push_alerts", True))
+
+
+def push(text, chat=None, kind=""):
+    """Queue one phone notification (short, clean text). chat None = the conversation Claude is answering now, else the
+    primary control group."""
+    text = re.sub(r"[*_~`]", "", " ".join(str(text or "").split()))[:90].strip()
+    if not text or not push_on():
+        return
+    with adb() as db:
+        db.execute("INSERT INTO push_queue (created, chat, kind, text) VALUES (?, ?, ?, ?)",
+                   (dt.datetime.now().isoformat(timespec="seconds"), chat, kind, text))
+
+
+def _running_chats():
+    with adb() as db:
+        return {r[0] or PRIMARY for r in db.execute("SELECT chat_jid FROM commands WHERE status = 'running'")}
+
+
+def push_send_due():
+    """Post queued pushes. Waits while that conversation's command still runs, so the notification comes after the answer.
+    A row without a chat (queued by Claude's tools/wa_push.py) belongs to the conversation running right now."""
+    with adb() as db:
+        rows = db.execute("SELECT id, chat, text FROM push_queue WHERE status = 'pending' ORDER BY id").fetchall()
+    if not rows:
+        return
+    running = _running_chats()
+    for pid, chat, text in rows:
+        if not chat:
+            chat = next(iter(running), PRIMARY) if len(running) == 1 else PRIMARY
+            with adb() as db:
+                db.execute("UPDATE push_queue SET chat = ? WHERE id = ?", (chat, pid))
+        if chat == LOCAL:
+            chat = PRIMARY
+        if chat in running:
+            continue
+        res = bridge("/send_rich", {"jid": chat, "kind": "event", "name": text, "start": int(time.time()) + 5}, timeout=60)
+        ok = bool(res.get("id")) and not res.get("error")
+        with adb() as db:
+            db.execute("UPDATE push_queue SET status = ?, sent = ?, result = ? WHERE id = ?",
+                       ("sent" if ok else "failed", dt.datetime.now().isoformat(timespec="seconds"), json.dumps(res, ensure_ascii=False)[:300], pid))
+        if not ok:
+            log("push failed", chat, text, res)
+
+
+def push_watch_drafts():
+    """A new draft waiting for the owner's ✅ -> one push."""
+    last = kv_get("push_draft_seen") or ""
+    try:
+        with mdb() as m:
+            rows = m.execute("SELECT created, coalesce(name, recipient) FROM drafts WHERE status = 'pending' AND created > ? ORDER BY created",
+                             (last,)).fetchall()
+    except sqlite3.Error:
+        return
+    if not last:  # first run: start from now, no burst for old drafts
+        if rows:
+            kv_set("push_draft_seen", str(rows[-1][0]))
+        else:
+            kv_set("push_draft_seen", dt.datetime.now().astimezone().isoformat())
+        return
+    for created, name in rows:
+        push(f"📝 טיוטה ל{name} מחכה לאישור ✅", PRIMARY, "draft")
+        kv_set("push_draft_seen", str(created))
+
+
+def push_watch_waiting(now=None):
+    """Private chats whose last message is from the other person and has waited push_wait_hours (once per message);
+    missed calls from push_important people."""
+    now = now or dt.datetime.now().astimezone()
+    hours = float(CFG.get("push_wait_hours", 3))
+    lo, hi = now - dt.timedelta(hours=hours + 3), now - dt.timedelta(hours=hours)
+    names = _contact_names()
+    prefix = CFG["reply_prefix"].strip()
+    try:
+        with mdb() as m:
+            last = m.execute("SELECT chat_jid, max(datetime(timestamp)) FROM messages WHERE chat_jid LIKE '%@s.whatsapp.net' "
+                             "AND datetime(timestamp) >= datetime(?) GROUP BY chat_jid", (lo.isoformat(sep=" ", timespec="seconds"),)).fetchall()
+            waiting = []
+            for cj, ts in last:
+                r = m.execute("SELECT is_from_me, content, media_type FROM messages WHERE chat_jid = ? AND datetime(timestamp) = ? LIMIT 1",
+                              (cj, ts)).fetchone()
+                if r and not r[0] and not (r[1] or "").startswith(prefix) and ts <= hi.astimezone(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S"):
+                    waiting.append((cj, ts))
+            calls = m.execute("SELECT call_id, caller, min(at) FROM calls c WHERE event = 'offer' AND at >= ? AND NOT EXISTS "
+                              "(SELECT 1 FROM calls a WHERE a.call_id = c.call_id AND a.event = 'accept') GROUP BY call_id",
+                              ((now - dt.timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S"),)).fetchall()
+    except sqlite3.Error:
+        return
+    own = set(control_chats())
+    first = not kv_get("push_wait_init")  # first run after install: no burst for chats that were already waiting
+    kv_set("push_wait_init", "1")
+    for cj, ts in waiting:
+        key = f"push_wait:{cj}:{ts}"
+        if cj in own or kv_get(key):
+            continue
+        kv_set(key, "1")
+        if first:
+            continue
+        who = names.get(cj.split("@")[0]) or cj.split("@")[0]
+        push(f"⌛ {who} מחכה לתשובה ממך כבר {int(hours)} שעות", PRIMARY, "waiting")
+    important = [str(x).strip() for x in CFG.get("push_important") or [] if str(x).strip()]
+    for call_id, caller, at in calls:
+        key = f"push_call:{call_id}"
+        num = str(caller).split("@")[0]
+        who = names.get(num) or num
+        if kv_get(key) or not any(x in (num, who) or (x.isdigit() and num.endswith(x[-9:])) or (not x.isdigit() and x in who) for x in important):
+            continue
+        kv_set(key, "1")
+        push(f"📞 שיחה שלא נענתה מ{who}", PRIMARY, "call")
+
+
+def push_watch_deadlines(now=None):
+    """Reminders set well ahead get a push a day before and an hour before (the reminder itself pushes on time)."""
+    now = now or dt.datetime.now().astimezone()
+    with adb() as db:
+        rows = db.execute("SELECT id, text, due, created FROM reminders WHERE status = 'active' AND kind = 'time'").fetchall()
+    for rid, text, due, created in rows:
+        try:
+            d = dt.datetime.fromisoformat(due)
+            c = dt.datetime.fromisoformat(created) if created else now
+            d, c = (x if x.tzinfo else x.astimezone() for x in (d, c))
+        except (TypeError, ValueError):
+            continue
+        for ahead, label in ((dt.timedelta(days=1), "מחר"), (dt.timedelta(hours=1), "בעוד שעה")):
+            key = f"push_pre:{rid}:{int(ahead.total_seconds())}"
+            if d - c > ahead * 1.1 and d - ahead <= now < d and not kv_get(key):
+                kv_set(key, "1")
+                push(f"⏰ {label} ({d:%H:%M}): {text}", PRIMARY, "deadline")
+
+
+def push_loop():
+    time.sleep(30)
+    n = 0
+    while True:
+        try:
+            if push_on():
+                push_send_due()
+                if n % 6 == 0:  # every minute
+                    push_watch_drafts()
+                    push_watch_deadlines()
+                # both PCs are linked to the same WhatsApp account: people waiting are watched by one machine only
+                # (config push_people; default = the machine that does the nightly release)
+                if n % 60 == 0 and CFG.get("push_people", bool(CFG.get("auto_release"))):  # every 10 minutes
+                    push_watch_waiting()
+        except Exception:
+            log("push_loop error", traceback.format_exc())
+        n += 1
+        time.sleep(10)
+
+
+
 def reminders_check():
     """Fires due reminders into the control group (owner only). kind 'time': a plain reminder.
     kind 'noreply': fires only if nobody wrote in that chat since ref_ts (otherwise it is closed quietly)."""
@@ -3270,6 +3443,7 @@ def reminders_check():
                 continue
         head = "⏰ תזכורת" if LANG == "he" else "⏰ Reminder"
         reply(f"{head} #{rid}{late}: {text}")
+        push(f"⏰ {text}", PRIMARY, "deadline")
         with adb() as db:
             db.execute("UPDATE reminders SET status='done', fired=? WHERE id=?", (now.isoformat(timespec="seconds"), rid))
 
@@ -3285,6 +3459,7 @@ def signin_check():
     except ValueError:
         return
     if days <= 3:
+        push("⚠️ צריך להתחבר מחדש ל-Claude במחשב (claude auth login)", PRIMARY, "fault")
         _ctx.chat = PRIMARY
         try:
             reply(f"⚠️ ההתחברות של Claude במחשב פגה בין {a} ל-{b} — הרץ במחשב: claude auth login" if LANG == "he"
@@ -3513,7 +3688,7 @@ if __name__ == "__main__":
             kv_set("transcribe_off_since", dt.datetime.now().isoformat(timespec="seconds"))
     except Exception as e:
         log("transcribe_off_since", e)
-    for target in [worker, slow_worker, command_worker, scheduler, event_listener, watchdog, tunnel_keeper, peer_watch, local_health_watch] + _threads:
+    for target in [worker, slow_worker, command_worker, scheduler, event_listener, watchdog, tunnel_keeper, peer_watch, local_health_watch, push_loop] + _threads:
         threading.Thread(target=target, daemon=True).start()
     sys.path.insert(0, ROOT)
     from dash import server as dash_server  # control panel, also on http://127.0.0.1:8770

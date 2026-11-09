@@ -43,6 +43,11 @@
   "peer_watch": true,
   "peer_alert_minutes": 10,
   "peer_offline_minutes": 30,
+  "push_alerts": true,
+  "push_long_minutes": 5,
+  "push_wait_hours": 3,
+  "push_important": [],
+  "push_people": false,
   "peer_backup": true,
   "peer_backup_max_mb": 2048
 }
