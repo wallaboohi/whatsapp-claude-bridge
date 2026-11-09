@@ -125,6 +125,13 @@ def conversations():
         if jid not in out and jid != LOCAL and v.get("enabled", True):
             out[jid] = dict(v)
     out[LOCAL] = {"name": "שיחה מקומית", "purpose": "local", **(raw.get(LOCAL) or {})}
+    try:  # one source for names (owner request 09.11): the name WhatsApp shows now, as the bridge keeps it in chats
+        live = {r["jid"]: r["name"] for r in rows(paths()["msg"], "SELECT jid, name FROM chats WHERE jid LIKE '%@g.us'") if (r["name"] or "").strip()}
+    except Exception:
+        live = {}
+    for jid, v in out.items():
+        if jid != LOCAL and live.get(jid):
+            v["name"] = live[jid]
     return out
 
 

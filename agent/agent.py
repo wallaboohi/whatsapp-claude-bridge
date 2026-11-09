@@ -627,6 +627,49 @@ PRIMARY = CFG["claude_group"]
 LOCAL = "local"
 _ctx = threading.local()  # the conversation the command worker is answering right now (chat, src, sync)
 _groups_last = None  # last groups.json that parsed (used if the file is caught mid-write)
+_live_cache = [0.0, {}]
+
+
+def live_names():
+    """jid -> the group's name as WhatsApp shows it now. Single source of truth for conversation names (owner request
+    09.11): the bridge keeps chats.name in sync with WhatsApp (rename events + daily group_check); everything else reads
+    it from here. Cached 15 s."""
+    if time.time() - _live_cache[0] < 15:
+        return _live_cache[1]
+    out = {}
+    try:
+        db = mdb()
+        try:
+            out = {j: (n or "").strip() for j, n in db.execute("SELECT jid, name FROM chats WHERE jid LIKE '%@g.us'") if (n or "").strip()}
+        finally:
+            db.close()
+    except sqlite3.Error:
+        out = _live_cache[1]
+    _live_cache[0], _live_cache[1] = time.time(), out
+    return out
+
+
+def chat_title(chat):
+    """The conversation's display name: the live WhatsApp name, else groups.json, else the id."""
+    if chat == LOCAL:
+        return (load_groups().get(LOCAL) or {}).get("name") or "שיחה מקומית"
+    return live_names().get(chat) or (load_groups().get(chat) or {}).get("name") or str(chat)
+
+
+def sync_names_file():
+    """Keep groups.json "name" equal to the live WhatsApp name, so the dashboard, files and both PCs show one name."""
+    try:
+        with open(GROUPS_FILE, encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, ValueError):
+        return
+    live, changed = live_names(), False
+    for jid, v in raw.items():
+        if jid != LOCAL and isinstance(v, dict) and live.get(jid) and v.get("name") != live[jid]:
+            log("groups.json name follows WhatsApp:", jid, v.get("name"), "->", live[jid])
+            v["name"], changed = live[jid], True
+    if changed:
+        write_json(GROUPS_FILE, raw)
 
 
 def load_groups():
@@ -647,6 +690,10 @@ def load_groups():
         if jid not in g and jid != LOCAL and v.get("enabled", True):
             g[jid] = dict(v)
     g[LOCAL] = {"name": "שיחה מקומית", "purpose": "local", **(raw.get(LOCAL) or {})}
+    live = live_names()
+    for jid, v in g.items():  # the name always comes from WhatsApp (one source for every place that shows it)
+        if jid != LOCAL and live.get(jid):
+            v["name"] = live[jid]
     return g
 
 
@@ -1482,6 +1529,22 @@ def group_name_template(chat):
     return tpl
 
 
+_MODEL_WORDS = {"קלאוד", "{model}", *MODEL_HE.values()}
+
+
+def name_core(name):
+    """A group name without its model word(s) and separators — equal cores = the same name, only the model differs."""
+    return " ".join(w for w in name.replace("·", " ").split() if w not in _MODEL_WORDS)
+
+
+def template_after_first_word(name):
+    """Owner rule 09.11: whatever name he gives, the model is written right after its first word ("גשר ויוי" → "גשר {model} ויוי")."""
+    words = [w for w in name.replace("·", " ").split() if w not in _MODEL_WORDS]
+    if not words:
+        return ""
+    return " ".join([words[0], "{model}", *words[1:]])
+
+
 def sync_group_name(chat, model):
     """Owner request 08.11: every connected WhatsApp group shows the model that talks in it ("גשר אופוס ווצאפ").
     Called when a run starts (auto = the model actually working) and every minute (a model chosen in WhatsApp or the
@@ -1495,6 +1558,14 @@ def sync_group_name(chat, model):
             tpl = group_name_template(chat)
             if not tpl:
                 return
+            live = live_names().get(chat) or ""
+            if live and name_core(live) != name_core(tpl):  # the owner renamed the group in WhatsApp: learn the new name
+                new = template_after_first_word(live)
+                if new:
+                    log("group renamed by owner:", chat, repr(live), "template", repr(tpl), "->", repr(new))
+                    tpl = new
+                    kv_set(K("name_tpl", chat), tpl)
+                    kv_set(K("name_set_at", chat), "0")
             want = tpl.replace("{model}", model_he(model))[:100]
             if kv_get(K("name_set", chat)) == want:
                 return
@@ -1514,6 +1585,10 @@ def sync_group_name(chat, model):
 
 def sync_all_group_names():
     """Every minute: the name follows the forced model (WhatsApp /מודל or dashboard) or, in auto, the last model that worked."""
+    try:
+        sync_names_file()
+    except Exception as e:
+        log("groups.json name sync failed", e)
     for chat in [PRIMARY, *[j for j in load_groups() if j != LOCAL]]:
         m = get_override(chat) or kv_get(K("last_model", chat)) or CFG.get("claude_model") or "sonnet"
         sync_group_name(chat, m)

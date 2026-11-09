@@ -969,3 +969,33 @@ def test_wheel_command_toggles_read_all(agent):
     assert mod.kv_get(mod.K("read_all", mod.PRIMARY)) == "1" and a
     b = mod.owner_command("/\U0001f6de", mod.PRIMARY)
     assert not mod.kv_get(mod.K("read_all", mod.PRIMARY)) and b != a
+
+
+def test_group_name_single_source_and_owner_rename(agent, monkeypatch):
+    mod, db = agent
+    g = "120363000000000001@g.us"
+    db.execute("CREATE TABLE chats (jid TEXT PRIMARY KEY, name TEXT, last_message_time TIMESTAMP)")
+    db.execute("INSERT INTO chats VALUES (?, ?, NULL)", (g, "גשר אופוס ויוי"))
+    db.commit()
+    open(mod.GROUPS_FILE, "w", encoding="utf-8").write(json.dumps({g: {"name": "שם ישן", "purpose": "dev"}}, ensure_ascii=False))
+    mod._live_cache[0] = 0
+    assert mod.load_groups()[g]["name"] == "גשר אופוס ויוי"  # every reader gets the WhatsApp name
+    mod.sync_names_file()
+    assert json.load(open(mod.GROUPS_FILE, encoding="utf-8"))[g]["name"] == "גשר אופוס ויוי"
+    # only the model differs -> same name; a real rename -> model goes after the first word
+    assert mod.name_core("גשר סונט ויוי") == mod.name_core("גשר {model} ויוי")
+    assert mod.name_core("אוטומציה 4M-D · הייקו") == mod.name_core("אוטומציה 4M-D · {model}")
+    assert mod.template_after_first_word("פיתוח הכלי שלי") == "פיתוח {model} הכלי שלי"
+    assert mod.template_after_first_word("גשר אופוס דב") == "גשר {model} דב"
+    sent = []
+    monkeypatch.setattr(mod, "bridge", lambda path, body, timeout=0: sent.append(body) or {"success": True})
+    mod.kv_set(mod.K("name_tpl", g), "גשר {model} ויוי")
+    mod.kv_set(mod.K("name_set", g), "גשר אופוס ויוי")
+    mod.sync_group_name(g, "opus")
+    assert sent == []  # nothing changed, no rename
+    db.execute("UPDATE chats SET name = 'ויוי פיתוח' WHERE jid = ?", (g,))
+    db.commit()
+    mod._live_cache[0] = 0
+    mod.sync_group_name(g, "opus")
+    assert sent and sent[-1]["name"] == "ויוי אופוס פיתוח"
+    assert mod.kv_get(mod.K("name_tpl", g)) == "ויוי {model} פיתוח"
