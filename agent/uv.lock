@@ -1480,7 +1480,7 @@ wheels = [
 
 [[package]]
 name = "whatsapp-claude-agent"
-version = "1.0.8"
+version = "1.0.11"
 source = { virtual = "." }
 
 [package.optional-dependencies]
