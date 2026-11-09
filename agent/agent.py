@@ -130,6 +130,7 @@ def adb():
 def _create_schema(db):
     db.executescript("""
         CREATE TABLE IF NOT EXISTS handled (id TEXT, chat_jid TEXT, at TIMESTAMP, PRIMARY KEY (id, chat_jid));
+        CREATE TABLE IF NOT EXISTS owner_reactions (chat_jid TEXT, message_id TEXT, emoji TEXT, at TEXT);
         CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
         CREATE TABLE IF NOT EXISTS transcripts (id TEXT, chat_jid TEXT, sender TEXT, ts TEXT, text TEXT, model TEXT,
             PRIMARY KEY (id, chat_jid));
@@ -3102,6 +3103,7 @@ def event_listener():
                             try:
                                 ev = json.loads(line[5:].decode("utf-8", "replace"))
                                 cj = ev.get("chat_jid", "")
+                                note_reaction(cj, ev.get("message_id", ""), ev.get("emoji", ""))
                                 if ev.get("emoji") == READ_ALOUD and (cj == PRIMARY or cj in load_groups()):
                                     work.put(lambda cj=cj, m=ev.get("message_id"): read_aloud(cj, m))
                             except Exception as e:
@@ -3421,9 +3423,10 @@ def push_watch_waiting(now=None):
                              "AND datetime(timestamp) >= datetime(?) GROUP BY chat_jid", (lo.isoformat(sep=" ", timespec="seconds"),)).fetchall()
             waiting = []
             for cj, ts in last:
-                r = m.execute("SELECT is_from_me, content, media_type FROM messages WHERE chat_jid = ? AND datetime(timestamp) = ? LIMIT 1",
+                r = m.execute("SELECT is_from_me, content, media_type, id, timestamp FROM messages WHERE chat_jid = ? AND datetime(timestamp) = ? LIMIT 1",
                               (cj, ts)).fetchone()
-                if r and not r[0] and not (r[1] or "").startswith(prefix) and ts <= hi.astimezone(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S"):
+                if r and not r[0] and not (r[1] or "").startswith(prefix) and ts <= hi.astimezone(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S") \
+                        and not answered_by_reaction(cj, r[3], r[4]):
                     waiting.append((cj, ts))
             calls = m.execute("SELECT call_id, caller, min(at) FROM calls c WHERE event = 'offer' AND at >= ? AND NOT EXISTS "
                               "(SELECT 1 FROM calls a WHERE a.call_id = c.call_id AND a.event = 'accept') GROUP BY call_id",
@@ -3576,6 +3579,43 @@ def _contact_names():
     return names
 
 
+def note_reaction(chat_jid, message_id, emoji):
+    """Owner 09.11: a reaction (👍 or any mark) is an answer — remember every reaction of the owner (from the phone too)."""
+    if not chat_jid or not message_id:
+        return
+    try:
+        with adb() as db:
+            db.execute("INSERT INTO owner_reactions VALUES (?, ?, ?, ?)",
+                       (chat_jid, message_id, emoji or "", dt.datetime.now().astimezone().isoformat(timespec="seconds")))
+    except sqlite3.Error as e:
+        log("note reaction", e)
+
+
+def answered_by_reaction(chat_jid, message_id, ts):
+    """True when the owner reacted (not removed) to this message, or to any message in the chat after it arrived."""
+    try:
+        when = dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        when = when if when.tzinfo else when.replace(tzinfo=dt.timezone.utc)
+        with adb() as db:
+            rows = db.execute("SELECT message_id, emoji, at FROM owner_reactions WHERE chat_jid = ? ORDER BY rowid", (chat_jid,)).fetchall()
+    except (sqlite3.Error, ValueError):
+        return False
+    latest = {}
+    for mid, emoji, at in rows:  # the last reaction per message wins (an empty emoji = the reaction was removed)
+        latest[mid] = (emoji, at)
+    for mid, (emoji, at) in latest.items():
+        if not emoji:
+            continue
+        if mid == message_id:
+            return True
+        try:
+            if dt.datetime.fromisoformat(at) >= when:
+                return True
+        except ValueError:
+            pass
+    return False
+
+
 def summary_extract(since, now=None, max_lines=250, per_chat=15):
     """Compact digest material for the morning summary: (lines, waiting). lines = chat headers + "HH:MM name: text" since
     `since` (control groups and the bot's own messages excluded; chats with only stickers skipped). waiting = private
@@ -3589,7 +3629,7 @@ def summary_extract(since, now=None, max_lines=250, per_chat=15):
         rows = db.execute("SELECT chat_jid, sender, timestamp, content, is_from_me, media_type FROM messages "
                           "WHERE datetime(timestamp) >= datetime(?) ORDER BY chat_jid, datetime(timestamp)",
                           (since.astimezone().isoformat(sep=" ", timespec="seconds"),)).fetchall()
-        recent = db.execute("SELECT chat_jid, timestamp, content, is_from_me, media_type FROM messages "
+        recent = db.execute("SELECT chat_jid, timestamp, content, is_from_me, media_type, id FROM messages "
                             "WHERE datetime(timestamp) >= datetime(?) AND chat_jid LIKE '%@s.whatsapp.net' ORDER BY datetime(timestamp)",
                             ((now - dt.timedelta(hours=48)).isoformat(sep=" ", timespec="seconds"),)).fetchall()
     by_chat = {}
@@ -3610,12 +3650,12 @@ def summary_extract(since, now=None, max_lines=250, per_chat=15):
         lines.append(f"## {chat_names.get(cj) or names.get(cj.split('@')[0]) or cj.split('@')[0]}")
         lines += msgs[-per_chat:][: max_lines - len(lines)]
     last = {}
-    for cj, ts, content, me, mtype in recent:
+    for cj, ts, content, me, mtype, mid in recent:
         if cj in skip or (content or "").startswith(prefix):
             continue
-        last[cj] = (ts, (content or "").strip() or (f"[{mtype}]" if mtype else ""), me)
+        last[cj] = (ts, (content or "").strip() or (f"[{mtype}]" if mtype else ""), me, mid)
     waiting = [(chat_names.get(cj) or names.get(cj.split("@")[0]) or cj.split("@")[0], str(ts)[11:16], text[:80])
-               for cj, (ts, text, me) in last.items() if not me and text]
+               for cj, (ts, text, me, mid) in last.items() if not me and text and not answered_by_reaction(cj, mid, ts)]
     return lines, waiting
 
 

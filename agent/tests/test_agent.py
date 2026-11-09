@@ -1079,3 +1079,19 @@ def test_auto_transcript_posts_in_same_chat_once(agent, monkeypatch):
     monkeypatch.setattr(mod, "watches_people", lambda: False)  # the other PC on the same account does it
     mod.auto_transcript("972500000001@s.whatsapp.net", "V3", "972500000001", now)
     assert len(calls) == 1
+
+
+def test_reaction_counts_as_an_answer(agent):
+    mod, db = agent
+    db.execute("CREATE TABLE IF NOT EXISTS chats (jid TEXT PRIMARY KEY, name TEXT, last_message_time TIMESTAMP)")
+    now = mod.dt.datetime.now().astimezone()
+    ts = (now - mod.dt.timedelta(hours=1)).isoformat(sep=" ", timespec="seconds")
+    add(db, "W1", ts, "אתה מגיע מחר?", chat="972500000009@s.whatsapp.net")
+    _, waiting = mod.summary_extract(now - mod.dt.timedelta(days=1), now)
+    assert len(waiting) == 1, "waits for an answer"
+    mod.note_reaction("972500000009@s.whatsapp.net", "W1", "👍")
+    _, waiting = mod.summary_extract(now - mod.dt.timedelta(days=1), now)
+    assert waiting == [], "a 👍 on the last message is an answer"
+    mod.note_reaction("972500000009@s.whatsapp.net", "W1", "")
+    _, waiting = mod.summary_extract(now - mod.dt.timedelta(days=1), now)
+    assert len(waiting) == 1, "a removed reaction is not an answer"
