@@ -2092,7 +2092,7 @@ def run_command(row):
                              if LANG == "he" else "\n📥 Messages sent now are kept and handled when the cap resets (midnight) or is raised."))
             return
         budget, spent = budget_for(chat), spent_today(chat)
-        if spent >= budget * 0.8 and kv_get(K("budget_warned", chat)) != dt.date.today().isoformat():
+        if not unlimited(chat) and spent >= budget * 0.8 and kv_get(K("budget_warned", chat)) != dt.date.today().isoformat():
             kv_set(K("budget_warned", chat), dt.date.today().isoformat())
             reply(T["budget_warn"].format(spent=spent, budget=budget))
             push(f"📊 מגבלת הגשר בשיחה הזו הגיעה ל-80% (${spent:.2f} מתוך ${budget:.0f})", chat, "usage")
