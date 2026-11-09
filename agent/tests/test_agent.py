@@ -728,9 +728,9 @@ def test_status_hourglass_flips(agent):
     assert "\u23f3" in a and "\u231b" in b, "the hourglass alternates on every edit"
     host = mod.CFG.get("host_label") or mod.socket.gethostname()
     assert host in a.split("·")[0] and host in st._final().split("·")[0], "the computer is named first"
-    assert "מתוך" in st._final() and "כל הגשר" in st._final(), "usage vs cap after every answer"
-    assert "27%" in st._final() and "70%" in st._final(), "Claude's own meter too"
-    assert "תקרת השימוש" in mod.owner_command("/תקרה") and "27%" in mod.owner_command("/תקרה")
+    assert "מגבלה פנימית" in st._final() and "מגבלת Claude" in st._final(), "two limits after every answer"
+    assert "27%" in st._final() and "70%" not in st._final(), "only the 5-hour window in the short line"
+    assert "מגבלה פנימית" in mod.owner_command("/תקרה") and "70%" in mod.owner_command("/תקרה")
 
 
 def test_downtime_notice_lists_messages_sent_while_down(agent, monkeypatch):

@@ -1296,47 +1296,38 @@ def _reset_at(iso):
         return "?"
 
 
-def claude_usage_short():
+def internal_usage(chat):
+    """'תקרת שימוש · מגבלה פנימית' of this conversation: % of its daily cap (the bridge's own limit)."""
+    spent, cap = spent_today(chat), budget_for(chat)
+    if unlimited(chat):
+        return f"💰 תקרת שימוש · מגבלה פנימית: ללא מגבלה (${spent:.2f} היום)"
+    return f"💰 תקרת שימוש · מגבלה פנימית: {_pct(spent, cap)} (${spent:.2f} מתוך ${cap:.0f})"
+
+
+def claude_limit(with_week=False):
+    """'תקרת שימוש · מגבלת Claude': the account's 5-hour window % (and the weekly one in /תקרה)."""
     u = claude_usage() or {}
     f, w = u.get("five_hour") or {}, u.get("seven_day") or {}
-    if f.get("utilization") is None and w.get("utilization") is None:
-        return ""
-    return f"☁️ Claude: 5 שעות {f.get('utilization', 0):.0f}% · שבוע {w.get('utilization', 0):.0f}%"
+    if f.get("utilization") is None:
+        return "☁️ תקרת שימוש · מגבלת Claude: לא זמין כרגע"
+    line = f"☁️ תקרת שימוש · מגבלת Claude: {f['utilization']:.0f}% (מתאפס {_reset_at(f.get('resets_at') or '')})"
+    if with_week and w.get("utilization") is not None:
+        line += f"\n   שבועי: {w['utilization']:.0f}% (מתאפס {_reset_at(w.get('resets_at') or '')})"
+    return line
 
 
 def usage_line(chat):
-    """Owner 09.11: after every answer — today's use of this conversation's usage cap and of the whole bridge's, and
-    Claude's own plan meter."""
+    """Owner 09.11 (simplified 06:26): after every answer, two lines only — the internal limit and Claude's limit."""
     try:
-        spent, tot, tcap = spent_today(chat), spent_today(), total_budget()
-        mine = (f"השיחה ${spent:.2f} (ללא תקרת שימוש)" if unlimited(chat)
-                else f"השיחה ${spent:.2f} מתוך ${budget_for(chat):.0f} ({_pct(spent, budget_for(chat))})")
-        line = f"💰 תקרת שימוש: {mine} · כל הגשר ${tot:.2f} מתוך ${tcap:.0f} ({_pct(tot, tcap)})"
-        cu = claude_usage_short()
-        return line + (f"\n{cu}" if cu else "")
+        return internal_usage(chat) + "\n" + claude_limit()
     except Exception as e:
         log("usage line failed", e)
         return ""
 
 
 def usage_report(chat):
-    """/תקרה: every usage number the bridge knows, for both kinds of cap."""
-    spent, tot, tcap, cap = spent_today(chat), spent_today(), total_budget(), budget_for(chat)
-    lines = ["📊 *שימוש נכון ל-" + dt.datetime.now().strftime("%H:%M") + "*", "", "*תקרת השימוש של הגשר* (מתאפסת בחצות):"]
-    lines.append(f"• השיחה הזו: ${spent:.2f} — ללא תקרת שימוש" if unlimited(chat)
-                 else f"• השיחה הזו: ${spent:.2f} מתוך ${cap:.0f} = {_pct(spent, cap)}")
-    lines.append(f"• כל הגשר: ${tot:.2f} מתוך ${tcap:.0f} = {_pct(tot, tcap)}")
-    u = claude_usage()
-    lines += ["", "*חשבון Claude* " + (f"({u.get('plan')})" if u and u.get("plan") else "") + ":"]
-    if not u:
-        lines.append("• לא הצלחתי לקרוא את מד השימוש של Claude עכשיו.")
-    else:
-        for key, name in (("five_hour", "חלון 5 שעות"), ("seven_day", "שבועי"), ("seven_day_opus", "שבועי Opus"), ("seven_day_sonnet", "שבועי Sonnet")):
-            x = u.get(key) or {}
-            if x.get("utilization") is not None:
-                lines.append(f"• {name}: {x['utilization']:.0f}% (מתאפס {_reset_at(x.get('resets_at') or '')})")
-    lines += ["", "_הדולרים הם הערכה של Claude Code לעלות לפי מחירון ה-API; במנוי Pro לא משלמים לפיהם, ולכן אצל Claude מוצגים רק אחוזים._"]
-    return "\n".join(lines)
+    """/תקרה: the same two limits, with Claude's weekly window too."""
+    return "📊 *תקרת שימוש נכון ל-" + dt.datetime.now().strftime("%H:%M") + "*\n" + internal_usage(chat) + "\n" + claude_limit(True)
 
 
 def unlimited(chat):
