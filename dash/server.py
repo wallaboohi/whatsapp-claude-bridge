@@ -441,6 +441,36 @@ def peer_url(i):
     return ps[i]["url"].rstrip("/")
 
 
+def read_clipboard():
+    """This PC's clipboard as text (Windows CF_UNICODETEXT), "" when it holds no text."""
+    if sys.platform != "win32":
+        return ""
+    import ctypes
+    from ctypes import wintypes
+    u32, k32 = ctypes.windll.user32, ctypes.windll.kernel32
+    u32.GetClipboardData.restype = wintypes.HANDLE
+    k32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+    k32.GlobalLock.restype = ctypes.c_void_p
+    k32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+    for _ in range(5):  # another program may hold the clipboard for a moment
+        if u32.OpenClipboard(None):
+            break
+        time.sleep(0.05)
+    else:
+        return ""
+    try:
+        h = u32.GetClipboardData(13)  # CF_UNICODETEXT
+        if not h:
+            return ""
+        p = k32.GlobalLock(h)
+        try:
+            return ctypes.wstring_at(p) if p else ""
+        finally:
+            k32.GlobalUnlock(h)
+    finally:
+        u32.CloseClipboard()
+
+
 def peer_call(i, path, body=None, raw=None, ctype="application/json", timeout=5):
     """Forward a request to the other machine's dashboard (through the ssh tunnel). Unreachable -> {"offline": true}."""
     try:
@@ -1996,6 +2026,12 @@ class Handler(BaseHTTPRequestHandler):
         if origin and origin not in (f"http://{host}", f"https://{host}"):  # same-origin only (https = via Tailscale)
             return self.send_json({"error": "forbidden"}, 403)
         n = int(self.headers.get("Content-Length", 0))
+        if self.path.split("?")[0] == "/clipboard":
+            # owner 10.11: the right-click "paste" did nothing — WebView2 blocks navigator.clipboard.readText.
+            # The dashboard reads this PC's clipboard for it; loopback only (never through Tailscale or a peer).
+            if self.client_address[0] != "127.0.0.1" or not host.startswith("127.0.0.1:") or not origin:
+                return self.send_json({"error": "forbidden"}, 403)
+            return self.send_json({"text": read_clipboard()})
         pi, rest = self._peer_index(self.path.split("?")[0])
         if pi is not None:  # actions / uploads for the other machine
             body = self.rfile.read(n) if n else b""

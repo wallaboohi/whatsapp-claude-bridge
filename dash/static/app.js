@@ -688,7 +688,10 @@ ctx.addEventListener("click", async e => {
   if (cmd === "paste") {
     say.focus();
     let t = null;
-    try { t = await navigator.clipboard.readText(); } catch (err) {}
+    // WebView2 blocks navigator.clipboard.readText (the menu's paste did nothing, owner 10.11): the dashboard server
+    // reads this PC's clipboard; the browser API stays as the fallback (e.g. the dashboard opened in a browser)
+    try { const j = await (await fetch("/clipboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json(); if (typeof j.text === "string") t = j.text; } catch (err) {}
+    if (t == null) { try { t = await Promise.race([navigator.clipboard.readText(), new Promise((_, no) => setTimeout(() => no(), 1500))]); } catch (err) {} }
     if (t != null) { say.setRangeText(t, say.selectionStart, say.selectionEnd, "end"); grow(); }
     else if (!document.execCommand("paste")) toast(L("להדבקה: Ctrl+V", "To paste: Ctrl+V"));
   }
