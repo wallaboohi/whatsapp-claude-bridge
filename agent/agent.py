@@ -2724,6 +2724,10 @@ def peer_watch():
                         kv_set(f"peer_account:{name}", str(brief["wa_account"]))
                     state, msgs = peer_watch_step(state, brief, dt.datetime.now(), CFG, name)
                     kv_set(key, json.dumps(state, ensure_ascii=False))
+                    try:
+                        failover_tick(peer, name, state)
+                    except Exception:
+                        log("failover error", traceback.format_exc())
                     for m in msgs:
                         if m.startswith("⚠️"):
                             push(m.split(" — ")[0].split(". ")[0].split(" (")[0], PRIMARY, "fault")
@@ -2732,6 +2736,7 @@ def peer_watch():
                             reply(m)
                         finally:
                             _ctx.chat = None
+            plugin_hold_watch()
         except Exception:
             log("peer_watch error", traceback.format_exc())
         time.sleep(120)
@@ -2948,8 +2953,8 @@ daily = lambda at, key, fn: _daily.append((at, key, fn))
 manual = lambda name, fn: _manual.__setitem__(name, fn)
 
 
-def load_plugins():
-    for path in CFG.get("plugins", []):
+def load_plugins(paths=None):
+    for path in (CFG.get("plugins", []) if paths is None else paths):
         try:
             spec = importlib.util.spec_from_file_location(os.path.splitext(os.path.basename(path))[0], path)
             mod = importlib.util.module_from_spec(spec)
@@ -2958,6 +2963,443 @@ def load_plugins():
             log("plugin loaded:", path)
         except Exception:
             log("plugin failed:", path, traceback.format_exc())
+
+
+def start_plugins(paths=None):
+    """Load plugins while the agent is already running (failover / a deferred start): their background threads start here;
+    their hooks, periodic and daily jobs are picked up by the running loops (the scheduler waits while they register)."""
+    with _sched_lock:
+        n = len(_threads)
+        load_plugins(paths)
+        new = _threads[n:]
+    for fn in new:
+        threading.Thread(target=fn, daemon=True).start()
+
+
+# ---------- failover: run another machine's plugins while it is off (owner 10.11) ----------
+# The backup machine (config "failover": {"for": "<peer name>", "plugins": [...]}) copies the peer's plugin state over ssh
+# every few minutes while the peer is up. When peer_watch has seen the peer down for after_minutes, it asks the owner ONCE;
+# "מאשר לנייח" from the owner loads those plugins here (their "done today" flags imported first, so nothing done on the
+# peer today runs again) and leaves a hold file. When the peer answers again the backup restarts without the plugins,
+# writes its flags into the peer's databases (ssh), removes the hold and reports. A machine with plugins of its own checks
+# its peers for such a hold at start-up (and every few minutes) and does not run its plugins while one exists.
+
+FAILOVER_DIR = os.path.join(HERE, "failover")
+FAILOVER_APPROVE = "מאשר לנייח"
+_failover_loaded = set()  # peers whose plugins run in this process
+_own_plugins = [False]  # this machine's own plugins (config "plugins") are running in this process
+
+
+def failover_cfg():
+    fc = CFG.get("failover") or {}
+    if not fc.get("for") or not fc.get("plugins"):
+        return None
+    return {"after_minutes": 10, "sync_minutes": 10, "approve_text": FAILOVER_APPROVE, "self_name": "נייח",
+            "kv_prefixes": ["segd:"], "plugin_dbs": [], "mirror": [], "group": PRIMARY, **fc}
+
+
+def _fo_tag(name):
+    import hashlib
+    return hashlib.md5(str(name).encode("utf-8")).hexdigest()[:10]
+
+
+def _fo_hold_path(name):
+    return os.path.join(FAILOVER_DIR, f"hold-{_fo_tag(name)}.json")
+
+
+def _fo_snap_path(name):
+    return os.path.join(FAILOVER_DIR, f"snap-{_fo_tag(name)}.json")
+
+
+def failover_state(name):
+    try:
+        return json.loads(kv_get(f"failover:{name}") or "{}")
+    except ValueError:
+        return {}
+
+
+def failover_save(name, st):
+    kv_set(f"failover:{name}", json.dumps(st, ensure_ascii=False))
+
+
+def _fo_snapshot(name):
+    try:
+        with open(_fo_snap_path(name), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _fo_peer(name):
+    return next((p for p in CFG.get("peers") or [] if (p.get("name") or peer_alias(p)) == name), None)
+
+
+def _fo_plist(fc):
+    return ", ".join(os.path.splitext(os.path.basename(p))[0] for p in fc["plugins"])
+
+
+def _remote_root(peer):
+    return str((peer or {}).get("root") or ROOT).replace("\\", "/")
+
+
+def _remote_script(body, data):
+    """A Python script for the other machine: data travels inside it as base64 JSON (no quoting, Hebrew safe)."""
+    import base64
+    blob = base64.b64encode(json.dumps(data, ensure_ascii=False).encode("utf-8")).decode()
+    return f"import base64, json\nC = json.loads(base64.b64decode('{blob}').decode('utf-8'))\n" + body
+
+
+def _remote_python(peer, script, timeout=120):
+    """Runs a Python script on the peer (its agent venv; the script goes in on stdin, so no length/quoting limits).
+    Returns (returncode, stdout, stderr)."""
+    py = (peer or {}).get("python") or _remote_root(peer) + "/agent/.venv/Scripts/python.exe"
+    ssh = shutil.which("ssh") or r"C:\Windows\System32\OpenSSH\ssh.exe"
+    r = subprocess.run([ssh, "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", peer_alias(peer), f'"{py}" -I -X utf8 -'],
+                       input=script.encode("utf-8"), capture_output=True, timeout=timeout, creationflags=NO_WINDOW)
+    return r.returncode, (r.stdout or b"").decode("utf-8", "replace"), (r.stderr or b"").decode("utf-8", "replace")
+
+
+FO_DUMP = r'''import glob, os, sqlite3
+def rows(path):
+    if not os.path.exists(path):
+        return {}
+    db = sqlite3.connect("file:" + path + "?mode=ro", uri=True, timeout=30)
+    try:
+        return dict(db.execute("SELECT k, v FROM kv"))
+    except sqlite3.Error:
+        return {}
+    finally:
+        db.close()
+out = {"host": os.environ.get("COMPUTERNAME", ""), "kv": {}, "pdb": {}, "files": {}}
+out["kv"] = {k: v for k, v in rows(C["agent_db"]).items() if k.startswith(tuple(C["prefixes"]))}
+for p in C["pdbs"]:
+    out["pdb"][p] = rows(p)
+for pat in C["mirror"]:
+    for f in glob.glob(pat):
+        if os.path.isfile(f) and os.path.getsize(f) <= 5000000:
+            out["files"][f.replace("\\", "/")] = base64.b64encode(open(f, "rb").read()).decode()
+print("@@FAILOVER@@" + json.dumps(out))
+'''
+
+FO_HANDBACK = r'''import sqlite3
+def put(path, kv):
+    db = sqlite3.connect(path, timeout=60)
+    with db:
+        db.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)")
+        db.executemany("INSERT OR REPLACE INTO kv VALUES (?, ?)", list(kv.items()))
+    db.close()
+put(C["agent_db"], C["kv"])
+for p, kv in C["pdb"].items():
+    put(p, kv)
+print("@@OK@@")
+'''
+
+FO_HOLDS = r'''import glob
+for f in glob.glob(C["root"] + "/agent/failover/hold-*.json"):
+    print("@@H@@" + open(f, encoding="utf-8").read().replace("\n", " "))
+print("@@OK@@")
+'''
+
+
+def failover_pull(peer, name, fc):
+    """While the peer is up: copy its plugin state (agent kv by prefix + day:/at: job flags, plugin databases' kv) and the
+    mirrored files (config "mirror": globs of the peer's paths, written to the same paths here). Returns True on success."""
+    root = _remote_root(peer)
+    rc, out, err = _remote_python(peer, _remote_script(FO_DUMP, {
+        "agent_db": root + "/agent/agent.db", "prefixes": list(fc["kv_prefixes"]) + ["day:", "at:"],
+        "pdbs": fc["plugin_dbs"], "mirror": fc["mirror"]}), timeout=300)
+    line = next((ln for ln in out.splitlines() if ln.startswith("@@FAILOVER@@")), "")
+    if rc or not line:
+        log("failover pull failed", name, rc, (err or out)[-300:])
+        return False
+    import base64
+    data = json.loads(line[len("@@FAILOVER@@"):])
+    written = 0
+    for path, b64 in (data.pop("files", None) or {}).items():
+        blob = base64.b64decode(b64)
+        try:
+            with open(path, "rb") as f:
+                if f.read() == blob:
+                    continue
+        except OSError:
+            pass
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.fo-tmp"
+        with open(tmp, "wb") as f:
+            f.write(blob)
+        os.replace(tmp, path)
+        written += 1
+    data["at"] = dt.datetime.now().isoformat(timespec="seconds")
+    os.makedirs(FAILOVER_DIR, exist_ok=True)
+    write_json(_fo_snap_path(name), data)
+    log(f"failover pull {name}: {len(data.get('kv') or {})} keys, {written} files updated")
+    return True
+
+
+def failover_step(st, peer_st, now, fc, name, snap_at=None):
+    """Pure state machine (kv failover:<name>): idle -> asked (peer down >= after_minutes; one question per outage) ->
+    active (owner approved, see failover_approve) -> releasing (peer back: restart without the plugins, then hand back).
+    Returns (state, [(kind, text)]) with kind ask | say | release."""
+    st, acts = dict(st or {}), []
+    state = st.get("state") or "idle"
+    off = (peer_st or {}).get("off_since")
+    mins = int((now - dt.datetime.fromisoformat(off)).total_seconds() // 60) if off else 0
+    if state == "idle" and off and mins >= int(fc["after_minutes"]):
+        st.update(state="asked", asked_at=now.isoformat(timespec="seconds"), off_since=off)
+        note = (f"\nהמצב האחרון שנשמר ממנו: {snap_at[8:10]}.{snap_at[5:7]} {snap_at[11:16]}." if snap_at else
+                "\n⚠️ אין כאן עותק של המצב שלו, ולכן משימה שכבר רצה אצלו היום עלולה לרוץ שוב.")
+        acts.append(("ask", f"🖥️ המחשב \"{name}\" לא זמין מ-{off[11:16]} ({mins} דק'). להעביר את האוטומציות שלו ({_fo_plist(fc)}) "
+                            f"ל{fc['self_name']} עד שיחזור?\nלאישור כתוב: {fc['approve_text']}{note}\n"
+                            "(אם הוא דלוק ורק בלי רשת, אל תאשר: האוטומציות ירוצו פעמיים.)"))
+    elif state == "asked" and not off:
+        if st.get("handback_pending"):
+            st["state"] = "releasing"
+        else:
+            st = {"state": "idle"}
+            acts.append(("say", f"✅ המחשב \"{name}\" חזר. האוטומציות נשארות אצלו, אין צורך לאשר."))
+    elif state == "active" and not off:
+        st.update(state="releasing", back_at=now.isoformat(timespec="seconds"))
+        acts.append(("release", f"המחשב \"{name}\" חזר: משחרר את האוטומציות שלו"))
+    elif state == "releasing" and off and mins >= int(fc["after_minutes"]) and st.get("back_at", "") < off:
+        st.update(state="asked", asked_at=now.isoformat(timespec="seconds"), off_since=off)  # down again before the hand-back
+        acts.append(("ask", f"🖥️ המחשב \"{name}\" כבה שוב לפני שהאוטומציות הוחזרו אליו. להפעיל אותן שוב ב{fc['self_name']}?\n"
+                            f"לאישור כתוב: {fc['approve_text']}"))
+    return st, acts
+
+
+def _fo_say(fc, text):
+    _ctx.chat = fc["group"]
+    try:
+        reply(text)
+    finally:
+        _ctx.chat = None
+
+
+def failover_activate(name, fc, st, now=None):
+    """The owner approved: import the peer's last state (unless ours is newer: a hand-back never completed), load its
+    plugins here, write the hold file. Returns the reply text."""
+    now = now or dt.datetime.now()
+    missing = [p for p in fc["plugins"] if not os.path.exists(p)]
+    if missing:
+        return f"⚠️ לא העברתי: חסרים במחשב הזה הקבצים {', '.join(missing)}."
+    snap = None if st.get("handback_pending") else _fo_snapshot(name)
+    if snap:
+        pre = tuple(fc["kv_prefixes"])
+        with adb() as db:
+            db.executemany("INSERT OR REPLACE INTO kv VALUES (?, ?)", [(k, str(v)) for k, v in (snap.get("kv") or {}).items()
+                                                                       if k.startswith(pre)])
+        for path, rows in (snap.get("pdb") or {}).items():
+            db = sqlite3.connect(path, timeout=60)
+            with db:
+                db.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)")
+                db.executemany("INSERT OR REPLACE INTO kv VALUES (?, ?)", list(rows.items()))
+            db.close()
+    with _sched_lock:  # register the jobs and set their "already done" flags before the scheduler looks at them
+        nd, np_ = len(_daily), len(_periodic)
+        start_plugins(fc["plugins"])
+        jobs = sorted({k for _, k, _ in _daily[nd:]} | {k for _, k, _ in _periodic[np_:]})
+        for j in jobs if snap else []:
+            for p in ("day:", "at:"):
+                if (snap.get("kv") or {}).get(p + j) is not None:
+                    kv_set(p + j, snap["kv"][p + j])
+    _failover_loaded.add(name)
+    st.update(state="active", since=now.isoformat(timespec="seconds"), jobs=jobs, handback_pending=True,
+              host=(snap or {}).get("host") or st.get("host", ""))
+    failover_save(name, st)
+    os.makedirs(FAILOVER_DIR, exist_ok=True)
+    write_json(_fo_hold_path(name), {"for": name, "host": st["host"], "by": socket.gethostname(), "since": st["since"]})
+    log("failover active:", name, fc["plugins"])
+    return (f"✅ האוטומציות ({_fo_plist(fc)}) עברו ל{fc['self_name']} ורצות כאן עד שהמחשב \"{name}\" יחזור. "
+            + (f"מה שכבר בוצע אצלו (נכון ל-{snap['at'][11:16]}) לא ירוץ שוב." if snap else "")
+            + "\nכשהוא יחזור אחזיר אליו אותן לבד.")
+
+
+def failover_approve(content, chat, ts, me):
+    """The owner's exact approval phrase. On the backup machine: in its question's group (or the control group). On any
+    other machine the phrase is meant for the backup, so it is swallowed instead of becoming a Claude run. True = consumed."""
+    if not me or not content:
+        return False
+    fc = failover_cfg()
+    text = " ".join(content.split())
+    if not fc:
+        return text == FAILOVER_APPROVE and chat in load_groups() and bool(CFG.get("peers"))
+    if text != " ".join(str(fc["approve_text"]).split()) or chat not in (fc["group"], PRIMARY):
+        return False
+    name = fc["for"]
+    st = failover_state(name)
+    state = st.get("state") or "idle"
+    try:
+        off = json.loads(kv_get(f"peerwatch:{name}") or "{}").get("off_since")
+    except ValueError:
+        off = None
+    when = str(ts or "")[:19].replace(" ", "T")
+    if state == "active":
+        msg = "האוטומציות כבר רצות כאן."
+    elif state == "asked" and when and when < st.get("asked_at", ""):
+        return True  # an old message seen again (catch-up after a restart): not an answer to this question
+    elif state == "asked" or (state == "idle" and off):
+        msg = failover_activate(name, fc, st)
+    elif state == "releasing":
+        msg = f"המחשב \"{name}\" כבר חזר, והאוטומציות מוחזרות אליו."
+    else:
+        msg = f"המחשב \"{name}\" זמין, אין מה להעביר."
+    _fo_say(fc, msg)
+    return True
+
+
+def failover_handback(peer, name, fc, st):
+    """Runs only in a process without the peer's plugins (after the release restart): our flags -> the peer's databases,
+    then the hold file goes and the owner is told. False = retry on the next round."""
+    pre = tuple(fc["kv_prefixes"]) + tuple(p + j for j in st.get("jobs") or [] for p in ("day:", "at:"))
+    with adb() as db:
+        kv = {k: v for k, v in db.execute("SELECT k, v FROM kv") if k.startswith(pre)}
+    pdb = {}
+    for path in fc["plugin_dbs"]:
+        if os.path.exists(path):
+            db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=30)
+            try:
+                pdb[path] = dict(db.execute("SELECT k, v FROM kv"))
+            except sqlite3.Error:
+                pass
+            finally:
+                db.close()
+    rc, out, err = _remote_python(peer, _remote_script(FO_HANDBACK, {"agent_db": _remote_root(peer) + "/agent/agent.db",
+                                                                     "kv": kv, "pdb": pdb}))
+    if rc or "@@OK@@" not in out:
+        log("failover hand-back failed", name, rc, (err or out)[-300:])
+        return False
+    try:
+        os.remove(_fo_hold_path(name))
+    except OSError:
+        pass
+    import glob
+    since = dt.datetime.fromisoformat(st["since"]).timestamp() if st.get("since") else time.time()
+    changed = sorted({os.path.basename(f) for pat in fc["mirror"] for f in glob.glob(pat)
+                      if os.path.isfile(f) and os.path.getmtime(f) > since})
+    failover_save(name, {"state": "idle", "last": {"since": st.get("since"), "back": dt.datetime.now().isoformat(timespec="seconds")}})
+    log("failover released:", name, f"{len(kv)} keys handed back")
+    _fo_say(fc, f"✅ המחשב \"{name}\" חזר, האוטומציות חזרו אליו (מה שבוצע כאן לא ירוץ אצלו שוב)."
+                + (f"\nקבצים שהשתנו כאן בזמן הגיבוי ולא הועתקו אליו: {', '.join(changed)}" if changed else ""))
+    return True
+
+
+def failover_tick(peer, name, peer_st):
+    """Called by peer_watch after every check of a peer."""
+    fc = failover_cfg()
+    if not fc or fc["for"] != name:
+        return
+    st = failover_state(name)
+    snap = _fo_snapshot(name)
+    st, acts = failover_step(st, peer_st, dt.datetime.now(), fc, name, (snap or {}).get("at"))
+    failover_save(name, st)
+    for kind, text in acts:
+        if kind == "ask":
+            _fo_say(fc, text)
+            push(f"\"{name}\" כבוי: להעביר את האוטומציות ל{fc['self_name']}?", fc["group"], "failover")
+        elif kind == "say":
+            _fo_say(fc, text)
+        elif kind == "release":
+            with open(RESTART_FILE, "w", encoding="utf-8") as f:
+                f.write(text)  # restart without the plugins (threads cannot be stopped); the new process hands back
+    state = st.get("state") or "idle"
+    if state == "releasing" and name not in _failover_loaded and not (peer_st or {}).get("off_since"):
+        failover_handback(peer, name, fc, st)
+    elif state == "idle" and not (peer_st or {}).get("off_since") and peer_alias(peer):
+        last = kv_get(f"failover_pull:{name}") or ""
+        if not last or dt.datetime.now() - dt.datetime.fromisoformat(last) >= dt.timedelta(minutes=int(fc["sync_minutes"])):
+            kv_set(f"failover_pull:{name}", dt.datetime.now().isoformat(timespec="seconds"))
+            failover_pull(peer, name, fc)
+
+
+def failover_resume():
+    """At start-up on the backup machine: still holding the peer's plugins -> load them again (our flags are current,
+    nothing is imported)."""
+    fc = failover_cfg()
+    if not fc or (failover_state(fc["for"]).get("state")) != "active":
+        return
+    load_plugins(fc["plugins"])
+    _failover_loaded.add(fc["for"])
+    log("failover: still holding", fc["for"], "- plugins loaded again")
+
+
+def plugin_holds():
+    """Machine with plugins of its own: is one of its peers holding them (failover hold file for this host)?
+    Returns the list of holders' names, or None when a peer could not be asked."""
+    me = (os.environ.get("COMPUTERNAME") or socket.gethostname()).lower()
+    held, unknown = [], False
+    for peer in CFG.get("peers") or []:
+        if not peer_alias(peer):
+            continue
+        try:
+            rc, out, _ = _remote_python(peer, _remote_script(FO_HOLDS, {"root": _remote_root(peer)}), timeout=60)
+        except Exception:
+            rc, out = 1, ""
+        if rc or "@@OK@@" not in out:
+            unknown = True
+            continue
+        for ln in out.splitlines():
+            if ln.startswith("@@H@@"):
+                try:
+                    h = json.loads(ln[5:])
+                except ValueError:
+                    h = {}
+                if not h.get("host") or str(h["host"]).lower() == me:
+                    held.append(peer.get("name") or peer_alias(peer))
+    return held if held or not unknown else None
+
+
+def plugin_hold_applies():
+    return bool(CFG.get("plugins")) and CFG.get("plugin_hold_check", True) and any(peer_alias(p) for p in CFG.get("peers") or [])
+
+
+def deferred_plugins():
+    """Start-up found a peer holding our plugins (failover): run them only once it has handed them back. A peer that cannot
+    be asked any more for hold_check_minutes (default 2) is taken as not holding; a hold that stays hold_wait_minutes
+    (default 30) is overridden with a warning. (A peer that cannot be asked at start-up: plugins start at once, and
+    plugin_hold_watch restarts us if a hold shows up.)"""
+    t0 = time.time()
+    while True:
+        holds = plugin_holds()
+        waited = (time.time() - t0) / 60
+        if holds == []:
+            break
+        if holds is None and waited >= float(CFG.get("hold_check_minutes", 2)):
+            log("plugin hold check: peers not reachable, starting plugins")
+            break
+        if holds and waited >= float(CFG.get("hold_wait_minutes", 30)):
+            _ctx.chat = PRIMARY
+            try:
+                reply(f"⚠️ המחשב \"{holds[0]}\" עדיין מחזיק את האוטומציות אחרי {int(waited)} דק'. הפעלתי אותן כאן; "
+                      "בדוק שהן לא רצות בשני המחשבים.")
+            finally:
+                _ctx.chat = None
+            break
+        if holds:
+            log("plugins held by", holds, "- waiting")
+        time.sleep(30)
+    start_plugins()
+    _own_plugins[0] = True
+
+
+def plugin_hold_watch():
+    """Running with our plugins: if a peer took them over (we were cut off, not off), restart; start-up then waits."""
+    if not plugin_hold_applies() or not _own_plugins[0]:
+        return
+    last = kv_get("plugin_hold_at") or ""
+    now = dt.datetime.now()
+    if last and now - dt.datetime.fromisoformat(last) < dt.timedelta(minutes=int(CFG.get("hold_watch_minutes", 5))):
+        return
+    kv_set("plugin_hold_at", now.isoformat(timespec="seconds"))
+    holds = plugin_holds()
+    if holds and not os.path.exists(RESTART_FILE):
+        log("plugins held by", holds, "while running here: restarting")
+        _ctx.chat = PRIMARY
+        try:
+            reply(f"⚠️ המחשב \"{holds[0]}\" מריץ את האוטומציות במקומי. מפעיל מחדש כדי שלא ירוצו פעמיים; הן יחזרו לכאן כשהוא ימסור אותן.")
+        finally:
+            _ctx.chat = None
+        with open(RESTART_FILE, "w", encoding="utf-8") as f:
+            f.write(f"המחשב \"{holds[0]}\" מחזיק את האוטומציות")
 
 
 # ---------- message intake ----------
@@ -3122,6 +3564,11 @@ def sent_special(mid):
 def handle(row):
     mid, cj, sender, ts, content, me, mtype = row
     content = (content or "").strip()
+    try:
+        if failover_approve(content, cj, ts, me):
+            return  # "מאשר לנייח": answered by the failover code, never a Claude run
+    except Exception:
+        log("failover approve error", traceback.format_exc())
     if cj != LOCAL and cj in load_groups() and me:  # the owner's own message in a connected group (others' messages stay plain information)
         if content.startswith(CFG["reply_prefix"].strip()):
             return  # our own reply
@@ -3822,35 +4269,39 @@ def morning_summary():
         _ctx.chat = None
 
 
+_sched_lock = threading.RLock()  # held while the scheduler reads the job lists and while plugins are loaded at run time
+
+
 def scheduler():
     while True:
         now = dt.datetime.now()
         today = now.date().isoformat()
         try:
-            kv_set("heartbeat", now.isoformat())
-            daily = [(CFG["backup_time"], "backup", backup), (CFG.get("update_check_time", "09:00"), "update_check", update_check),
-                     (CFG.get("group_check_time", "10:00"), "group_check", group_check),
-                     (CFG.get("selftest_time", "04:30"), "selftest", nightly_selftest),
-                     (CFG.get("morning_summary_time", "07:30"), "morning_summary", morning_summary),
-                     (CFG.get("signin_check_time", "09:30"), "signin_check", signin_check),
-                     (CFG.get("day_sync_time", "23:15"), "day_sync", day_sync),
-                     (CFG.get("auto_release_time", "23:30"), "auto_release", auto_release),
-                     (CFG.get("auto_update_time", "23:50"), "auto_update", auto_update)]
-            for at, key, fn in daily + _daily:
-                if now.strftime("%H:%M") >= at and kv_get(f"day:{key}") != today:
-                    kv_set(f"day:{key}", today)
-                    slow.put(fn)  # backup / checks / plugin reports never delay the owner's voice notes or reminders
-            if kv_get("at:reminders") != now.strftime("%Y%m%d%H%M"):
-                kv_set("at:reminders", now.strftime("%Y%m%d%H%M"))
-                work.put(reminders_check)
-                work.put(scheduled_check)
-                slow.put(sync_all_group_names)
-                work.put(transcribe_backfill_check)
-            for minutes, key, fn in _periodic:
-                last = kv_get(f"at:{key}")
-                if not last or now - dt.datetime.fromisoformat(last) > dt.timedelta(minutes=minutes):
-                    kv_set(f"at:{key}", now.isoformat())
-                    slow.put(fn)  # plugin jobs (e.g. extracting requests with Claude) run off the owner's fast queue
+            with _sched_lock:
+                kv_set("heartbeat", now.isoformat())
+                daily = [(CFG["backup_time"], "backup", backup), (CFG.get("update_check_time", "09:00"), "update_check", update_check),
+                         (CFG.get("group_check_time", "10:00"), "group_check", group_check),
+                         (CFG.get("selftest_time", "04:30"), "selftest", nightly_selftest),
+                         (CFG.get("morning_summary_time", "07:30"), "morning_summary", morning_summary),
+                         (CFG.get("signin_check_time", "09:30"), "signin_check", signin_check),
+                         (CFG.get("day_sync_time", "23:15"), "day_sync", day_sync),
+                         (CFG.get("auto_release_time", "23:30"), "auto_release", auto_release),
+                         (CFG.get("auto_update_time", "23:50"), "auto_update", auto_update)]
+                for at, key, fn in daily + _daily:
+                    if now.strftime("%H:%M") >= at and kv_get(f"day:{key}") != today:
+                        kv_set(f"day:{key}", today)
+                        slow.put(fn)  # backup / checks / plugin reports never delay the owner's voice notes or reminders
+                if kv_get("at:reminders") != now.strftime("%Y%m%d%H%M"):
+                    kv_set("at:reminders", now.strftime("%Y%m%d%H%M"))
+                    work.put(reminders_check)
+                    work.put(scheduled_check)
+                    slow.put(sync_all_group_names)
+                    work.put(transcribe_backfill_check)
+                for minutes, key, fn in _periodic:
+                    last = kv_get(f"at:{key}")
+                    if not last or now - dt.datetime.fromisoformat(last) > dt.timedelta(minutes=minutes):
+                        kv_set(f"at:{key}", now.isoformat())
+                        slow.put(fn)  # plugin jobs (e.g. extracting requests with Claude) run off the owner's fast queue
         except Exception:
             log("scheduler error", traceback.format_exc())
         time.sleep(30)
@@ -3860,7 +4311,15 @@ if __name__ == "__main__":
     for d in (OUTBOX, GROUPS_DIR, INBOX, LOCAL_FILES):
         os.makedirs(d, exist_ok=True)
     adb().close()
-    load_plugins()
+    _defer = False  # the service: our plugins wait while another machine holds them (failover); unknown = run them now
+    if len(sys.argv) == 1 and plugin_hold_applies():
+        try:
+            _defer = bool(plugin_holds())
+        except Exception:
+            log("plugin hold check failed", traceback.format_exc())
+    if not _defer:
+        load_plugins()
+        _own_plugins[0] = True
     if len(sys.argv) > 1 and sys.argv[1] == "tts":  # agent.py tts <voice> <out.ogg> <utf8 text file> (dashboard preview)
         tts_ogg(tts_clean(open(sys.argv[4], encoding="utf-8").read()), sys.argv[3], voice=sys.argv[2])
         sys.exit()
@@ -3893,8 +4352,14 @@ if __name__ == "__main__":
             kv_set("transcribe_off_since", dt.datetime.now().isoformat(timespec="seconds"))
     except Exception as e:
         log("transcribe_off_since", e)
-    for target in [worker, slow_worker, command_worker, scheduler, event_listener, watchdog, tunnel_keeper, peer_watch, local_health_watch, push_loop] + _threads:
+    try:
+        failover_resume()  # backup machine still holding another machine's plugins
+    except Exception:
+        log("failover resume failed", traceback.format_exc())
+    for target in [worker, slow_worker, command_worker, scheduler, event_listener, watchdog, tunnel_keeper, peer_watch, local_health_watch, push_loop] + list(_threads):
         threading.Thread(target=target, daemon=True).start()
+    if _defer:
+        threading.Thread(target=deferred_plugins, daemon=True).start()
     sys.path.insert(0, ROOT)
     from dash import server as dash_server  # control panel, also on http://127.0.0.1:8770
     threading.Thread(target=dash_server.serve, args=(8770,), daemon=True).start()

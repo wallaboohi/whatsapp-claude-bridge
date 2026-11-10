@@ -32,6 +32,13 @@
 - לפני כל שחרור: `uv run python -X utf8 tools/selftest.py` על המחשב שלך (21 בדיקות על חשבון אמיתי).
 - אם גרסה שוחררה עם באג: משחררים מיד גרסת תיקון (`1.1.1`). משתמש שהעדכון נכשל אצלו חוזר אוטומטית לגרסה הקודמת.
 
+## גיבוי אוטומציות בין מחשבים (failover)
+מחשב גיבוי מריץ תוספים של מחשב אחר כשהוא כבוי, רק אחרי אישור הבעלים במשפט המדויק (ברירת מחדל "מאשר לנייח"), ומחזיר אותם כשהוא חוזר. פירוט: ARCHITECTURE.md §3.
+- הפעלה: במחשב הגיבוי בלבד `"failover": {"for": ..., "plugins": [...], ...}` + הפעלה מחדש. דרוש: ssh מהגיבוי למחשב השני (peer `ssh`/`tunnel`),
+  venv של הסוכן שם (`agent/.venv/Scripts/python.exe`), ו-ssh הפוך מהמחשב עם התוספים לגיבוי (בדיקת ההחזקה).
+- תקלה: `agent/failover/hold-*.json` במחשב הגיבוי = הוא מחזיק; kv `failover:<שם>` = המצב. ביטול ידני: לעצור את הסוכן בגיבוי, למחוק את קובץ ההחזקה ו-`failover:<שם>`.
+- בדיקות: `test_failover_*` ב-`agent/tests/test_agent.py` מריצות את הסקריפטים ה"מרוחקים" מקומית.
+
 ## English summary
 Users update from the dashboard ("Check for a tool update") or `update.cmd` (self-tested, automatic rollback); the agent
 announces new releases in the owner's WhatsApp control group daily. Maintainers release with

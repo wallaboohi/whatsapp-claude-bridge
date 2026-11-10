@@ -1139,3 +1139,143 @@ def test_restart_reason_only_hebrew(agent):
     mod, _ = agent
     assert mod.restart_reason_he("/הפעל מחדש") == "/הפעל מחדש"
     assert mod.restart_reason_he("segment_d: listener + roles") == "עדכון הגדרות / קוד (הפרטים ביומן השינויים)"
+
+
+# ---------- failover: the backup machine runs another machine's plugins while it is off ----------
+
+def _fo_setup(mod, tmp_path, monkeypatch):
+    """A fake peer on this machine: its 'remote' scripts run locally against tmp_path/peer (same layout as a real install)."""
+    import subprocess as sp
+    peer_root = tmp_path / "peer"
+    (peer_root / "agent").mkdir(parents=True)
+    pdb = sqlite3.connect(peer_root / "agent" / "agent.db")
+    pdb.execute("CREATE TABLE kv (k TEXT PRIMARY KEY, v TEXT)")
+    pdb.executemany("INSERT INTO kv VALUES (?, ?)", [("segd:lunch_send:2026-11-10", "09:10"), ("day:fo_report", "2026-11-10"),
+                                                     ("at:fo_every", "2026-11-10T10:00:00"), ("session_id", "theirs"),
+                                                     ("day:backup", "2026-11-10")])
+    pdb.commit()
+    pdb.close()
+    plugin = tmp_path / "fo_plugin.py"
+    plugin.write_text("def setup(agent):\n    agent.daily('08:00', 'fo_report', lambda: None)\n"
+                      "    agent.every(60, 'fo_every', lambda: None)\n    agent.background(lambda: None)\n", encoding="utf-8")
+    plugdb = tmp_path / "plugin.db"
+    x = sqlite3.connect(plugdb)
+    x.execute("CREATE TABLE kv (k TEXT PRIMARY KEY, v TEXT)")
+    x.execute("INSERT INTO kv VALUES ('procurement_sent_date', '2026-11-10')")
+    x.commit()
+    x.close()
+    peer = {"name": "לפטופ", "url": "http://127.0.0.1:1", "ssh": "4-MINE", "root": str(peer_root)}
+    mod.CFG["peers"] = [peer]
+    mod.CFG["failover"] = {"for": "לפטופ", "plugins": [str(plugin)], "plugin_dbs": [str(plugdb).replace("\\", "/")]}
+    monkeypatch.setattr(mod, "FAILOVER_DIR", str(tmp_path / "failover"))
+    calls = []
+
+    def run_local(p, script, timeout=120):
+        calls.append(script)
+        r = sp.run([sys.executable, "-I", "-X", "utf8", "-"], input=script.encode("utf-8"), capture_output=True, timeout=60)
+        return r.returncode, r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace")
+    monkeypatch.setattr(mod, "_remote_python", run_local)
+    sent = []
+    monkeypatch.setattr(mod, "send", lambda chat, text, media=None, quoted=None: sent.append((chat, text)) or True)
+    monkeypatch.setattr(mod, "push", lambda *a, **k: None)
+    return peer, peer_root, sent, calls
+
+
+def test_failover_step_asks_once_per_outage_and_releases(agent):
+    mod, _ = agent
+    fc = {"after_minutes": 10, "approve_text": "מאשר לנייח", "self_name": "נייח", "plugins": ["x/segment_d_auto.py"]}
+    t0 = mod.dt.datetime(2026, 11, 10, 7, 0)
+    m = lambda n: t0 + mod.dt.timedelta(minutes=n)
+    off = {"off_since": t0.isoformat(timespec="seconds")}
+    st, acts = mod.failover_step({}, off, m(5), fc, "לפטופ")
+    assert acts == [] and (st.get("state") or "idle") == "idle", "a short blip is not an outage"
+    st, acts = mod.failover_step(st, off, m(11), fc, "לפטופ")
+    assert st["state"] == "asked" and len(acts) == 1 and acts[0][0] == "ask"
+    assert "מאשר לנייח" in acts[0][1] and "07:00" in acts[0][1] and "segment_d_auto" in acts[0][1] and "אין כאן עותק" in acts[0][1]
+    st, acts = mod.failover_step(st, off, m(40), fc, "לפטופ")
+    assert acts == [], "one question per outage"
+    st2, acts = mod.failover_step(st, {}, m(45), fc, "לפטופ")
+    assert st2 == {"state": "idle"} and acts[0][0] == "say" and "חזר" in acts[0][1], "back before approval: nothing moves"
+    st, acts = mod.failover_step({"state": "active", "since": m(20).isoformat(), "handback_pending": True}, {}, m(90), fc, "לפטופ")
+    assert st["state"] == "releasing" and acts[0][0] == "release" and "חזר" in acts[0][1]
+    st, acts = mod.failover_step(st, {"off_since": m(100).isoformat()}, m(115), fc, "לפטופ")
+    assert st["state"] == "asked" and acts[0][0] == "ask", "down again before the hand-back: asked again"
+    st, acts = mod.failover_step(st, {}, m(120), fc, "לפטופ")
+    assert st["state"] == "releasing" and acts == [], "the pending hand-back is finished when it is back"
+
+
+def test_failover_full_cycle(agent, tmp_path, monkeypatch):
+    mod, _ = agent
+    peer, peer_root, sent, calls = _fo_setup(mod, tmp_path, monkeypatch)
+    now = mod.dt.datetime.now()
+    # 1. laptop up: its state is copied here
+    mod.failover_tick(peer, "לפטופ", {})
+    snap = mod._fo_snapshot("לפטופ")
+    assert snap["kv"]["segd:lunch_send:2026-11-10"] == "09:10" and "session_id" not in snap["kv"]
+    assert snap["pdb"][mod.CFG["failover"]["plugin_dbs"][0]]["procurement_sent_date"] == "2026-11-10"
+    # 2. laptop down 12 minutes: one question in the control group
+    off = {"off_since": (now - mod.dt.timedelta(minutes=12)).isoformat(timespec="seconds")}
+    mod.kv_set("peerwatch:לפטופ", json.dumps(off))
+    mod.failover_tick(peer, "לפטופ", off)
+    mod.failover_tick(peer, "לפטופ", off)
+    asks = [t for _, t in sent if "להעביר" in t]
+    assert len(asks) == 1 and sent[0][0] == mod.PRIMARY and "המצב האחרון" in asks[0]
+    # 3. someone else's message does nothing; the owner's exact phrase moves the plugins here
+    later = (now + mod.dt.timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S+02:00")
+    mod.handle(("o1", mod.PRIMARY, "x", later, "מאשר לנייח", False, ""))
+    assert mod.failover_state("לפטופ")["state"] == "asked"
+    mod.handle(("o2", mod.PRIMARY, "me", later, " מאשר  לנייח ", True, ""))
+    st = mod.failover_state("לפטופ")
+    assert st["state"] == "active" and sorted(st["jobs"]) == ["fo_every", "fo_report"]
+    assert "עברו לנייח" in sent[-1][1]
+    assert mod.kv_get("segd:lunch_send:2026-11-10") == "09:10", "done-today flags imported"
+    assert mod.kv_get("day:fo_report") == "2026-11-10" and mod.kv_get("day:backup") is None, "only the plugins' own job flags"
+    assert any(k == "fo_report" for _, k, _ in mod._daily) and os.path.exists(mod._fo_hold_path("לפטופ"))
+    with mod.adb() as db:
+        assert db.execute("SELECT count(*) FROM commands").fetchone()[0] == 0, "the phrase is never a Claude run"
+    # 4. a job ran here meanwhile; the laptop answers again -> restart requested (plugins cannot be stopped in place)
+    mod.kv_set("segd:lunch_send:2026-11-11", "09:10")
+    mod.kv_set("day:fo_report", "2026-11-11")
+    mod.failover_tick(peer, "לפטופ", {})
+    assert mod.failover_state("לפטופ")["state"] == "releasing" and os.path.exists(mod.RESTART_FILE)
+    assert os.path.exists(mod._fo_hold_path("לפטופ")), "still held until the restart"
+    # 5. the new process (plugins not loaded) hands the flags back and releases
+    mod._failover_loaded.clear()
+    mod.failover_tick(peer, "לפטופ", {})
+    p = sqlite3.connect(peer_root / "agent" / "agent.db")
+    got = dict(p.execute("SELECT k, v FROM kv"))
+    p.close()
+    assert got["segd:lunch_send:2026-11-11"] == "09:10" and got["day:fo_report"] == "2026-11-11" and got["session_id"] == "theirs"
+    assert not os.path.exists(mod._fo_hold_path("לפטופ")) and mod.failover_state("לפטופ")["state"] == "idle"
+    assert "חזרו אליו" in sent[-1][1]
+
+
+def test_failover_resume_after_restart_and_holds(agent, tmp_path, monkeypatch):
+    mod, _ = agent
+    peer, peer_root, sent, calls = _fo_setup(mod, tmp_path, monkeypatch)
+    mod.failover_save("לפטופ", {"state": "active", "jobs": ["fo_report"], "since": "2026-11-10T07:00:00"})
+    mod.failover_resume()
+    assert "לפטופ" in mod._failover_loaded and any(k == "fo_report" for _, k, _ in mod._daily)
+    # the laptop's side: a hold file for this host on the peer = do not run own plugins
+    assert mod.plugin_holds() == []
+    hold = peer_root / "agent" / "failover"
+    hold.mkdir(parents=True)
+    me = os.environ.get("COMPUTERNAME") or mod.socket.gethostname()
+    (hold / "hold-x.json").write_text(json.dumps({"for": "לפטופ", "host": "OTHER-PC"}), encoding="utf-8")
+    assert mod.plugin_holds() == [], "a hold for another machine"
+    (hold / "hold-y.json").write_text(json.dumps({"for": "לפטופ", "host": me}), encoding="utf-8")
+    assert mod.plugin_holds() == ["לפטופ"]
+    monkeypatch.setattr(mod, "_remote_python", lambda *a, **k: (255, "", "ssh: connect timed out"))
+    assert mod.plugin_holds() is None, "peer unreachable = unknown"
+
+
+def test_failover_phrase_swallowed_on_other_machines(agent):
+    mod, _ = agent
+    mod.CFG["peers"] = [{"name": "נייח", "tunnel": "ybhw"}]
+    mod.CFG.pop("failover", None)
+    assert mod.failover_approve("מאשר לנייח", mod.PRIMARY, "2026-11-10 08:00:00+02:00", True)
+    assert not mod.failover_approve("מאשר לנייח", mod.PRIMARY, "2026-11-10 08:00:00+02:00", False)
+    assert not mod.failover_approve("מאשר לנייח בבקשה", mod.PRIMARY, "2026-11-10 08:00:00+02:00", True)
+    assert mod.plugin_hold_applies() is False, "no plugins of its own"
+    mod.CFG["plugins"] = ["x.py"]
+    assert mod.plugin_hold_applies() is True

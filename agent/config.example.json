@@ -52,5 +52,10 @@
   "push_quiet": "23:00-07:00",
   "auto_transcript": false,
   "peer_backup": true,
-  "peer_backup_max_mb": 2048
+  "peer_backup_max_mb": 2048,
+  "failover": {},
+  "plugin_hold_check": true,
+  "hold_check_minutes": 2,
+  "hold_wait_minutes": 30,
+  "hold_watch_minutes": 5
 }
