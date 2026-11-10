@@ -4,6 +4,7 @@ Opens the dashboard in its own window (Edge WebView2), with a tray icon showing 
 Works offline and without the agent: the dashboard reads the tool's local databases directly.
 """
 import os
+import socket
 import sys
 import threading
 import time
@@ -16,6 +17,36 @@ else:
 import webview  # noqa: E402
 
 from dash import server  # noqa: E402
+
+SHOW_PORT = 8779  # one app per user: a second launch asks the running one to show its window, then exits
+_quitting = [False]
+
+
+def already_running():
+    try:
+        with socket.create_connection(("127.0.0.1", SHOW_PORT), timeout=1) as c:
+            c.sendall(b"show")
+        return True
+    except OSError:
+        return False
+
+
+def listen_for_show(window):
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        srv.bind(("127.0.0.1", SHOW_PORT))
+    except OSError:
+        return
+    srv.listen(2)
+
+    def loop():
+        while True:
+            conn, _ = srv.accept()
+            with conn:
+                if conn.recv(16) == b"show":
+                    window.show()
+                    window.restore()
+    threading.Thread(target=loop, daemon=True).start()
 
 
 def tray(window):
@@ -37,8 +68,19 @@ def tray(window):
         window.restore()
 
     def quit_app(icon, item):
+        _quitting[0] = True
         icon.stop()
         window.destroy()
+
+    def on_closing():
+        # owner 10.11: closing the window used to destroy it, so the tray's "open" showed nothing afterwards —
+        # now X only hides it; "יציאה" in the tray really quits
+        if _quitting[0]:
+            return True
+        window.hide()
+        return False
+
+    window.events.closing += on_closing
 
     icon = pystray.Icon("WhatsAppDash", icon_img((150, 150, 150)), "ווצאפ ↔ Claude",
                         menu=pystray.Menu(pystray.MenuItem("פתח לוח בקרה", show, default=True), pystray.MenuItem("יציאה", quit_app)))
@@ -56,9 +98,12 @@ def tray(window):
 
 
 def main():
+    if already_running():
+        return
     port = server.start_free_port()
     window = webview.create_window(f"ווצאפ ↔ Claude · לוח בקרה {server.VERSION}", f"http://127.0.0.1:{port}/",
                                    width=1360, height=900, min_size=(760, 600), text_select=True)
+    listen_for_show(window)
     webview.start(tray, window, gui="edgechromium", private_mode=False,
                   storage_path=os.path.join(os.environ.get("LOCALAPPDATA", "."), "WhatsAppDash", "webview"))
 
