@@ -601,7 +601,7 @@ def auto_release():
     except OSError:
         pass
     if r.returncode != 0:
-        say(f"⚠️ שחרור לילי של {ver} נכשל — הגרסה לא פורסמה, הכלי ממשיך לעבוד כרגיל.\n{(r.stdout + r.stderr)[-300:]}")
+        say(f"⚠️ שחרור לילי של {ver} נכשל — הגרסה לא פורסמה, הכלי ממשיך לעבוד כרגיל.\n{(r.stdout + r.stderr)[-500:]}")
         return
     g("push", "-q", "hub", "HEAD:main", "--tags")
     say(f"🚀 שחרור לילי: גרסה {ver} פורסמה ב-GitHub ({len(subjects)} שינויים מאז {last}). העדכון האוטומטי ב-{CFG.get('auto_update_time', '23:50')} יתקין אותה בכל המחשבים.")

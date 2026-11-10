@@ -24,7 +24,12 @@ def run(cmd, cwd=ROOT, env=None):
     print("→", " ".join(cmd), flush=True)
     r = subprocess.run(cmd, cwd=cwd, env={**os.environ, **(env or {})}, text=True, encoding="utf-8", errors="replace", capture_output=True)
     if r.returncode:
-        print((r.stdout or "")[-2000:], (r.stderr or "")[-2000:])
+        out = (r.stdout or "") + (r.stderr or "")
+        print(out[-2000:])
+        failed = [l for l in out.splitlines() if l.startswith(("FAILED", "ERROR"))]
+        if failed:
+            print("
+".join(failed[:5]))
         sys.exit(f"✖ נכשל: {' '.join(cmd)}")
     return r.stdout
 
@@ -86,7 +91,14 @@ def main():
     run([go, "vet", "."], cwd=os.path.join(ROOT, "whatsapp-bridge"), env=env)
     run([go, "test", "./..."], cwd=os.path.join(ROOT, "whatsapp-bridge"), env=env)
     uv = shutil.which("uv") or os.path.expanduser("~/.local/bin/uv.exe")
-    run([uv, "run", "-q", "--no-sync", "--group", "dev", "pytest", "-q", "tests"], cwd=os.path.join(ROOT, "agent"))
+    # owner 10.11: a test that passed only at some hours broke the 23:30 release — run the suite now and at fake clock
+    # times too (night/quiet hours, morning edge, release time, weekend, year end; agent/tests/conftest.py FAKE_NOW)
+    for when in ("", "2026-11-10 02:00", "2026-11-10 07:00", "2026-11-10 12:00", "2026-11-10 23:30",
+                 "2026-11-13 15:00", "2026-11-14 23:59", "2026-12-31 23:59"):
+        if when:
+            print("  🕒 שעון מדומה:", when)
+        run([uv, "run", "-q", "--no-sync", "--group", "dev", "pytest", "-q", "-p", "no:cacheprovider", "tests"],
+            cwd=os.path.join(ROOT, "agent"), env={"FAKE_NOW": when} if when else None)
     run([uv, "run", "-q", "python", "-c", "import main, extras"], cwd=os.path.join(ROOT, "whatsapp-mcp-server"))
     claude = shutil.which("claude")
     if claude:
@@ -111,7 +123,7 @@ def main():
     if hits:
         sys.exit("✖ נמצא מידע אישי בקבצים שעולים לגיט:\n" + "\n".join(hits))
     print("✔ כל הבדיקות עברו")
-    bumped = ["VERSION", "dash/VERSION", ".claude-plugin/plugin.json", "agent/pyproject.toml", "CHANGELOG.md"]
+    bumped = BUMPED
     if dry:
         run(["git", "checkout", "--"] + bumped)
         print("(dry run — לא נשמר ולא פורסם)")
@@ -127,5 +139,16 @@ def main():
     print(f"✔ v{ver} פורסמה. GitHub בונה את הקבצים: https://github.com/WallaBoohi/whatsapp-claude-bridge/actions")
 
 
+BUMPED = ["VERSION", "dash/VERSION", ".claude-plugin/plugin.json", "agent/pyproject.toml", "CHANGELOG.md"]
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit as e:
+        # a failed release must not leave the version bump behind: it blocked the next night ("uncommitted changes")
+        if e.code not in (0, None) and "--dry-run" not in sys.argv and not str(e.code).startswith("✖ יש שינויים"):
+            head = subprocess.run(["git", "log", "-1", "--format=%s"], cwd=ROOT, capture_output=True, text=True).stdout
+            if not head.startswith("Release v"):
+                subprocess.run(["git", "checkout", "--"] + BUMPED, cwd=ROOT)
+                print("↩️ מספר הגרסה הוחזר (השחרור לא בוצע)")
+        raise
