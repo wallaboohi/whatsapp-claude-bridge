@@ -183,17 +183,31 @@ func draftCardText(draftID int64, name string, jid types.JID, message, mediaPath
 	}
 	if jid.Server == types.DefaultUserServer {
 		// %20 instead of '+' (safer in wa.me); long links get cut by WhatsApp's link detection, so skip them
-		q := strings.ReplaceAll(url.QueryEscape(message), "+", "%20")
-		if len(q) <= 1200 && mediaPath == "" {
+		if !needsCopyText(jid, message, mediaPath) {
 			card.WriteString("\n\n🔗 לשליחה בעצמך (פותח את השיחה עם הטקסט מוכן):\n")
-			card.WriteString("https://wa.me/" + jid.User + "?text=" + q)
+			card.WriteString(waLink(jid, message))
 		} else {
-			card.WriteString("\n\n🔗 הטקסט ארוך / יש קובץ, אין קישור עם טקסט. השיחה: https://wa.me/" + jid.User)
+			// owner 10.11: WhatsApp on the phone cuts a tapped link at ~400 characters (≈60 Hebrew letters), so the
+			// pre-typed text arrived cut. Long texts: the full text comes as the next message, to copy and paste.
+			card.WriteString("\n\n📋 הטקסט המלא להעתקה בהודעה הבאה (לחיצה ארוכה ← העתק). השיחה: https://wa.me/" + jid.User)
 		}
 	} else {
-		card.WriteString("\n(קבוצה / מזהה ללא מספר: ✅ שולח; לשליחה ידנית העתק את הטקסט)")
+		card.WriteString("\n📋 הטקסט המלא להעתקה בהודעה הבאה (לחיצה ארוכה ← העתק)")
 	}
 	return card.String()
+}
+
+// waLinkMax: the longest wa.me?text= link WhatsApp on the phone opens whole (measured 10.11: cut at ~414 chars).
+const waLinkMax = 380
+
+func waLink(jid types.JID, message string) string {
+	// %20 instead of '+' (safer in wa.me)
+	return "https://wa.me/" + jid.User + "?text=" + strings.ReplaceAll(url.QueryEscape(message), "+", "%20")
+}
+
+// needsCopyText: no usable pre-typed link on the card (too long, a file, or a group) -> the text is posted separately.
+func needsCopyText(jid types.JID, message, mediaPath string) bool {
+	return jid.Server != types.DefaultUserServer || mediaPath != "" || len(waLink(jid, message)) > waLinkMax
 }
 
 // makeDraft turns a send into a draft card in the control group instead of sending it.
@@ -231,6 +245,11 @@ func makeDraftKind(client *whatsmeow.Client, p SendPolicy, jid types.JID, messag
 	}
 	if ok && mediaPath != "" {
 		sendWhatsAppMessage(client, p.ControlGroup, "🤖 📎 קובץ לטיוטה → "+name, mediaPath)
+	}
+	if ok && kind == "" && strings.TrimSpace(message) != "" && needsCopyText(jid, message, mediaPath) {
+		// the exact text alone (no prefix), so long-press → copy gives just the message. The agent ignores it because
+		// it equals a pending draft's text (agent.py is_draft_copy).
+		sendWhatsAppMessage(client, p.ControlGroup, message, "")
 	}
 	if !ok {
 		return false, "Draft could not be posted: " + res

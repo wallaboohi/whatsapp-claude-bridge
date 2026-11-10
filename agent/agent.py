@@ -3561,6 +3561,22 @@ def sent_special(mid):
         return False
 
 
+def is_draft_copy(content):
+    """The bridge posts a long draft's exact text right under its card (WhatsApp cuts long wa.me links on the phone);
+    that message has no prefix, so recognise it by being the text of a draft created in the last 10 minutes."""
+    if not content:
+        return False
+    try:
+        db = mdb()
+        try:
+            since = (dt.datetime.now() - dt.timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
+            return bool(db.execute("SELECT 1 FROM drafts WHERE trim(message) = ? AND created >= ?", (content.strip(), since)).fetchone())
+        finally:
+            db.close()
+    except sqlite3.Error:
+        return False
+
+
 def handle(row):
     mid, cj, sender, ts, content, me, mtype = row
     content = (content or "").strip()
@@ -3574,6 +3590,8 @@ def handle(row):
             return  # our own reply
         if sent_special(mid):
             return  # an event / poll / location the tool itself sent (has no reply prefix)
+        if is_draft_copy(content):
+            return  # the bridge's copy-and-paste text under a draft card (owner 10.11), not an instruction
         if content == READ_ALOUD:  # 🛞 = read my last answer aloud (no Claude run)
             work.put(lambda: read_aloud(cj))
             return

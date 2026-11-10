@@ -1279,3 +1279,14 @@ def test_failover_phrase_swallowed_on_other_machines(agent):
     assert mod.plugin_hold_applies() is False, "no plugins of its own"
     mod.CFG["plugins"] = ["x.py"]
     assert mod.plugin_hold_applies() is True
+
+
+def test_draft_copy_text_is_not_an_instruction(agent):
+    mod, db = agent
+    db.execute("CREATE TABLE IF NOT EXISTS drafts (id INTEGER PRIMARY KEY, recipient TEXT, name TEXT, message TEXT, media_path TEXT, "
+               "created TEXT, status TEXT, card_id TEXT, quoted_id TEXT, kind TEXT, payload TEXT)")
+    now = mod.dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S.0000000+02:00")
+    db.execute("INSERT INTO drafts (recipient, name, message, created, status) VALUES ('x', 'y', ?, ?, 'pending')", ("שלום ציון\nשורה שנייה", now))
+    db.commit()
+    assert mod.is_draft_copy("שלום ציון\nשורה שנייה")
+    assert not mod.is_draft_copy("תעשה משהו אחר")
