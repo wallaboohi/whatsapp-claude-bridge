@@ -623,7 +623,16 @@ def report_restart():
     reply(f"✅ עליתי מחדש ({dt.datetime.now():%H:%M}) · {machine_tag()}. "
           f"סשן: {'נקי לכל הודעה' if CFG.get('fresh_sessions') else 'רציף'} · "
           f"מודל: {forced or 'אוטו'}\n{restart_usage()}"
-          + (f"\nסיבה: {info['reason']}" if info.get("reason") else ""))
+          + (f"\nסיבה: {restart_reason_he(info['reason'])}" if info.get("reason") else ""))
+
+
+def restart_reason_he(reason):
+    """Owner 10.11: the restart line is only in Hebrew. A reason written without Hebrew (by a tool or a Claude run) is
+    replaced with a generic Hebrew one; the original stays in the log."""
+    if re.search(r"[֐-׿]", reason):
+        return reason
+    log("restart reason (not Hebrew, shown generic):", reason)
+    return "עדכון הגדרות / קוד (הפרטים ביומן השינויים)"
 
 
 # ---------- conversations: the primary control group, extra groups (groups.json) and the dashboard's local chat ----------

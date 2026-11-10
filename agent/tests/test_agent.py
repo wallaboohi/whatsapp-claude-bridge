@@ -1133,3 +1133,9 @@ def test_wheel_on_a_voice_note_posts_its_transcript(agent, monkeypatch):
     db.commit()
     mod.read_other("972500000009@s.whatsapp.net", "A1")
     assert calls == [("/send_transcript", {"jid": "972500000009@s.whatsapp.net", "id": "A1", "text": "🤖 תמלול: אני בדרך"})]
+
+
+def test_restart_reason_only_hebrew(agent):
+    mod, _ = agent
+    assert mod.restart_reason_he("/הפעל מחדש") == "/הפעל מחדש"
+    assert mod.restart_reason_he("segment_d: listener + roles") == "עדכון הגדרות / קוד (הפרטים ביומן השינויים)"
