@@ -3293,7 +3293,13 @@ def failover_tick(peer, name, peer_st):
     st, acts = failover_step(st, peer_st, dt.datetime.now(), fc, name, (snap or {}).get("at"))
     failover_save(name, st)
     for kind, text in acts:
-        if kind == "ask":
+        if kind == "ask" and fc.get("auto"):
+            # owner 10.11 11:09: no approval — the backup takes over by itself when the peer is down, and says so
+            msg = failover_activate(name, fc, st)
+            st = failover_state(name)
+            _fo_say(fc, f"🖥️ המחשב \"{name}\" לא זמין כבר {fc['after_minutes']} דקות או יותר. {msg}")
+            push(f"\"{name}\" כבוי: האוטומציות עברו ל{fc['self_name']}", fc["group"], "failover")
+        elif kind == "ask":
             _fo_say(fc, text)
             push(f"\"{name}\" כבוי: להעביר את האוטומציות ל{fc['self_name']}?", fc["group"], "failover")
         elif kind == "say":

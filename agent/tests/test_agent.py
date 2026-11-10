@@ -1290,3 +1290,16 @@ def test_draft_copy_text_is_not_an_instruction(agent):
     db.commit()
     assert mod.is_draft_copy("שלום ציון\nשורה שנייה")
     assert not mod.is_draft_copy("תעשה משהו אחר")
+
+
+def test_failover_auto_takes_over_without_asking(agent, monkeypatch):
+    mod, _ = agent
+    said, acted = [], []
+    mod.CFG["failover"] = {"for": "לפטופ", "plugins": ["x.py"], "auto": True}
+    monkeypatch.setattr(mod, "_fo_say", lambda fc, t: said.append(t))
+    monkeypatch.setattr(mod, "push", lambda *a, **k: None)
+    monkeypatch.setattr(mod, "_fo_snapshot", lambda name: None)
+    monkeypatch.setattr(mod, "failover_activate", lambda name, fc, st, now=None: acted.append(name) or "✅ עברו")
+    off = (mod.dt.datetime.now() - mod.dt.timedelta(minutes=30)).isoformat(timespec="seconds")
+    mod.failover_tick({"name": "לפטופ"}, "לפטופ", {"off_since": off})
+    assert acted == ["לפטופ"] and said and "לאישור" not in said[0]
