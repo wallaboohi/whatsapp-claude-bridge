@@ -210,9 +210,15 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 
 	// Download the media using whatsmeow client
 	mediaData, err := client.Download(context.Background(), downloader)
-	if err != nil && (errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith403) || errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith404) || errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith410)) {
-		// Media expired on the server: ask the phone to re-upload it, then retry with the new path
-		fmt.Printf("Media expired, requesting re-upload from phone for %s...\n", messageID)
+	if err != nil && (errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith403) || errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith404) ||
+		errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith410) || errors.Is(err, whatsmeow.ErrInvalidMediaHMAC) ||
+		errors.Is(err, whatsmeow.ErrInvalidMediaEncSHA256) ||
+		// whatsmeow wraps the last host's error with %v, so errors.Is does not see it
+		strings.Contains(err.Error(), whatsmeow.ErrInvalidMediaHMAC.Error()) ||
+		strings.Contains(err.Error(), whatsmeow.ErrInvalidMediaEncSHA256.Error())) {
+		// Media expired on the server, or (old / history-synced media, owner 10.11) the CDN no longer serves the
+		// original blob: ask the phone — which still has every file — to re-upload it, then retry with the new path
+		fmt.Printf("Media not downloadable (%v), requesting re-upload from phone for %s...\n", err, messageID)
 		var newPath string
 		newPath, err = requestMediaReupload(client, messageStore, messageID, chatJID, mediaKey)
 		if err == nil {
@@ -258,10 +264,11 @@ var mediaRetryWaiters sync.Map
 // requestMediaReupload asks the phone to re-upload expired media and returns the new direct path
 func requestMediaReupload(client *whatsmeow.Client, messageStore *MessageStore, messageID, chatJID string, mediaKey []byte) (string, error) {
 	var isFromMe bool
+	var stored string
 	if err := messageStore.db.QueryRow(
-		"SELECT is_from_me FROM messages WHERE id = ? AND chat_jid = ?",
+		"SELECT is_from_me, coalesce(sender, '') FROM messages WHERE id = ? AND chat_jid = ?",
 		messageID, chatJID,
-	).Scan(&isFromMe); err != nil {
+	).Scan(&isFromMe, &stored); err != nil {
 		return "", fmt.Errorf("failed to look up message: %v", err)
 	}
 
@@ -272,6 +279,13 @@ func requestMediaReupload(client *whatsmeow.Client, messageStore *MessageStore, 
 	sender := chat
 	if isFromMe && client.Store.ID != nil {
 		sender = client.Store.ID.ToNonAD()
+	} else if chat.Server == types.GroupServer && stored != "" && stored != chat.User {
+		// in a group the retry names the author (rows synced before 10.11 may only hold the group id)
+		server := types.DefaultUserServer
+		if !strings.HasPrefix(stored, "972") && len(stored) >= 14 {
+			server = types.HiddenUserServer
+		}
+		sender = types.NewJID(stored, server)
 	}
 	info := &types.MessageInfo{
 		MessageSource: types.MessageSource{Chat: chat, Sender: sender, IsFromMe: isFromMe},
