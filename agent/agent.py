@@ -3918,7 +3918,8 @@ def push_send_due(now=None):
         if now - newest < gather and now - oldest < gather * 3:
             continue  # more may come right now: wait a little and send them together
         texts = [t for _, t, _ in items]
-        body = {"jid": chat, "kind": "event", "start": int(time.time()) + 5}
+        # owner 10.11: an event without an end stays "ongoing" on the phone and keeps notifying — end it a minute later
+        body = {"jid": chat, "kind": "event", "start": int(time.time()) + 5, "end": int(time.time()) + 65}
         if len(texts) == 1:
             body["name"] = texts[0]
         else:
