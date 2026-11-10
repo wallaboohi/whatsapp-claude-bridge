@@ -4566,17 +4566,37 @@ def monthly_jobs():
         if today.day != day or kv_get(key) == today.strftime("%Y-%m"):
             continue
         kv_set(key, today.strftime("%Y-%m"))
-        started = time.time()
-        _ctx.chat = PRIMARY
+        run_job(job, "🗓")
+
+
+def run_job(job, mark):
+    """One scheduled Claude task for the control group: its answer and any outbox files go to the owner only."""
+    started = time.time()
+    _ctx.chat = PRIMARY
+    try:
+        out = claude(job["prompt"], model=job.get("model"), session=False, timeout=int(job.get("timeout_min", 30)) * 60,
+                     chat=PRIMARY)
+        reply(f"{mark} *{job.get('name', 'משימה מתוזמנת')}*\n{(out or 'המשימה נכשלה, אפשר להריץ אותה שוב ידנית.').strip()}")
+        send_outbox(started)
+    except Exception:
+        log("scheduled job failed", job.get("name"), traceback.format_exc())
+    finally:
+        _ctx.chat = None
+
+
+def once_jobs():
+    """Owner 10.11: one-off night work (config "once_jobs": [{"name", "at": "YYYY-MM-DD HH:MM", "prompt"}]) — big
+    structural changes wait for the night. Each runs once, at or after its time."""
+    now = dt.datetime.now()
+    for job in CFG.get("once_jobs") or []:
+        key = f"once:{job.get('name')}:{job.get('at')}"
         try:
-            out = claude(job["prompt"], model=job.get("model"), session=False, timeout=int(job.get("timeout_min", 30)) * 60,
-                         chat=PRIMARY)
-            reply(f"🗓 *{job.get('name', 'משימה חודשית')}*\n{(out or 'המשימה החודשית נכשלה, אפשר להריץ אותה שוב ידנית.').strip()}")
-            send_outbox(started)
-        except Exception:
-            log("monthly job failed", job.get("name"), traceback.format_exc())
-        finally:
-            _ctx.chat = None
+            due = dt.datetime.fromisoformat(str(job.get("at")))
+        except ValueError:
+            continue
+        if now >= due and not kv_get(key):
+            kv_set(key, now.isoformat(timespec="seconds"))
+            run_job(job, "🌙")
 
 
 _sched_lock = threading.RLock()  # held while the scheduler reads the job lists and while plugins are loaded at run time
@@ -4607,6 +4627,8 @@ def scheduler():
                     kv_set("at:reminders", now.strftime("%Y%m%d%H%M"))
                     work.put(reminders_check)
                     work.put(scheduled_check)
+                    if CFG.get("once_jobs"):
+                        slow.put(once_jobs)
                     slow.put(sync_all_group_names)
                     work.put(transcribe_backfill_check)
                 if CFG.get("home_sync") and (not kv_get("at:home_sync") or

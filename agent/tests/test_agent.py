@@ -1408,3 +1408,16 @@ def test_health_report_counts_downtime_and_failures(agent):
     out = mod.health_report()
     assert "ניתוקים:* 2" in out and "סה\"כ 12 דק'" in out and "הארוך ביותר 10 דק'" in out
     assert "נכשלו:* 1" in out and "timeout" in out and "מחכים" not in out
+
+
+def test_once_job_runs_once_after_its_time(agent, monkeypatch):
+    mod, _ = agent
+    calls = []
+    monkeypatch.setattr(mod, "claude", lambda prompt, **k: calls.append(prompt) or "בוצע")
+    monkeypatch.setattr(mod, "reply", lambda text, quoted=None: None)
+    monkeypatch.setattr(mod, "send_outbox", lambda since: None)
+    mod.CFG["once_jobs"] = [{"name": "לילה", "at": "2020-01-01 03:00", "prompt": "עבודת לילה"},
+                            {"name": "עתיד", "at": "2999-01-01 03:00", "prompt": "לא עכשיו"}]
+    mod.once_jobs()
+    mod.once_jobs()
+    assert calls == ["עבודת לילה"]
