@@ -3091,8 +3091,27 @@ def put(path, kv):
 put(C["agent_db"], C["kv"])
 for p, kv in C["pdb"].items():
     put(p, kv)
+import base64, os
+for p, b64 in (C.get("files") or {}).items():  # queued work (e.g. signed forms) the backup could not finish
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "wb") as f:
+        f.write(base64.b64decode(b64))
 print("@@OK@@")
 '''
+
+
+def _fo_return_files(fc):
+    """Owner 10.11: work the backup can't finish (a signed form needs the laptop's form archive) waits in the
+    failover.return_dirs folders and goes back to the peer, at the same paths, with the hand-back."""
+    import base64
+    import glob
+    out = {}
+    for d in fc.get("return_dirs") or []:
+        for f in glob.glob(os.path.join(d, "**", "*"), recursive=True):
+            if os.path.isfile(f):
+                with open(f, "rb") as fh:
+                    out[f.replace("\\", "/")] = base64.b64encode(fh.read()).decode()
+    return out
 
 FO_HOLDS = r'''import glob
 for f in glob.glob(C["root"] + "/agent/failover/hold-*.json"):
@@ -3263,11 +3282,17 @@ def failover_handback(peer, name, fc, st):
                 pass
             finally:
                 db.close()
+    files = _fo_return_files(fc)
     rc, out, err = _remote_python(peer, _remote_script(FO_HANDBACK, {"agent_db": _remote_root(peer) + "/agent/agent.db",
-                                                                     "kv": kv, "pdb": pdb}))
+                                                                     "kv": kv, "pdb": pdb, "files": files}), timeout=600)
     if rc or "@@OK@@" not in out:
         log("failover hand-back failed", name, rc, (err or out)[-300:])
         return False
+    for f in files:  # delivered: the peer processes them from its own copy
+        try:
+            os.remove(f)
+        except OSError:
+            pass
     try:
         os.remove(_fo_hold_path(name))
     except OSError:
@@ -3279,6 +3304,7 @@ def failover_handback(peer, name, fc, st):
     failover_save(name, {"state": "idle", "last": {"since": st.get("since"), "back": dt.datetime.now().isoformat(timespec="seconds")}})
     log("failover released:", name, f"{len(kv)} keys handed back")
     _fo_say(fc, f"✅ המחשב \"{name}\" חזר, האוטומציות חזרו אליו (מה שבוצע כאן לא ירוץ אצלו שוב)."
+                + (f"\n📥 הועברו אליו {len(files)} קבצים שחיכו לו (למשל טפסים חתומים), והוא יקלוט אותם." if files else "")
                 + (f"\nקבצים שהשתנו כאן בזמן הגיבוי ולא הועתקו אליו: {', '.join(changed)}" if changed else ""))
     return True
 
