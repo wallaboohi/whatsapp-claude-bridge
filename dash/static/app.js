@@ -143,6 +143,20 @@ applyView();
 const say = $("say");
 const grow = () => { say.style.height = "auto"; say.style.height = Math.min(140, say.scrollHeight) + "px"; };
 say.addEventListener("input", grow);
+// ---- drafts survive a restart / reset of the dashboard (owner 10.11: a long message was lost when the app restarted).
+// Saved on every keystroke (this PC's WebView2 storage), per conversation; restored when the box is empty.
+const draftKey = () => "wa-dash-draft:" + (curChat || "");
+const store = (k, v) => { try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch (e) {} };
+const stored = k => { try { return localStorage.getItem(k) || ""; } catch (e) { return ""; } };
+function saveDraft() { store(draftKey(), say.value); if (say.value.trim()) store("wa-dash-draft-last", say.value); }
+function restoreDraft(quiet) {
+  if (say.value.trim()) return false;
+  const t = stored(draftKey()); if (!t) return false;
+  say.value = t; grow(); if (!quiet) toast(L("שוחזרה הטיוטה שלא נשלחה", "Unsent draft restored")); return true;
+}
+say.addEventListener("input", saveDraft);
+window.addEventListener("beforeunload", saveDraft);
+setTimeout(() => restoreDraft(false), 300);
 say.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("composer").requestSubmit(); } });
 let outbox = [];  // messages typed here and not yet seen in the conversation: shown at once as "sending…"
 let sending = false, attached = [];
@@ -183,7 +197,7 @@ $("composer").onsubmit = async e => {
   sending = true;
   const files = attached, shown = (text + files.map(f => "\n📎 " + baseName(f.path)).join("")).trim();
   const item = { text: shown, at: new Date().toISOString(), state: "sending", chat: curChat };
-  outbox.push(item); say.value = ""; attached = []; drawAttach(); grow(); drawOutbox(true);
+  store("wa-dash-sent-last", text); outbox.push(item); say.value = ""; store(draftKey(), ""); attached = []; drawAttach(); grow(); drawOutbox(true);
   let ok = false;
   try {
     const body = (isLocal || !sync) ? { do: "say_pc", chat: curChat, text, sync: 0, attach: files.map(f => f.path) }
@@ -668,6 +682,8 @@ document.addEventListener("contextmenu", e => {
   const sel = String(window.getSelection() || "");
   ctx.querySelector('[data-cmd="cut"]').hidden = !inBox;
   ctx.querySelector('[data-cmd="paste"]').hidden = !inBox;
+  ctx.querySelector('[data-cmd="draft"]').hidden = !inBox || !(stored(draftKey()) || stored("wa-dash-draft-last"));
+  ctx.querySelector('[data-cmd="lastsent"]').hidden = !inBox || !stored("wa-dash-sent-last");
   ctx.querySelector('[data-cmd="copymsg"]').hidden = ctx.querySelector('[data-cmd="quote"]').hidden = !bubble;
   ctx.querySelector('[data-cmd="copy"]').disabled = !sel && !(inBox && say.selectionStart !== say.selectionEnd);
   ctx.hidden = false;
@@ -694,6 +710,11 @@ ctx.addEventListener("click", async e => {
     if (t == null) { try { t = await Promise.race([navigator.clipboard.readText(), new Promise((_, no) => setTimeout(() => no(), 1500))]); } catch (err) {} }
     if (t != null) { say.setRangeText(t, say.selectionStart, say.selectionEnd, "end"); grow(); }
     else if (!document.execCommand("paste")) toast(L("להדבקה: Ctrl+V", "To paste: Ctrl+V"));
+  }
+  if (cmd === "draft" || cmd === "lastsent") {  // put the text back without losing what is already typed
+    const t = cmd === "draft" ? (stored(draftKey()) || stored("wa-dash-draft-last")) : stored("wa-dash-sent-last");
+    if (t && say.value.trim() !== t.trim()) { say.value = say.value.trim() ? say.value + "\n" + t : t; grow(); saveDraft(); }
+    say.focus();
   }
   if (cmd === "selectall") {
     if (ctxTarget) { say.focus(); say.select(); }
