@@ -1357,3 +1357,54 @@ def test_dictionary_hints_only_matching_entries(agent, tmp_path, monkeypatch):
     assert mod.dictionary_hints("שלום") == ""
     monkeypatch.setattr(mod, "DICT_FILE", str(tmp_path / "none.md"))
     assert mod.dictionary_hints("תרמוקס") == ""
+
+
+def test_monthly_job_runs_once_on_its_day(agent, monkeypatch):
+    mod, _ = agent
+    import datetime as _dt
+    import calendar
+    calls, said = [], []
+    monkeypatch.setattr(mod, "claude", lambda prompt, **k: calls.append(prompt) or "החשבון מוכן")
+    monkeypatch.setattr(mod, "reply", lambda text, quoted=None: said.append(text))
+    monkeypatch.setattr(mod, "send_outbox", lambda since: None)
+    today = _dt.date.today()
+    other = 1 if today.day != 1 else 2
+    mod.CFG["monthly_jobs"] = [{"name": "חשבון ציפורה", "day": 31, "prompt": "הפק חשבון"},
+                               {"name": "אחר", "day": other, "prompt": "לא היום"}]
+    last = calendar.monthrange(today.year, today.month)[1]
+    mod.monthly_jobs()
+    mod.monthly_jobs()
+    expected = 1 if today.day == last else 0  # day 31 = this month's last day
+    assert calls.count("הפק חשבון") == expected and "לא היום" not in calls
+    assert len(said) == expected
+
+
+def test_search_command_answers_locally(agent):
+    mod, db = agent
+    db.execute("CREATE TABLE IF NOT EXISTS chats (jid TEXT PRIMARY KEY, name TEXT, last_message_time TIMESTAMP)")
+    db.execute("INSERT INTO chats VALUES ('g9@g.us', 'מפגש ציפורה', '2026-11-10')")
+    db.execute("INSERT INTO messages (id, chat_jid, sender, content, timestamp, is_from_me) VALUES "
+               "('a', 'g9@g.us', '972500000009', '4 קרח בבקשה', '2026-11-10 10:00:00+02:00', 0), "
+               "('b', 'g9@g.us', 'me', '🤖 קרח נספר', '2026-11-10 11:00:00+02:00', 1)")
+    db.commit()
+    out = mod.owner_command("/חפש קרח")
+    assert "מפגש ציפורה" in out and "4 קרח" in out and "נספר" not in out
+    assert "כתוב מה לחפש" in mod.owner_command("/ חפש")
+    assert "לא נמצא" in mod.owner_command("/חפש שוקולד")
+
+
+def test_health_report_counts_downtime_and_failures(agent):
+    mod, db = agent
+    import datetime as _dt
+    db.execute("CREATE TABLE IF NOT EXISTS chats (jid TEXT PRIMARY KEY, name TEXT, last_message_time TIMESTAMP)")
+    db.execute("CREATE TABLE IF NOT EXISTS conn_log (at TIMESTAMP, event TEXT)")
+    db.execute("CREATE TABLE IF NOT EXISTS send_log (id INTEGER PRIMARY KEY AUTOINCREMENT, recipient TEXT, message_id TEXT, ok BOOLEAN, detail TEXT, timestamp TIMESTAMP)")
+    t = _dt.datetime.now() - _dt.timedelta(hours=3)
+    f = lambda d: (t + _dt.timedelta(minutes=d)).strftime("%Y-%m-%d %H:%M:%S")
+    db.executemany("INSERT INTO conn_log VALUES (?, ?)", [(f(0), "disconnected"), (f(10), "connected"), (f(30), "disconnected"), (f(32), "connected")])
+    db.executemany("INSERT INTO send_log (recipient, message_id, ok, detail, timestamp) VALUES (?, ?, ?, ?, ?)",
+                   [("x@s.whatsapp.net", "1", 1, "", f(1)), ("y@s.whatsapp.net", "2", 0, "timeout", f(2))])
+    db.commit()
+    out = mod.health_report()
+    assert "ניתוקים:* 2" in out and "סה\"כ 12 דק'" in out and "הארוך ביותר 10 דק'" in out
+    assert "נכשלו:* 1" in out and "timeout" in out and "מחכים" not in out

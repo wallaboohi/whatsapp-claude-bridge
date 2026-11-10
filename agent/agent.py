@@ -1892,10 +1892,50 @@ RULE_PROMPT = ("[/כלל בסיס] {owner} מבקש להוסיף כלל בסיס
                "אל תוסיף אותו לשיחה: הצע להוסיף אותו ככלל גשר ושאל.")
 
 
+def search_messages(q, limit=15):
+    """Owner 10.11: /חפש <text> — a plain search in every chat and in voice-note transcripts, answered by the bridge
+    itself (no Claude run). Newest first, with date, chat and sender name; the bridge's own 🤖 messages are skipped."""
+    q = " ".join(str(q or "").split())
+    if len(q) < 2:
+        return "🔎 כתוב מה לחפש, למשל: /חפש קרח"
+    like = "%" + q.replace("%", "").replace("_", "") + "%"
+    names = _contact_names()
+    hits = []
+    with mdb() as db:
+        chats = {j: n for j, n in db.execute("SELECT jid, name FROM chats")}
+        for ts, cj, sender, me, content in db.execute(
+                "SELECT timestamp, chat_jid, sender, is_from_me, content FROM messages WHERE content LIKE ? "
+                "AND content NOT LIKE '🤖%' ORDER BY timestamp DESC LIMIT ?", (like, limit)):
+            hits.append((str(ts), cj, sender, me, content, ""))
+    with adb() as db:
+        for ts, cj, sender, text in db.execute("SELECT ts, chat_jid, sender, text FROM transcripts WHERE text LIKE ? "
+                                               "ORDER BY ts DESC LIMIT ?", (like, limit)):
+            hits.append((str(ts), cj, sender, 0, text, "🎤 "))
+    hits.sort(key=lambda h: h[0], reverse=True)
+    if not hits:
+        return f"🔎 לא נמצא \"{q}\"."
+    out = [f"🔎 *{q}* — {min(len(hits), limit)} תוצאות אחרונות:"]
+    for ts, cj, sender, me, content, mark in hits[:limit]:
+        user = str(sender or "").split("@")[0]
+        who = OWNER if me else (names.get(user) or ("" if user == cj.split("@")[0] else "איש קשר לא מזוהה"))
+        where = chats.get(cj) or names.get(cj.split("@")[0]) or "שיחה לא מזוהה"
+        when = ts[8:10] + "." + ts[5:7] + " " + ts[11:16] if len(ts) >= 16 else ts
+        text = " ".join(str(content).split())
+        i = text.lower().find(q.lower())
+        snip = (("…" if i > 40 else "") + text[max(0, i - 40):i + len(q) + 60] + ("…" if i + len(q) + 60 < len(text) else "")) if i >= 0 else text[:100]
+        out.append(f"• {when} · *{where}*{' · ' + who if who and who != where else ''}\n  {mark}{snip}")
+    return "\n".join(out)
+
+
 def owner_command(text, chat=None):
     """Slash commands answered locally (no Claude run, no cost), for this conversation. Returns reply text or None."""
     if re.match(r"^/(מחכים|waiting)\s*$", text.strip()):
         return waiting_now()
+    if re.match(r"^/\s*(בריאות|health)\s*$", text.strip()):
+        return health_report()
+    m = re.match(r"^/\s*(חפש|search)(?:\s+(.*))?$", text.strip(), re.S)
+    if m:
+        return search_messages(m.group(2) or "")
     if text.strip() in ("/🛞", "/ 🛞"):
         key = K("read_all", chat or PRIMARY)
         on = not kv_get(key)
@@ -2214,8 +2254,9 @@ def run_command(row):
             with adb() as db:  # Claude may already have queued its own push (a question waiting for the owner)
                 own = db.execute("SELECT 1 FROM push_queue WHERE created >= ? AND (chat IS NULL OR chat = ?)",
                                  (dt.datetime.fromtimestamp(started).isoformat(timespec="seconds"), chat)).fetchone()
-            if not own:
-                push(f"✅ סיימתי: {' '.join(raw_text(text.lstrip('!')).split())[:60]}", chat, "done")
+            if not own:  # owner 10.11: say what came out (first line of the answer), not his own request back to him
+                first = next((ln for ln in answer.splitlines() if re.sub(r"[*_~`\s]", "", ln)), "")
+                push(f"✅ סיימתי ({int((time.time() - started) // 60)} דק'): {re.sub(r'[*_~`]', '', first).strip()[:70]}", chat, "done")
         if answer and not stopped and src == "wa" and not pc_only():
             if kv_get(K("read_all", chat)):  # /🛞 mode: every answer is also read aloud
                 read_text(chat, out)
@@ -4423,6 +4464,121 @@ def morning_summary():
         _ctx.chat = None
 
 
+def health_report(days=7):
+    """Owner 10.11: the weekly health report — WhatsApp disconnects (how many, total and longest), sends that failed,
+    and costs. Deliberately not "people waiting for an answer" (he does not answer everyone and does not want that)."""
+    now = dt.datetime.now()
+    since = now - dt.timedelta(days=days)
+    out = [f"🩺 *דוח בריאות שבועי* ({since:%d.%m}–{now:%d.%m})"]
+    try:
+        with mdb() as db:
+            ev = [(str(a)[:19], e) for a, e in db.execute("SELECT at, event FROM conn_log WHERE at >= ? ORDER BY at",
+                                                          (since.strftime("%Y-%m-%d %H:%M:%S"),))]
+            sends = db.execute("SELECT COUNT(*), SUM(CASE WHEN ok THEN 0 ELSE 1 END) FROM send_log WHERE timestamp >= ?",
+                               (since.strftime("%Y-%m-%d %H:%M:%S"),)).fetchone()
+            fails = db.execute("SELECT recipient, detail, timestamp FROM send_log WHERE NOT ok AND timestamp >= ? "
+                               "ORDER BY timestamp DESC LIMIT 3", (since.strftime("%Y-%m-%d %H:%M:%S"),)).fetchall()
+            chats = {j: n for j, n in db.execute("SELECT jid, name FROM chats")}
+    except sqlite3.Error as e:
+        return out[0] + f"\nלא הצלחתי לקרוא את נתוני הגשר: {e}"
+    downs, down_at = [], None
+    for at, e in ev:
+        if e == "disconnected" and down_at is None:
+            down_at = at
+        elif e == "connected" and down_at:
+            downs.append((dt.datetime.fromisoformat(at) - dt.datetime.fromisoformat(down_at)).total_seconds())
+            down_at = None
+    if downs:
+        out.append(f"📶 *ניתוקים:* {len(downs)} · סה\"כ {sum(downs) / 60:.0f} דק' · הארוך ביותר {max(downs) / 60:.0f} דק'")
+    else:
+        out.append("📶 *ניתוקים:* אין")
+    total, failed = (sends[0] or 0), (sends[1] or 0)
+    out.append(f"📤 *שליחות:* {total} · *נכשלו:* {failed}" + (" ⚠️" if failed else ""))
+    names = _contact_names()
+    for rcp, detail, ts in fails:
+        who = chats.get(rcp) or names.get(str(rcp).split("@")[0]) or "איש קשר לא מזוהה"
+        out.append(f"   • {str(ts)[8:10]}.{str(ts)[5:7]} {who}: {str(detail or '')[:60]}")
+    with adb() as db:
+        rows = db.execute("SELECT chat, SUM(cost), COUNT(*) FROM claude_runs WHERE at >= ? GROUP BY chat ORDER BY 2 DESC",
+                          (since.isoformat(timespec="seconds"),)).fetchall()
+    per = {}
+    for chat, c, n in rows:  # runs without a chat belong to the control group
+        k = chat or PRIMARY
+        per[k] = (per.get(k, (0, 0))[0] + (c or 0), per.get(k, (0, 0))[1] + n)
+    cost = sum(c for c, _ in per.values())
+    out.append(f"💰 *עלויות:* {money(cost)} · {sum(n for _, n in per.values())} הרצות")
+    for chat, (c, n) in sorted(per.items(), key=lambda x: -x[1][0])[:3]:
+        out.append(f"   • {chats.get(chat) or 'קבוצת הבקרה'}: {money(c)} ({n})")
+    return "\n".join(out)
+
+
+def weekly_health():
+    if dt.date.today().weekday() != int(CFG.get("health_report_weekday", 6)):  # 6 = Sunday
+        return
+    _ctx.chat = PRIMARY
+    try:
+        reply(health_report())
+    finally:
+        _ctx.chat = None
+
+
+def home_sync():
+    """Owner 10.11: personal files that both PCs use (config "home_sync": {"peer": "<ssh host>", "files": [...]}, paths
+    relative to home/, default dictionary.md + shared-sync.md) are kept in step over ssh — the newer copy wins, both ways.
+    Runs on the PC that can ssh to the other one; nothing is ever deleted."""
+    hs = CFG.get("home_sync") or {}
+    peer = hs.get("peer")
+    if not peer:
+        return
+    ssh, scp = shutil.which("ssh") or "ssh", shutil.which("scp") or "scp"
+    rhome = (hs.get("remote_home") or HOME).replace("\\", "/")
+    opts = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+    for rel in hs.get("files") or ["dictionary.md", "shared-sync.md"]:
+        local, remote = os.path.join(HOME, rel), f"{rhome}/{rel}"
+        try:
+            r = subprocess.run([ssh, *opts, peer, "powershell", "-NoProfile", "-Command",
+                                f"if (Test-Path '{remote}') {{ [int64]((Get-Item '{remote}').LastWriteTimeUtc - [datetime]'1970-01-01').TotalSeconds }} else {{ 0 }}"],
+                               capture_output=True, text=True, timeout=60)
+            rt = int((r.stdout or "0").strip().splitlines()[-1]) if r.returncode == 0 else None
+            if rt is None:
+                continue
+            lt = int(os.path.getmtime(local)) if os.path.exists(local) else 0
+            if lt > rt + 2:
+                subprocess.run([scp, "-q", "-p", *opts, local, f"{peer}:{remote}"], capture_output=True, timeout=120)
+                log("home_sync →", rel)
+            elif rt > lt + 2:
+                subprocess.run([scp, "-q", "-p", *opts, f"{peer}:{remote}", local], capture_output=True, timeout=120)
+                log("home_sync ←", rel)
+        except Exception as e:
+            log("home_sync failed", rel, str(e)[:120])
+
+
+def monthly_jobs():
+    """Owner 10.11: jobs that run once a month (config "monthly_jobs": [{"name", "day", "prompt"}], checked daily at
+    monthly_jobs_time, default 02:00). day past the month's end (30 in February) = the month's last day. The prompt runs
+    as a one-off Claude task for the control group; its answer and any outbox files go to the owner only."""
+    import calendar
+    today = dt.date.today()
+    last = calendar.monthrange(today.year, today.month)[1]
+    for job in CFG.get("monthly_jobs") or []:
+        day = min(int(job.get("day") or 1), last)
+        key = f"month:{job.get('name') or job.get('prompt', '')[:20]}"
+        if today.day != day or kv_get(key) == today.strftime("%Y-%m"):
+            continue
+        kv_set(key, today.strftime("%Y-%m"))
+        started = time.time()
+        _ctx.chat = PRIMARY
+        try:
+            out = claude(job["prompt"], model=job.get("model"), session=False, timeout=int(job.get("timeout_min", 30)) * 60,
+                         chat=PRIMARY)
+            reply(f"🗓 *{job.get('name', 'משימה חודשית')}*\n{(out or 'המשימה החודשית נכשלה, אפשר להריץ אותה שוב ידנית.').strip()}")
+            send_outbox(started)
+        except Exception:
+            log("monthly job failed", job.get("name"), traceback.format_exc())
+        finally:
+            _ctx.chat = None
+
+
 _sched_lock = threading.RLock()  # held while the scheduler reads the job lists and while plugins are loaded at run time
 
 
@@ -4440,7 +4596,9 @@ def scheduler():
                          (CFG.get("signin_check_time", "09:30"), "signin_check", signin_check),
                          (CFG.get("day_sync_time", "23:15"), "day_sync", day_sync),
                          (CFG.get("auto_release_time", "23:30"), "auto_release", auto_release),
-                         (CFG.get("auto_update_time", "23:50"), "auto_update", auto_update)]
+                         (CFG.get("auto_update_time", "23:50"), "auto_update", auto_update),
+                         (CFG.get("monthly_jobs_time", "02:00"), "monthly_jobs", monthly_jobs),
+                         (CFG.get("health_report_time", "08:00"), "weekly_health", weekly_health)]
                 for at, key, fn in daily + _daily:
                     if now.strftime("%H:%M") >= at and kv_get(f"day:{key}") != today:
                         kv_set(f"day:{key}", today)
@@ -4451,6 +4609,10 @@ def scheduler():
                     work.put(scheduled_check)
                     slow.put(sync_all_group_names)
                     work.put(transcribe_backfill_check)
+                if CFG.get("home_sync") and (not kv_get("at:home_sync") or
+                                             now - dt.datetime.fromisoformat(kv_get("at:home_sync")) > dt.timedelta(minutes=10)):
+                    kv_set("at:home_sync", now.isoformat())
+                    slow.put(home_sync)
                 for minutes, key, fn in _periodic:
                     last = kv_get(f"at:{key}")
                     if not last or now - dt.datetime.fromisoformat(last) > dt.timedelta(minutes=minutes):
