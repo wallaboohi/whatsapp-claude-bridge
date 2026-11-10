@@ -1038,10 +1038,15 @@ def test_push_alerts_queue_merge_and_usage(agent, monkeypatch):
     mod.push("ב", "g1@g.us")
     mod.push_send_due(later)
     assert len(sent) == 2 and sent[1][1]["name"].startswith("🔔 2 התראות") and sent[1][1]["text"] == "א\nב"
-    # usage/limit pushes are off entirely (owner 10.11)
-    mod.push("📊 Claude: חלון 5 השעות הגיע ל-100%", "g1@g.us", "usage")
+    # usage at 80%: once per window
+    reset = (mod.dt.datetime.now(mod.dt.timezone.utc) + mod.dt.timedelta(hours=2)).replace(microsecond=0)
+    jitter = iter(range(1, 50))  # the real meter returns resets_at a few hundred ms apart on every read (10.11 bug)
+    monkeypatch.setattr(mod, "claude_usage", lambda: {"five_hour": {"utilization": 100, "resets_at": (reset + mod.dt.timedelta(microseconds=next(jitter) * 9000)).isoformat()}, "seven_day": {"utilization": 40}})
+    for _ in range(4):
+        mod.push_watch_usage()
     with mod.adb() as a:
-        assert a.execute("SELECT COUNT(*) FROM push_queue WHERE kind = 'usage'").fetchone()[0] == 0
+        texts = [r[0] for r in a.execute("SELECT text FROM push_queue WHERE kind = 'usage'")]
+    assert len(texts) == 1 and "100%" in texts[0] and "משתחרר ב-" in texts[0]
     # a PC alone on its WhatsApp account watches people itself; a sharer waits while the leader is up
     monkeypatch.setattr(mod, "own_account", lambda: "972500000000")
     mod.CFG["peers"] = [{"name": "pc2", "tunnel": "x"}]

@@ -2128,6 +2128,7 @@ def run_command(row):
         if not unlimited(chat) and spent >= budget * 0.8 and kv_get(K("budget_warned", chat)) != dt.date.today().isoformat():
             kv_set(K("budget_warned", chat), dt.date.today().isoformat())
             reply(T["budget_warn"].format(spent=money(spent), budget=money(budget, 0)))
+            push(f"📊 מגבלת הגשר בשיחה הזו הגיעה ל-80% ({money(spent)} מתוך {money(budget, 0)})", chat, "usage")
         gname = g.get("name") or ""
         if chat == PRIMARY and src == "wa":
             where, dest = ("בקבוצת הבקרה בווצאפ", "לקבוצה") if LANG == "he" else ("in the WhatsApp control group", "to the group")
@@ -3893,9 +3894,7 @@ def push_on():
 
 def push(text, chat=None, kind=""):
     """Queue one phone notification (short, clean text). chat None = the conversation Claude is answering now, else the
-    primary control group. No usage/limit pushes at all (owner 10.11: they repeated every 10 minutes in every group)."""
-    if kind == "usage":
-        return
+    primary control group."""
     text = re.sub(r"[*_~`]", "", " ".join(str(text or "").split()))[:90].strip()
     if not text or not push_on():
         return
@@ -4051,6 +4050,32 @@ def push_watch_waiting(now=None):
         push(f"📞 שיחה שלא נענתה מ{who}", PRIMARY, "call")
 
 
+def push_watch_usage():
+    """Owner 09.11: a push when a usage limit reaches 80% — Claude's plan meter (5 hours / weekly). Owner 10.11: exactly
+    one push per window, until the limit resets. The meter's resets_at jitters by fractions of a second on every read,
+    so the window is remembered by its reset time (kv push_usage:<key> = reset epoch), not by the raw string."""
+    u = claude_usage() or {}
+    now = time.time()
+    for key, name, span in (("five_hour", "חלון 5 השעות", 5 * 3600), ("seven_day", "המגבלה השבועית", 7 * 86400)):
+        x = u.get(key) or {}
+        pct = x.get("utilization")
+        if pct is None or pct < 80:
+            continue
+        k = f"push_usage:{key}"
+        try:
+            if float(kv_get(k) or 0) > now:
+                continue  # already told in this window
+        except ValueError:
+            pass
+        try:
+            reset = dt.datetime.fromisoformat(str(x.get("resets_at")).replace("Z", "+00:00")).timestamp()
+        except (TypeError, ValueError):
+            reset = now + span
+        kv_set(k, str(reset))
+        when = dt.datetime.fromtimestamp(reset).strftime("%H:%M" if key == "five_hour" else "%d/%m %H:%M")
+        push(f"📊 Claude: {name} הגיע ל-{pct:.0f}% · משתחרר ב-{when}", PRIMARY, "usage")
+
+
 def push_loop():
     time.sleep(30)
     n = 0
@@ -4061,6 +4086,7 @@ def push_loop():
                 if n % 60 == 0:  # every 10 minutes
                     if watches_people():
                         push_watch_waiting()
+                    push_watch_usage()
         except Exception:
             log("push_loop error", traceback.format_exc())
         n += 1
