@@ -3918,6 +3918,68 @@ def in_quiet_hours(t):
     return (a <= hm < b) if a <= b else (hm >= a or hm < b)
 
 
+def _push_norm(text):
+    """The notification's identity: digits stripped, so '85%' and '100%' of the same alert, or a growing hour count, are one."""
+    return re.sub(r"\d+", "#", " ".join(str(text or "").split()))
+
+
+def push_guard(rows, now):
+    """Owner 10.11 15:51: a mechanism so notifications never get out of balance. Applied to everything about to be sent
+    (rows = [(id, chat, text, created, kind)]); returns the rows allowed.
+      1. no repeats: the same alert (see _push_norm) already sent in the last push_dedupe_hours (default 6; urgent
+         'fault' alerts: 1 hour) is dropped, and so are copies inside this batch;
+      2. rate cap: at most push_max_per_hour (6) / push_max_per_day (25) sent; the rest are dropped ('fault' alerts
+         are exempt from the cap);
+      3. whenever something was dropped, ONE summary notification per hour says how many and why, and it is logged.
+    Dropped rows are kept in push_queue with status 'suppressed' and the reason in result."""
+    if not rows:
+        return rows
+    dedupe_h = float(CFG.get("push_dedupe_hours", 6))
+    per_hour = int(CFG.get("push_max_per_hour", 6))
+    per_day = int(CFG.get("push_max_per_day", 25))
+    now_dt = dt.datetime.fromtimestamp(now)
+    iso = lambda d: d.isoformat(timespec="seconds")
+    with adb() as db:
+        sent = db.execute("SELECT text, kind, sent FROM push_queue WHERE status = 'sent' AND sent >= ?",
+                          (iso(now_dt - dt.timedelta(hours=max(dedupe_h, 24))),)).fetchall()
+    last_hour = [r for r in sent if r[2] >= iso(now_dt - dt.timedelta(hours=1))]
+    day_n, hour_n = len(sent), len(last_hour)
+    seen_recent = {}
+    for text, kind, when in sent:
+        seen_recent[_push_norm(text)] = max(seen_recent.get(_push_norm(text), ""), when)
+    allowed, dropped = [], []
+    batch = set()
+    for r in rows:
+        pid, chat, text, created, kind = r
+        n = _push_norm(text)
+        win = 1 if kind == "fault" else dedupe_h
+        when = seen_recent.get(n)
+        if n in batch:
+            dropped.append((pid, "duplicate-in-batch"))
+        elif when and when >= iso(now_dt - dt.timedelta(hours=win)):
+            dropped.append((pid, "duplicate"))
+        elif kind != "fault" and (hour_n >= per_hour or day_n >= per_day):
+            dropped.append((pid, "rate-hour" if hour_n >= per_hour else "rate-day"))
+        else:
+            allowed.append(r)
+            batch.add(n)
+            hour_n += 1
+            day_n += 1
+    if dropped:
+        with adb() as db:
+            for pid, why in dropped:
+                db.execute("UPDATE push_queue SET status = 'suppressed', sent = ?, result = ? WHERE id = ?", (iso(now_dt), why, pid))
+        reasons = sorted({w for _, w in dropped})
+        log(f"push guard dropped {len(dropped)}: {', '.join(reasons)}")
+        last = kv_get("push_guard_notice") or ""
+        if not last or last < iso(now_dt - dt.timedelta(hours=1)):
+            kv_set("push_guard_notice", iso(now_dt))
+            with adb() as db:
+                db.execute("INSERT INTO push_queue (created, chat, kind, text, status) VALUES (?, ?, 'guard', ?, 'pending')",
+                           (iso(now_dt), PRIMARY, f"⚖️ מנגנון האיזון עצר {len(dropped)} התראות חוזרות או עודפות (פרטים בלוח)"))
+    return allowed
+
+
 def push_send_due(now=None):
     """Post queued pushes. Waits while that conversation's command still runs, so the notification comes after the answer.
     A row without a chat (queued by Claude's tools/wa_push.py) belongs to the conversation running right now.
@@ -3930,9 +3992,8 @@ def push_send_due(now=None):
     quiet = in_quiet_hours(dt.datetime.fromtimestamp(now))
     running = _running_chats()
     groups = {}
+    rows = push_guard([r for r in rows if not (quiet and r[4] != "fault")], now)  # quiet hours: kept for the morning
     for pid, chat, text, created, kind in rows:
-        if quiet and kind != "fault":
-            continue  # quiet hours: kept and sent (merged) when they end; only an urgent fault rings now
         if not chat:
             chat = next(iter(running), PRIMARY) if len(running) == 1 else PRIMARY
             with adb() as db:

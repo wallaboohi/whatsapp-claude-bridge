@@ -1314,3 +1314,34 @@ def test_haiku_hebrew_aliases(agent, monkeypatch):
         mod.set_override("auto")
         mod.owner_command(f"/מודל {word}")
         assert mod.get_override() == "haiku", word
+
+
+def test_push_guard_keeps_alerts_in_balance(agent):
+    mod, _ = agent
+    now = mod.time.time()
+    iso = lambda d: d.isoformat(timespec="seconds")
+    ago = lambda mins: iso(mod.dt.datetime.fromtimestamp(now) - mod.dt.timedelta(minutes=mins))
+    with mod.adb() as db:  # the 5-hour alert was already sent 10 minutes ago
+        db.execute("INSERT INTO push_queue (created, chat, kind, text, status, sent) VALUES (?, 'g', 'usage', ?, 'sent', ?)",
+                   (ago(10), "📊 Claude: חלון 5 השעות הגיע ל-85%", ago(10)))
+    spec = [("📊 Claude: חלון 5 השעות הגיע ל-100%", "usage"),   # same alert, other number -> dropped
+            ("ליאור מחכה לתשובה", "waiting"),
+            ("ליאור מחכה לתשובה", "waiting")]                  # copy inside the batch -> dropped
+    rows = []
+    with mod.adb() as db:
+        for text, kind in spec:
+            rid = db.execute("INSERT INTO push_queue (created, chat, kind, text) VALUES (?, 'g', ?, ?)", (ago(0), kind, text)).lastrowid
+            rows.append((rid, "g", text, ago(0), kind))
+    allowed = mod.push_guard(rows, now)
+    assert [r[0] for r in allowed] == [rows[1][0]]
+    with mod.adb() as db:
+        st = dict(db.execute("SELECT id, status FROM push_queue WHERE id IN (?, ?, ?)", [r[0] for r in rows]))
+        notice = db.execute("SELECT text FROM push_queue WHERE kind = 'guard'").fetchone()
+    assert st[rows[0][0]] == "suppressed" and st[rows[2][0]] == "suppressed" and notice
+    # rate cap: 6 sent in the last hour -> new non-fault alerts are dropped, a fault still goes
+    with mod.adb() as db:
+        for i in range(6):
+            db.execute("INSERT INTO push_queue (created, chat, kind, text, status, sent) VALUES (?, 'g', 'x', ?, 'sent', ?)",
+                       (ago(5), f"שונה {chr(1488 + i)}", ago(5)))
+    more = [(900, "g", "משהו חדש", ago(0), "done"), (901, "g", "תקלה חדשה", ago(0), "fault")]
+    assert [r[0] for r in mod.push_guard(more, now)] == [901]
