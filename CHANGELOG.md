@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.0.12 — 2026-11-10
+- Fix flaky agent tests (no such table): adb() read AGENT_DB twice, so a module reload mid-call marked a new empty db as schema-done
+- release.py: fix newline literal
+- Release can't break on the clock again: release.py runs the agent tests at 8 fake clock times (tests/conftest.py FAKE_NOW: night, quiet hours, 23:30, weekend, y
+- Fix nightly release failure: push test no longer depends on the clock (failed in quiet hours 23:00-07:00, release runs 23:30); release.py shows the real error i
+- Daily sync lap-yakir 2026-11-09: 1 files
+- gsheet.py: info command (newest edit + editor)
+- Optional Claude in Chrome for owner runs (config chrome: true; needs the extension signed in with the PC's Claude account)
+- No usage cap anywhere (config unlimited_all), amounts in shekels (config usd_ils, default 3.1) in chat, /תקרה, restart line and dashboard; tools/gsheet.py r
+- Slash commands accept a space after the slash for every command (/ תקרה, / 🛞, / מודל ...); /מודלים no longer parsed as /מודל + 'ים'
+- Fix /model command: accept a space after the slash and Hebrew model names (אופוס, סונט, הייקו, פייבל)
+- No 80% usage warning / push in a conversation without a usage cap (unlimited)
+- 🛞 on someone else's voice note = its transcript as a text message in that chat (not a voice); automatic transcription turned off on the owner's instruction (
+- 🛞 on someone else's message in any chat: a voice note in the bot's voice reads it (text as written, a voice note from its transcript; images etc. unchanged) 
+- Group names (owner 09.11): every group a PC answers in = its two-letter computer prefix (config name_prefix, else from host_label/host name) + the owner's first
+- Fix: /brief carried the WhatsApp number under "account", which the Claude account key overwrote; now wa_account, so PCs sharing one WhatsApp number really pick 
+- A reaction is an answer: the owner's reactions (from the phone too) are recorded from the bridge's events; /מחכים, the morning summary and the "waiting for
+- Auto transcript (owner rule 09.11, config auto_transcript): a voice message someone else sends, in any chat or group, is transcribed and posted right after it i
+- ARCHITECTURE: push alerts
+- Push quiet hours 23:00-07:00 (config push_quiet): pushes wait for the morning and go out merged; only urgent faults ring at night
+- Push alerts per the owner's choices: no push for drafts; a reminder pushes once (on time); usage limits push at 80% (bridge cap of the conversation, Claude 5-ho
+
 ## 1.0.11 — 2026-11-08
 - Dashboard: one ⚙️ Settings window with 9 topic tabs (general, voice, models, cost, groups, sending, schedules, computers, plugins/git), a help line for every se
 - Voices: Thalita default (multilingual voices speak Hebrew), 8 voices in the dashboard + voice style normal/soft
