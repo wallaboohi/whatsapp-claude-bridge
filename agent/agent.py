@@ -1257,6 +1257,33 @@ def is_dev_work(text):
     return any(w.lower() in t for w in DEV_WORDS)
 
 
+DICT_FILE = os.path.join(HOME, "dictionary.md")
+
+
+def dictionary_hints(text, limit=25):
+    """Owner 10.11: a transcription dictionary of the owner's dictation (Gboard) and voice-note mistakes, learned over
+    time in home/dictionary.md, one entry per line: `wrong → right` (an optional `# note` after it). Only entries whose
+    wrong form appears in this message are passed to Claude, so the prompt stays short however long the file grows."""
+    try:
+        lines = open(DICT_FILE, encoding="utf-8").read().splitlines()
+    except OSError:
+        return ""
+    low = " ".join(str(text or "").split()).lower()
+    hits = []
+    for ln in lines:
+        entry = ln.split("#", 1)[0].strip().lstrip("-*• ").strip()
+        if "→" not in entry:
+            continue
+        wrong, right = (x.strip() for x in entry.split("→", 1))
+        if wrong and right and any(w.strip().lower() in low for w in wrong.split("/") if w.strip()):
+            hits.append(f"{wrong} → {right}")
+    if not hits:
+        return ""
+    head = ("מילון תמלול (טעויות מוכרות בהקלדה הקולית של {owner}; פרש בהתאם, ואם עדיין לא ברור, שאל):"
+            if LANG == "he" else "Transcription dictionary (known dictation mistakes of {owner}; read accordingly):")
+    return head.format(owner=OWNER) + "\n" + "\n".join(hits[:limit])
+
+
 def raw_text(text):
     """The owner's own words: without the attachment line(s) the agent adds and the voice-note marker."""
     lines = [l for l in (text or "").splitlines() if not l.strip().startswith(T["attached"].split("{")[0].strip())]
@@ -2144,6 +2171,9 @@ def run_command(row):
             body = RULE_PROMPT.format(owner=OWNER, rule=rm.group(2).strip(), path=os.path.join(HOME, rules_rel(chat)),
                                       general=os.path.join(HOME, "CLAUDE.md"))
         prompt = T["prompt"].format(owner=OWNER, when=when, text=body, where=where, dest=dest)
+        hints = dictionary_hints(body)
+        if hints:
+            prompt += "\n\n" + hints
         if src == "wa" and came_back_from_pc(chat, cid):
             prompt = (T_BACK_HE if LANG == "he" else T_BACK_EN) + prompt
         model, how = pick_model_info(text, chat)

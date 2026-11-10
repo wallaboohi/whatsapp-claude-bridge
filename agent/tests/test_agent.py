@@ -1345,3 +1345,15 @@ def test_push_guard_keeps_alerts_in_balance(agent):
                        (ago(5), f"שונה {chr(1488 + i)}", ago(5)))
     more = [(900, "g", "משהו חדש", ago(0), "done"), (901, "g", "תקלה חדשה", ago(0), "fault")]
     assert [r[0] for r in mod.push_guard(more, now)] == [901]
+
+
+def test_dictionary_hints_only_matching_entries(agent, tmp_path, monkeypatch):
+    mod, _ = agent
+    f = tmp_path / "dictionary.md"
+    f.write_text("# מילון\n- טייל סקייל / טייס קייל → Tailscale  # 10.11\n- תרמוקס → Termux\nשורה בלי חץ\n", encoding="utf-8")
+    monkeypatch.setattr(mod, "DICT_FILE", str(f))
+    h = mod.dictionary_hints("טייס קייל עובד, תבדוק")
+    assert "Tailscale" in h and "Termux" not in h
+    assert mod.dictionary_hints("שלום") == ""
+    monkeypatch.setattr(mod, "DICT_FILE", str(tmp_path / "none.md"))
+    assert mod.dictionary_hints("תרמוקס") == ""

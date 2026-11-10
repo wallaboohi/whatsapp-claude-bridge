@@ -92,9 +92,15 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 					if msg.Message.Key.FromMe != nil {
 						isFromMe = *msg.Message.Key.FromMe
 					}
-					if !isFromMe && msg.Message.Key.Participant != nil && *msg.Message.Key.Participant != "" {
+					// group history keeps the author in the top-level participant field; Key.Participant is usually
+					// empty there (until 06.11 every synced group message was stored with the group id as sender)
+					part := msg.Message.GetParticipant()
+					if part == "" {
+						part = msg.Message.Key.GetParticipant()
+					}
+					if !isFromMe && part != "" {
 						// same format as live messages: bare user, LID mapped to phone when known
-						sender = *msg.Message.Key.Participant
+						sender = part
 						if pj, perr := types.ParseJID(sender); perr == nil {
 							sender = normalizeUser(client, pj.User)
 						}

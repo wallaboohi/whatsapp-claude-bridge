@@ -6,8 +6,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -99,6 +102,46 @@ func registerAdminAPI(client *whatsmeow.Client) {
 		}
 		id, err := client.SetGroupPhoto(ctx, g, data)
 		return map[string]any{"picture_id": id}, err
+	})
+
+	// {"jid"} (group or contact) → downloads the current full-size picture to store/pictures/<user>.jpg and returns its
+	// path (owner 10.11: Claude could not see another group's icon). {"picture": false} when the chat has none.
+	adminHandler("/api/get_picture", func(ctx context.Context, b map[string]any) (map[string]any, error) {
+		jid, err := types.ParseJID(str(b, "jid"))
+		if err != nil || jid.User == "" {
+			return nil, errString("need a chat jid")
+		}
+		info, err := client.GetProfilePictureInfo(ctx, jid, &whatsmeow.GetProfilePictureParams{})
+		if err != nil {
+			if errors.Is(err, whatsmeow.ErrProfilePictureNotSet) {
+				return map[string]any{"picture": false}, nil
+			}
+			return nil, err
+		}
+		if info == nil || info.URL == "" {
+			return map[string]any{"picture": false}, nil
+		}
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, info.URL, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, errString("picture download failed: " + resp.Status)
+		}
+		data, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+		if err != nil {
+			return nil, err
+		}
+		if err := os.MkdirAll(filepath.Join("store", "pictures"), 0755); err != nil {
+			return nil, err
+		}
+		path, _ := filepath.Abs(filepath.Join("store", "pictures", jid.User+".jpg"))
+		if err := os.WriteFile(path, data, 0644); err != nil {
+			return nil, err
+		}
+		return map[string]any{"picture": true, "path": path, "picture_id": info.ID, "bytes": len(data)}, nil
 	})
 
 	// {"jid","announce":bool,"locked":bool,"approval":bool,"members_can_add":bool} — only given keys are changed

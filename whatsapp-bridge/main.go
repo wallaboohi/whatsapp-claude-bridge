@@ -79,6 +79,7 @@ func main() {
 
 	registerEventHandlers(client, messageStore, logger)
 	registerHealth(client)
+	registerTopics(client)
 
 	// Create channel to track connection success
 	connected := make(chan bool, 1)

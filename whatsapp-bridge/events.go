@@ -40,6 +40,9 @@ func registerEventHandlers(client *whatsmeow.Client, messageStore *MessageStore,
 			}
 
 		case *events.GroupInfo:
+			if v.Topic != nil {
+				storeTopic(client, v.JID, v.Topic.Topic, v.Topic.TopicSetBy, v.Topic.TopicSetAt)
+			}
 			// Group renamed: keep the stored chat name in step with WhatsApp (GetChatName never overwrites an existing name).
 			if v.Name != nil && v.Name.Name != "" {
 				if _, err := messageStore.db.Exec("UPDATE chats SET name = ? WHERE jid = ?", v.Name.Name, v.JID.String()); err != nil {
