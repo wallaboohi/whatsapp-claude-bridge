@@ -22,9 +22,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def run(cmd, cwd=ROOT, env=None):
     print("→", " ".join(cmd), flush=True)
-    r = subprocess.run(cmd, cwd=cwd, env={**os.environ, **(env or {})}, text=True, encoding="utf-8", capture_output=True)
+    r = subprocess.run(cmd, cwd=cwd, env={**os.environ, **(env or {})}, text=True, encoding="utf-8", errors="replace", capture_output=True)
     if r.returncode:
-        print(r.stdout[-2000:], r.stderr[-2000:])
+        print((r.stdout or "")[-2000:], (r.stderr or "")[-2000:])
         sys.exit(f"✖ נכשל: {' '.join(cmd)}")
     return r.stdout
 

@@ -1015,6 +1015,7 @@ def test_push_alerts_queue_merge_and_usage(agent, monkeypatch):
     mod, db = agent
     sent = []
     monkeypatch.setattr(mod, "bridge", lambda path, body=None, **k: sent.append((path, body)) or {"success": True, "id": "E1"})
+    monkeypatch.setitem(mod.CFG, "push_quiet", "")  # independent of the clock (the nightly release runs at 23:30, in quiet hours)
     mod.push("*שלום*   עולם", "g1@g.us")
     mod.push("", "g1@g.us")  # empty -> nothing
     later = mod.time.time() + 120
@@ -1055,6 +1056,7 @@ def test_push_alerts_queue_merge_and_usage(agent, monkeypatch):
     mod.kv_set("peerwatch:pc2", '{"off_since": "2026-11-09T10:00:00"}')
     assert mod.watches_people()
     # quiet hours: only an urgent fault goes out, the rest waits for the morning
+    mod.CFG["push_quiet"] = "23:00-07:00"
     night = mod.time.mktime(mod.dt.datetime(2026, 11, 10, 2, 0).timetuple())
     with mod.adb() as a:
         a.execute("DELETE FROM push_queue")
