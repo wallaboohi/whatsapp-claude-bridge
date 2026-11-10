@@ -1038,13 +1038,10 @@ def test_push_alerts_queue_merge_and_usage(agent, monkeypatch):
     mod.push("ב", "g1@g.us")
     mod.push_send_due(later)
     assert len(sent) == 2 and sent[1][1]["name"].startswith("🔔 2 התראות") and sent[1][1]["text"] == "א\nב"
-    # usage at 80%: once per window
-    monkeypatch.setattr(mod, "claude_usage", lambda: {"five_hour": {"utilization": 85, "resets_at": "R1"}, "seven_day": {"utilization": 40}})
-    mod.push_watch_usage()
-    mod.push_watch_usage()
+    # usage/limit pushes are off entirely (owner 10.11)
+    mod.push("📊 Claude: חלון 5 השעות הגיע ל-100%", "g1@g.us", "usage")
     with mod.adb() as a:
-        texts = [r[0] for r in a.execute("SELECT text FROM push_queue WHERE kind = 'usage'")]
-    assert len(texts) == 1 and "85%" in texts[0]
+        assert a.execute("SELECT COUNT(*) FROM push_queue WHERE kind = 'usage'").fetchone()[0] == 0
     # a PC alone on its WhatsApp account watches people itself; a sharer waits while the leader is up
     monkeypatch.setattr(mod, "own_account", lambda: "972500000000")
     mod.CFG["peers"] = [{"name": "pc2", "tunnel": "x"}]

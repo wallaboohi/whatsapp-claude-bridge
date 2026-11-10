@@ -2128,7 +2128,6 @@ def run_command(row):
         if not unlimited(chat) and spent >= budget * 0.8 and kv_get(K("budget_warned", chat)) != dt.date.today().isoformat():
             kv_set(K("budget_warned", chat), dt.date.today().isoformat())
             reply(T["budget_warn"].format(spent=money(spent), budget=money(budget, 0)))
-            push(f"📊 מגבלת הגשר בשיחה הזו הגיעה ל-80% ({money(spent)} מתוך {money(budget, 0)})", chat, "usage")
         gname = g.get("name") or ""
         if chat == PRIMARY and src == "wa":
             where, dest = ("בקבוצת הבקרה בווצאפ", "לקבוצה") if LANG == "he" else ("in the WhatsApp control group", "to the group")
@@ -3894,7 +3893,9 @@ def push_on():
 
 def push(text, chat=None, kind=""):
     """Queue one phone notification (short, clean text). chat None = the conversation Claude is answering now, else the
-    primary control group."""
+    primary control group. No usage/limit pushes at all (owner 10.11: they repeated every 10 minutes in every group)."""
+    if kind == "usage":
+        return
     text = re.sub(r"[*_~`]", "", " ".join(str(text or "").split()))[:90].strip()
     if not text or not push_on():
         return
@@ -4050,20 +4051,6 @@ def push_watch_waiting(now=None):
         push(f"📞 שיחה שלא נענתה מ{who}", PRIMARY, "call")
 
 
-def push_watch_usage():
-    """Owner 09.11: a push when a usage limit reaches 80% — Claude's plan meter (5 hours / weekly), once per window."""
-    u = claude_usage() or {}
-    for key, name in (("five_hour", "חלון 5 השעות"), ("seven_day", "המגבלה השבועית")):
-        x = u.get(key) or {}
-        pct = x.get("utilization")
-        if pct is None or pct < 80:
-            continue
-        k = f"push_usage:{key}:{x.get('resets_at') or ''}"
-        if not kv_get(k):
-            kv_set(k, "1")
-            push(f"📊 Claude: {name} הגיע ל-{pct:.0f}%", PRIMARY, "usage")
-
-
 def push_loop():
     time.sleep(30)
     n = 0
@@ -4074,7 +4061,6 @@ def push_loop():
                 if n % 60 == 0:  # every 10 minutes
                     if watches_people():
                         push_watch_waiting()
-                    push_watch_usage()
         except Exception:
             log("push_loop error", traceback.format_exc())
         n += 1
