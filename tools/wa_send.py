@@ -11,6 +11,23 @@ if len(args) > 2:
 if quote:
     body["quoted_id"] = quote  # reply quoting that message (same chat)
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _is_owner_side(rcpt):
+    """The owner's own numbers and control groups (send_policy.json) — everyone else gets the 🤖 mark."""
+    try:
+        pol = json.load(open(os.path.join(ROOT, "whatsapp-bridge", "store", "send_policy.json"), encoding="utf-8"))
+    except Exception:
+        return False
+    user = rcpt.split("@")[0]
+    mine = [pol.get("control_group") or ""] + (pol.get("control_groups") or []) + (pol.get("owner") or [])
+    return any(user == m.split("@")[0] for m in mine if m)
+
+
+# owner rule (09-10.11): everything that goes out to other people carries 🤖 — also drafts he approves with ✅,
+# so the mark is added here, before the draft is created
+if body["message"] and not body["message"].startswith("🤖") and not _is_owner_side(to):
+    body["message"] = "🤖 " + body["message"]
 token = open(os.path.join(ROOT, "whatsapp-bridge", "store", "api_token")).read().strip()  # bridge API password
 req = urllib.request.Request("http://127.0.0.1:8765/api/send", data=json.dumps(body).encode(),
                              headers={"Content-Type": "application/json", "Authorization": "Bearer " + token})
