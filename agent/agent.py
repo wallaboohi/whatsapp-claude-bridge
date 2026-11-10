@@ -1903,7 +1903,7 @@ def owner_command(text, chat=None):
     if not arg:
         return models_guide(chat)
     parts = arg.replace("שעה", "hour").split()
-    name = {"אוטו": "auto", "אופוס": "opus", "סונט": "sonnet", "הייקו": "haiku", "פייבל": "fable"}.get(parts[0], parts[0])
+    name = {"אוטו": "auto", "אופוס": "opus", "סונט": "sonnet", "הייקו": "haiku", "חייקו": "haiku", "פייבל": "fable"}.get(parts[0], parts[0])  # חייקו: how the owner types it
     if name not in MODELS:
         return "לא מכיר את המודל הזה. אפשרויות: " + ", ".join(MODELS) + "\n\n" + models_guide(chat)
     hours = 1 if "hour" in parts[1:] else None

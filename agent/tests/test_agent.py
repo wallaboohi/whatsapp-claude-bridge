@@ -1305,3 +1305,12 @@ def test_failover_auto_takes_over_without_asking(agent, monkeypatch):
     off = (mod.dt.datetime.now() - mod.dt.timedelta(minutes=30)).isoformat(timespec="seconds")
     mod.failover_tick({"name": "לפטופ"}, "לפטופ", {"off_since": off})
     assert acted == ["לפטופ"] and said and "לאישור" not in said[0]
+
+
+def test_haiku_hebrew_aliases(agent, monkeypatch):
+    mod, _ = agent
+    monkeypatch.setattr(mod.threading, "Thread", lambda *a, **k: type("T", (), {"start": lambda self: None})())
+    for word in ("חייקו", "הייקו"):  # the owner types חייקו; both spellings mean haiku
+        mod.set_override("auto")
+        mod.owner_command(f"/מודל {word}")
+        assert mod.get_override() == "haiku", word
