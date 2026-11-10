@@ -114,11 +114,12 @@ _schema_done = set()  # databases whose schema was created in this process (adb(
 
 
 def adb():
-    db = sqlite3.connect(AGENT_DB, timeout=30)
+    path = AGENT_DB  # read once: tests reload this module mid-call, and a 2nd read could mark a new, empty db as done
+    db = sqlite3.connect(path, timeout=30)
     with _schema_lock:
-        if AGENT_DB not in _schema_done:
+        if path not in _schema_done:
             _create_schema(db)
-            _schema_done.add(AGENT_DB)
+            _schema_done.add(path)
     global _runs_migrated
     if not _runs_migrated:
         with _schema_lock:
