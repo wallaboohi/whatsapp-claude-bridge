@@ -3,6 +3,7 @@ whatsapp-bridge/store/
 whatsapp-bridge/bridge.log*
 whatsapp-bridge/qr.png
 agent/config.json
+secrets/
 agent/home/
 agent/*.db
 agent/*.db-*
