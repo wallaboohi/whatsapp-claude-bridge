@@ -840,7 +840,7 @@ function openSettings(tab) {
   $("setScrim").hidden = false; $("settings").hidden = false; renderSettings(); $("setClose").focus();
 }
 function closeSettings() {
-  if (setDirty && !confirm(L("יש שינויים שלא נשמרו. לסגור בלי לשמור?", "There are unsaved changes. Close without saving?"))) return;
+  if ((setDirty || auDirty()) && !confirm(L("יש שינויים שלא נשמרו. לסגור בלי לשמור?", "There are unsaved changes. Close without saving?"))) return;
   setOpen = false; setDirty = false; $("setScrim").hidden = true; $("settings").hidden = true;
 }
 try { setTab = localStorage.getItem("wa-dash-settab") || "general"; } catch (e) {}
@@ -858,6 +858,8 @@ $("sendResume").onclick = () => act({ do: "resume" }, L("השליחה חודשה
 function showSetTab() {
   document.querySelectorAll("#setTabs [data-tab]").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === setTab));
   document.querySelectorAll("#setPanes .set-pane").forEach(p => p.hidden = p.dataset.pane !== setTab);
+  $("settings").classList.toggle("au-mode", setTab === "auto");  // automations save per card: no global save footer
+  if (setTab === "auto" && setOpen) { loadAuto(!auData); auStartTimer(); }
 }
 function renderSettings() {
   if (!last) return;
@@ -1019,3 +1021,162 @@ document.addEventListener("change", e => {
   const c = e.target.closest && e.target.closest("[data-readall]");
   if (c) post({ do: "read_all", chat: curChat || "", on: c.checked });
 });
+
+// ---- 🤖 automations tab (owner 10.11.2026): every automation — on/off, parameters, task tree, performance, event log ----
+// Loaded on demand from /action {do:"automations"}; each card saves only its own parameters (server: read-modify-write
+// of the plugin's JSON + a .bak-ui copy). Cards being edited are never overwritten by a refresh.
+let auData = null, auFilter = "all", auTimer = null;
+const auOpen = new Set(["lunch:params"]);
+const AU_DAYS = () => [[6, L("א׳", "Sun")], [0, L("ב׳", "Mon")], [1, L("ג׳", "Tue")], [2, L("ד׳", "Wed")], [3, L("ה׳", "Thu")], [4, L("ו׳", "Fri")], [5, L("ש׳", "Sat")]];
+const AU_DAY_NAMES = () => ({ 6: L("ראשון", "Sunday"), 0: L("שני", "Monday"), 1: L("שלישי", "Tuesday"), 2: L("רביעי", "Wednesday"), 3: L("חמישי", "Thursday"), 4: L("שישי", "Friday"), 5: L("שבת", "Saturday") });
+const auDirty = () => !!document.querySelector("#autoPane .au-card.dirty");
+const AU_BAD = /FAILED|failed|נכשל|error|שגיאה/;
+
+function auInput(a, p) {
+  const id = `au-${a.id}-${p.path.replace(/[^\w]/g, "_")}`, dis = p.readonly ? " disabled" : "", v = p.value;
+  const attrs = `id="${id}" data-ap="${esc(p.path)}" data-type="${p.type}"${dis}`;
+  let ctl;
+  if (p.type === "bool") ctl = `<input type="checkbox" ${attrs}${v ? " checked" : ""}>`;
+  else if (p.type === "time") ctl = `<input type="time" ${attrs} value="${esc(v)}">`;
+  else if (p.type === "date") ctl = `<input type="date" ${attrs} value="${esc(v)}">`;
+  else if (p.type === "int") ctl = `<input type="number" step="1" ${attrs} value="${esc(v)}"${p.min != null ? ` min="${p.min}"` : ""}${p.max != null ? ` max="${p.max}"` : ""} style="width:90px">`;
+  else if (p.type === "choice") ctl = `<select class="btn small sel" ${attrs}>${(p.options || []).map(o => `<option${o === v ? " selected" : ""}>${esc(o)}</option>`).join("")}</select>`;
+  else if (p.type === "weekday") ctl = `<select class="btn small sel" ${attrs}>${AU_DAYS().map(([n]) => `<option value="${n}"${n === v ? " selected" : ""}>${esc(AU_DAY_NAMES()[n])}</option>`).join("")}</select>`;
+  else if (p.type === "weekdays") ctl = `<span class="au-days" ${attrs}>${AU_DAYS().map(([n, t]) => `<label class="chk"><input type="checkbox" data-day="${n}"${(v || []).includes(n) ? " checked" : ""}${dis}> ${t}</label>`).join("")}</span>`;
+  else if (p.type === "text" || p.type === "phone") ctl = `<input type="text" ${attrs} value="${esc(v)}" class="au-text" dir="auto">`;
+  else {
+    const lines = String(v ?? "").split("\n").length;
+    ctl = `<textarea ${attrs} rows="${Math.min(14, Math.max(p.type === "textarea" ? 4 : 2, lines + 1))}" dir="auto" class="au-area">${esc(v)}</textarea>`;
+  }
+  const badges = (p.is_default ? `<span class="au-badge" title="${L("לא מוגדר בקובץ — ערך ברירת המחדל של התוסף", "Not set in the file — the plugin default")}">${L("ברירת מחדל", "default")}</span>` : "") +
+    (p.restart ? `<span class="au-badge warn" title="${L("נכנס לתוקף אחרי הפעלה מחדש של הסוכן", "Takes effect after an agent restart")}">↻</span>` : "");
+  const help = [p.help, p.names ? "👤 " + p.names : "", p.readonly ? L("לשינוי: הגדרות ← תזמונים", "Change it in Settings → Schedules") : ""].filter(Boolean).map(esc).join(" · ");
+  const wide = ["textarea", "list", "dates", "map", "maplist", "items"].includes(p.type);
+  return `<div class="set-row au-row${wide ? " wide" : ""}"><span><label for="${id}">${esc(p.label)} ${badges}</label>${help ? `<small class="help">${help}</small>` : ""}</span><span class="set-ctl">${ctl}</span></div>`;
+}
+
+function auCard(a) {
+  const sec = (key, title, body) => `<details class="au-sec" data-sec="${a.id}:${key}"${auOpen.has(a.id + ":" + key) ? " open" : ""}><summary>${title}</summary>${body}</details>`;
+  const toggles = a.toggles.map(t => `<label class="chk au-tog" title="${t.restart ? L("נכנס לתוקף אחרי הפעלה מחדש", "After a restart") : L("נכנס לתוקף מיד", "Immediate")}">
+      <input type="checkbox" data-autog="${a.id}:${t.idx}"${t.on ? " checked" : ""}> ${esc(t.label)}${t.restart ? " ↻" : ""}</label>`).join("");
+  const last = a.last_event ? `${esc(fmt(a.last_event.at))} · <bdi>${esc(a.last_event.text.slice(0, 110))}</bdi>` : L("אין אירועים ביומן", "No events in the log");
+  const editable = a.params.some(p => !p.readonly);
+  const params = a.params.length ? a.params.map(p => auInput(a, p)).join("") +
+    (editable ? `<div class="row tight"><button type="button" class="btn small primary" data-ausave="${a.id}">💾 ${L("שמור", "Save")}</button>
+      <button type="button" class="btn small ghost" data-aureset="${a.id}">${L("בטל שינויים", "Discard changes")}</button><span class="note au-dirty-note"></span></div>` : "")
+    : `<p class="note tight">${L("אין פרמטרים לעריכה.", "No editable parameters.")}</p>`;
+  const perf = a.perf.length ? `<dl class="kv">${a.perf.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>` : `<p class="note tight">—</p>`;
+  const log = a.log.length ? `<ul class="au-log">${a.log.map(e => `<li class="${AU_BAD.test(e.text) ? "bad" : ""}"><time>${esc(fmt(e.at))}</time> <span class="au-src" title="${e.src === "actions" ? "actions.log" : "agent.log"}">${e.src === "actions" ? "📒" : "🤖"}</span> <span dir="auto">${esc(e.text)}</span></li>`).join("")}</ul>`
+    : `<p class="note tight">${L("אין אירועים.", "No events.")}</p>`;
+  return `<article class="au-card item ${a.on ? "ok-i" : "bad-i"}" data-au="${a.id}">
+    <header class="au-head"><span class="au-ico" aria-hidden="true">${a.icon}</span>
+      <span class="au-title"><strong>${esc(a.name)}</strong><small class="muted">${esc(a.desc)}</small></span>
+      <span class="schip ${a.on ? "ok" : "bad"}"><span class="dot"></span>${a.on ? L("פעיל", "On") : L("כבוי", "Off")}</span>
+      ${a.fails_today ? `<span class="schip bad" title="${L("אירועי כשל ביומן היום", "Failures in today's log")}">⚠️ ${a.fails_today}</span>` : ""}
+      ${a.pending_restart ? `<span class="chip" title="${L("נכנס לתוקף אחרי הפעלה מחדש", "Takes effect after a restart")}">↻ ${L("ממתין להפעלה מחדש", "Restart pending")}</span>` : ""}</header>
+    ${toggles ? `<div class="au-togs">${toggles}</div>` : ""}
+    ${a.file_ok ? "" : `<p class="note tight bad-t">⚠️ ${L("קובץ ההגדרות לא נמצא במחשב הזה: ", "Settings file not found on this computer: ")}${esc(a.file)}</p>`}
+    <p class="note tight au-last">🕘 ${last}</p>
+    ${sec("params", `⚙️ ${L("פרמטרים", "Parameters")} (${a.params.length})`, params)}
+    ${sec("tree", `🌳 ${L("עץ משימות", "Task tree")}`, `<ol class="au-tree">${a.tree.map(t => `<li>${esc(t)}</li>`).join("")}</ol>`)}
+    ${sec("perf", `📈 ${L("ביצועים", "Performance")}`, perf)}
+    ${sec("log", `📜 ${L("יומן אירועים", "Event log")} (${a.log.length})`, log)}
+  </article>`;
+}
+
+function renderAuto(full) {
+  const pane = $("autoPane"); if (!pane || !auData) return;
+  if (auData.error) {
+    pane.innerHTML = `<p class="note">${esc(auData.error === "unknown action" ? L("הלוח במחשב הזה עוד לא תומך באוטומציות (צריך עדכון).", "This computer's dashboard does not support automations yet (needs an update).") : auData.error)}</p>`;
+    return;
+  }
+  const items = auData.items || [], groups = [...new Set(items.map(a => a.group))];
+  const shown = items.filter(a => auFilter === "all" || a.group === auFilter), nOn = items.filter(a => a.on).length;
+  if (full || !pane.querySelector(".au-list")) {
+    pane.innerHTML = `<div class="au-top">
+        <span class="au-count"><b>${items.length}</b> ${L("אוטומציות", "automations")} · ${nOn} ${L("פעילות", "on")} · ${items.length - nOn} ${L("כבויות", "off")}</span>
+        <span class="au-filters" role="group" aria-label="${L("סינון", "Filter")}">${[["all", L("הכול", "All")], ...groups.map(g => [g, g])].map(([k, t]) => `<button type="button" class="btn small${auFilter === k ? " primary" : ""}" data-aufilter="${esc(k)}">${esc(t)}</button>`).join("")}</span>
+        <button type="button" class="btn small" id="auRefresh">⟳ ${L("רענן", "Refresh")}</button></div>
+      <div class="au-restart" id="auRestart" hidden></div>
+      <p class="note tight help">${L("שינוי טקסטים ושעות של מקטע D ושל תזכורת הרכש נכנס לתוקף מיד (התוספים קוראים את הקובץ בכל ריצה). פרמטר או מתג עם ↻ נכנס לתוקף רק אחרי הפעלה מחדש של הסוכן. לפני כל שמירה נשמר עותק ‎.bak-ui של הקובץ.", "Segment D texts/times and the procurement reminder apply at once. Parameters or switches marked ↻ apply after an agent restart. A .bak-ui copy is kept before every save.")}</p>
+      <div class="au-list"></div>`;
+  } else {
+    const cnt = pane.querySelector(".au-count");
+    if (cnt) cnt.innerHTML = `<b>${items.length}</b> ${L("אוטומציות", "automations")} · ${nOn} ${L("פעילות", "on")} · ${items.length - nOn} ${L("כבויות", "off")}`;
+  }
+  const rs = $("auRestart"), pend = auData.pending_restart || [];
+  rs.hidden = !pend.length;
+  rs.innerHTML = pend.length ? `<span>↻ ${L("נכנס לתוקף אחרי הפעלה מחדש", "Takes effect after a restart")}: <b>${esc(pend.join(", "))}</b></span><button type="button" class="btn small primary" id="auRestartBtn">↻ ${L("הפעל את הסוכן מחדש", "Restart the agent")}</button>` : "";
+  const list = pane.querySelector(".au-list"), keep = {};
+  list.querySelectorAll(".au-card").forEach(c => { if (c.classList.contains("dirty") || c.contains(document.activeElement)) keep[c.dataset.au] = c; });
+  list.innerHTML = shown.map(a => keep[a.id] ? `<div data-keep="${a.id}"></div>` : auCard(a)).join("") || empty(L("אין", "None"));
+  list.querySelectorAll("[data-keep]").forEach(ph => ph.replaceWith(keep[ph.dataset.keep]));
+}
+
+async function loadAuto(full) {
+  try { auData = await post({ do: "automations" }); } catch (e) { auData = { error: L("טעינת האוטומציות נכשלה", "Loading automations failed") }; }
+  renderAuto(full);
+}
+function auStartTimer() {
+  clearInterval(auTimer);
+  auTimer = setInterval(() => {
+    if (!setOpen || setTab !== "auto") return clearInterval(auTimer);
+    if (!document.hidden) loadAuto(false);
+  }, 30000);
+}
+function auCollect(card) {
+  const vals = {};
+  card.querySelectorAll("[data-ap]").forEach(x => {
+    if (x.hasAttribute("disabled")) return;
+    const t = x.dataset.type, k = x.dataset.ap;
+    if (t === "weekdays") vals[k] = [...x.querySelectorAll("[data-day]")].filter(c => c.checked).map(c => +c.dataset.day);
+    else if (t === "bool") vals[k] = x.checked;
+    else if (t === "weekday") vals[k] = +x.value;
+    else vals[k] = x.value;
+  });
+  return vals;
+}
+function auMarkDirty(card, on) {
+  card.classList.toggle("dirty", on);
+  const n = card.querySelector(".au-dirty-note"); if (n) n.textContent = on ? L("● יש שינויים שלא נשמרו", "● Unsaved changes") : "";
+}
+function auRestartNote(j) { if (j && j.restart) setTimeout(() => toast(L("נכנס לתוקף אחרי הפעלה מחדש — הכפתור למעלה", "Takes effect after a restart — button above")), 1800); }
+
+(function wireAuto() {
+  const pane = $("autoPane"); if (!pane) return;
+  const dirty = e => { const c = e.target.closest(".au-card"); if (c && e.target.closest("[data-ap]")) auMarkDirty(c, true); };
+  pane.addEventListener("input", dirty);
+  pane.addEventListener("change", dirty);
+  pane.addEventListener("toggle", e => { const d = e.target; if (d.dataset && d.dataset.sec) { if (d.open) auOpen.add(d.dataset.sec); else auOpen.delete(d.dataset.sec); } }, true);
+  pane.addEventListener("click", async e => {
+    const b = e.target.closest("button, input[data-autog]"); if (!b) return;
+    if (b.dataset.aufilter) { auFilter = b.dataset.aufilter; renderAuto(true); return; }
+    if (b.id === "auRefresh") { loadAuto(false); return; }
+    if (b.id === "auRestartBtn") {
+      if (!confirm(L("להפעיל את הסוכן מחדש עכשיו? הוא עולה תוך כחצי דקה ומודיע בקבוצה.", "Restart the agent now? Back in about 30 seconds."))) return;
+      const j = await post({ do: "auto_restart" });
+      toast(j.error ? L("שגיאה: ", "Error: ") + j.error : L("הסוכן יעלה מחדש תוך רגע", "The agent restarts shortly"));
+      return;
+    }
+    if (b.dataset.autog) {
+      const [id, idx] = b.dataset.autog.split(":"), a = (auData.items || []).find(x => x.id === id), t = a && a.toggles[+idx];
+      const verb = b.checked ? L("להפעיל", "Switch on") : L("לכבות", "Switch off");
+      if (!confirm(`${verb}: ${t ? t.label : ""}\n${a ? a.name : ""}${t && t.restart ? "\n" + L("נכנס לתוקף אחרי הפעלה מחדש של הסוכן.", "Takes effect after an agent restart.") : ""}`)) { b.checked = !b.checked; return; }
+      const j = await post({ do: "auto_toggle", id, idx: +idx, on: b.checked });
+      if (j.error) { toast(L("שגיאה: ", "Error: ") + j.error); b.checked = !b.checked; return; }
+      toast(b.checked ? L("הופעל", "Switched on") : L("כובה", "Switched off")); auRestartNote(j);
+      loadAuto(false);
+      return;
+    }
+    if (b.dataset.aureset) { auMarkDirty(b.closest(".au-card"), false); b.blur(); loadAuto(false); return; }
+    if (b.dataset.ausave) {
+      const c = b.closest(".au-card"); b.disabled = true;
+      try {
+        const j = await post({ do: "auto_save", id: b.dataset.ausave, values: auCollect(c) });
+        if (j.error) { toast(L("שגיאה: ", "Error: ") + j.error); return; }
+        toast(j.changed && j.changed.length ? L("נשמר: ", "Saved: ") + j.changed.join(", ") : L("אין שינויים", "No changes"));
+        auRestartNote(j); auMarkDirty(c, false); b.blur(); loadAuto(false);
+      } finally { b.disabled = false; }
+    }
+  });
+})();

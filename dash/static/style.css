@@ -404,3 +404,43 @@ p.help { margin: 4px 0 0; }
   .set-tabs { flex-direction: row; overflow-x: auto; border-inline-end: 0; border-bottom: 1px solid var(--line); }
   .set-tabs button { white-space: nowrap; }
 }
+
+/* ---- 🤖 automations tab (10.11) ---- */
+.settings.au-mode .set-foot { display: none; }
+.au-pane { display: grid; gap: 10px; }
+.au-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.au-count { font-size: .9rem; color: var(--muted); flex: 1 1 auto; }
+.au-filters { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.au-restart { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-radius: 10px; background: var(--warn-bg); color: var(--warn); font-size: .88rem; }
+.au-restart[hidden] { display: none; }
+.au-list { display: grid; gap: 10px; }
+.au-card { gap: 6px; }
+.au-card.dirty { box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 55%, transparent); }
+.au-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.au-ico { font-size: 1.5rem; line-height: 1; }
+.au-title { display: flex; flex-direction: column; gap: 2px; flex: 1 1 260px; min-width: 0; }
+.au-title strong { font-size: 1rem; }
+.au-title small { font-size: .8rem; }
+.au-togs { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); font-size: .86rem; }
+.au-tog { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.au-tog input { width: 17px; height: 17px; accent-color: var(--brand); }
+.au-last { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.au-sec { border-top: 1px solid var(--line); padding-top: 4px; }
+.au-sec > summary { cursor: pointer; font-weight: 600; font-size: .9rem; padding: 4px 0; }
+.au-row.wide { flex-direction: column; align-items: stretch; }
+.au-row.wide .set-ctl { display: block; }
+.au-row.wide > span:first-child { flex: 0 0 auto; }
+.au-area { width: 100%; box-sizing: border-box; font: inherit; font-size: .88rem; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); resize: vertical; line-height: 1.45; }
+.set-row input.au-text { width: min(340px, 100%); }
+.set-row input[type="date"] { font: inherit; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); }
+.au-row input:disabled, .au-row select:disabled { opacity: .65; }
+.au-days { display: inline-flex; flex-wrap: wrap; gap: 4px 10px; }
+.au-badge { display: inline-block; font-size: .7rem; font-weight: 600; padding: 0 6px; border-radius: 10px; background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); vertical-align: middle; }
+.au-badge.warn { background: var(--warn-bg); color: var(--warn); border-color: transparent; }
+.au-tree { margin: 4px 0; padding-inline-start: 22px; font-size: .88rem; display: grid; gap: 3px; }
+.au-tree li::marker { color: var(--brand); font-weight: 700; }
+.au-log { list-style: none; margin: 4px 0; padding: 0; max-height: 260px; overflow: auto; font-size: .8rem; display: grid; gap: 2px; }
+.au-log li { padding: 3px 6px; border-radius: 6px; background: var(--surface-2); word-break: break-word; }
+.au-log li.bad { background: var(--bad-bg); color: var(--bad); }
+.au-log time { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bad-t { color: var(--bad); }

@@ -865,9 +865,698 @@ def context(chat, ts, ref=None):
     return {"chat": chat, "chat_name": label(chat), "messages": msgs}
 
 
+# ---------------------------------------------------------------- 🤖 automations tab (owner 10.11.2026)
+# Owner: "every automation, of any kind, in the bridge UI: change everything, switch everything on/off, every parameter
+# editable; each automation with a name, a task tree, performance and an event log."
+# Plugin automations keep their settings in the plugins' own JSON files (ppe-tracker/segment_d.json, wa_plugin.json);
+# the dashboard edits only the keys a card defines (read-modify-write, a <file>.bak-ui copy before every write) and never
+# sends anything, never touches send_policy.json or the company sheet. Core agent jobs: only flags config.json already has.
+# Defaults below mirror the plugins' own defaults (segment_d_auto.DEFAULTS, wa_plugin .get(...) fallbacks) for display.
+
+AU_LOCK = threading.Lock()
+_au_pending = {}  # automation id -> when a change that needs an agent restart was saved (cleared on restart)
+
+
+def _au_plugin_dir():
+    c = cfg()
+    for p in list(c.get("plugins") or []) + list(c.get("plugins_disabled") or []):
+        if os.path.basename(p) in ("segment_d_auto.py", "wa_plugin.py"):
+            return os.path.dirname(os.path.expanduser(p))
+    return os.path.expanduser("~/ppe-tracker")
+
+
+def _au_files():
+    d = _au_plugin_dir()
+    return {"seg": os.path.join(d, "segment_d.json"), "wa": os.path.join(d, "wa_plugin.json"),
+            "cfg": os.path.join(ROOT, "agent", "config.json")}
+
+
+def _ap(path, label, typ, default=None, restart=False, help="", **extra):
+    """One editable parameter: dotted path inside the card's JSON file."""
+    return {"path": path, "label": label, "type": typ, "default": default, "restart": restart, "help": help, **extra}
+
+
+WEEKDAYS_HE = ["שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת", "ראשון"]  # Python weekday(): Mon=0 .. Sun=6
+SEGD_PLUGIN = {"plugin": "segment_d_auto.py", "label": "תוסף מקטע D פעיל (כל אוטומציות מקטע D)"}
+_SEGD_TPL = "משתנים: {deputy_name} {deputy_role} {manager_name} {manager_role} {present} {exceptions} {lodgers} {link}"
+
+AUTOMATIONS = [
+    {"id": "lunch", "group": "מקטע D", "icon": "🍽️", "name": "הזמנת אוכל — מקטע D ← ציפורה", "file": "seg", "plugin": "segment_d_auto.py",
+     "desc": "תזכורת בקבוצת המקטע, בדיקה ותיקון של תיאור הקבוצה, שליחת ההזמנה לקבוצת ציפורה ועדכון לנמען שנבחר.",
+     "toggles": [{"path": "lunch.enabled", "label": "האוטומציה פעילה", "default": True},
+                 {"path": "lunch.notify_after_send.approved", "label": "עדכון לנמען אחרי השליחה", "default": False}, SEGD_PLUGIN],
+     "params": [
+         _ap("workdays", "ימי עבודה", "weekdays", [6, 0, 1, 2, 3], help="משותף גם לתזכורות הנוכחות."),
+         _ap("lunch.skip_dates", "תאריכים בלי הזמנה", "dates", [], help="תאריך בכל שורה, YYYY-MM-DD (חג, יום בלי עבודה)."),
+         _ap("lunch.date_update", "עדכון התאריך בתיאור", "time", "00:05"),
+         _ap("lunch.reminder.at", "תזכורת בקבוצה (א׳–ה׳ חוץ מראשון)", "time", "08:30"),
+         _ap("lunch.reminder.at_sun", "תזכורת בקבוצה — יום ראשון", "time", "09:30"),
+         _ap("lunch.reminder.approved_text", "נוסח התזכורת (מאושר)", "textarea", "",
+             help="משתנים: {send} {meal} {pickup}. ריק = התזכורת לא נשלחת."),
+         _ap("lunch.check_minutes_before", "בדיקה ותיקון התיאור — דקות לפני השליחה", "int", 5, min=1, max=60),
+         _ap("lunch.send", "שליחה לציפורה", "time", "09:10"),
+         _ap("lunch.send_sun", "שליחה לציפורה — יום ראשון", "time", "10:10"),
+         _ap("lunch.meal", "שעת ארוחה", "time", "10:30"),
+         _ap("lunch.meal_sun", "שעת ארוחה — יום ראשון", "time", "11:30"),
+         _ap("lunch.pickup", "איסוף ההזמנה", "time", ""),
+         _ap("lunch.pickup_sun", "איסוף ההזמנה — יום ראשון", "time", ""),
+         _ap("lunch.notify_after_send.name", "נמען העדכון אחרי השליחה — שם", "text", ""),
+         _ap("lunch.notify_after_send.phone", "נמען העדכון — טלפון", "phone", ""),
+         _ap("lunch.notify_after_send.text", "נוסח העדכון אחרי השליחה", "textarea", "", help="משתנה: {time} (שעת השליחה)."),
+     ],
+     "tree": [
+         "בכל 20 שניות: קורא מחדש את segment_d.json (שינוי כאן נכנס לתוקף מיד).",
+         "רק בימי עבודה ולא בתאריכים החריגים; \"עצור אוכל\" בקבוצה עוצר להיום.",
+         "בשעת עדכון התאריך: מחליף את התאריך בתיאור קבוצת המקטע ומאמת בקריאה חוזרת.",
+         "בשעת התזכורת: שולח לקבוצת המקטע את הנוסח המאושר (פטור באישור הבעלים, הודעה אחת).",
+         "דקות לפני השליחה: בודק את התיאור — תאריך, שעות, אייקונים, כתיב, מספור, לחם/מנה חסרים, נעדרים בקובץ החברה — מתקן ומדווח לך.",
+         "בשעת השליחה: בדיקה אחרונה, העתקת התיאור ושליחה לקבוצת ציפורה.",
+         "אחרי שליחה מוצלחת: עדכון קצר לנמען שנבחר (רק אם מאושר).",
+         "עד 13:00: כל שינוי בתיאור אחרי השליחה מדווח לך (לא נשלח).",
+     ],
+     "log": r"\[segment_d\].*(lunch|tzipora|description edit|date update)"},
+
+    {"id": "attendance", "group": "מקטע D", "icon": "📋", "name": "תזכורות נוכחות — סגן / מנהל אתר", "file": "seg", "plugin": "segment_d_auto.py",
+     "desc": "כשסגן מנהל האתר לא עדכן היום את קובץ החברה: תזכורות אליו, ובסוף למנהל האתר. כשהסגן לא נוכח — הכול למנהל.",
+     "toggles": [{"path": "attendance.enabled", "label": "האוטומציה פעילה", "default": True},
+                 {"path": "attendance.approved", "label": "הנוסחים לסגן ולמנהל מאושרים", "default": False},
+                 {"path": "attendance.absent_texts._approved", "label": "נוסחי \"הסגן לא נוכח\" מאושרים", "default": False}, SEGD_PLUGIN],
+     "params": [
+         _ap("attendance.times.deputy_1", "תזכורת ראשונה לסגן", "time", "07:45"),
+         _ap("attendance.times.deputy_2", "תזכורת שנייה לסגן", "time", "12:00"),
+         _ap("attendance.times.deputy_3", "תזכורת אחרונה לסגן", "time", "15:30"),
+         _ap("attendance.times.manager", "פנייה למנהל האתר", "time", "16:00"),
+         _ap("attendance.texts.deputy_1", "נוסח — תזכורת ראשונה לסגן", "textarea", "", help=_SEGD_TPL),
+         _ap("attendance.texts.deputy_2", "נוסח — תזכורת שנייה לסגן", "textarea", "", help=_SEGD_TPL),
+         _ap("attendance.texts.deputy_3", "נוסח — תזכורת אחרונה לסגן", "textarea", "", help=_SEGD_TPL),
+         _ap("attendance.texts.manager", "נוסח — פנייה למנהל האתר", "textarea", "", help=_SEGD_TPL),
+         _ap("attendance.absent_texts.deputy_1", "הסגן לא נוכח — נוסח ראשון למנהל", "textarea", "", help=_SEGD_TPL),
+         _ap("attendance.absent_texts.deputy_2", "הסגן לא נוכח — נוסח שני למנהל", "textarea", "", help=_SEGD_TPL),
+         _ap("attendance.absent_texts.manager", "הסגן לא נוכח — נוסח אחרון למנהל", "textarea", "", help=_SEGD_TPL),
+         _ap("attendance.reply_texts.received", "תשובה — קיבלתי את העדכון", "textarea", ""),
+         _ap("attendance.reply_texts.done", "תשובה — עודכן בקובץ", "textarea", "", help="משתנים: {changes} {link}"),
+         _ap("attendance.reply_texts.failed", "תשובה — העדכון נכשל", "textarea", "", help="משתנים: {changes} {link}"),
+         _ap("attendance.reply_texts.not_done", "תשובה — העדכון לא בוצע", "textarea", "", help="משתנים: {changes} {link}"),
+         _ap("attendance.phones", "טלפון לכל תפקיד", "map", {}, help="שורה לכל תפקיד: תפקיד = טלפון"),
+         _ap("attendance.deputy_role", "שם תפקיד הסגן", "text", "סגן מנהל אתר"),
+         _ap("attendance.manager_role", "שם תפקיד המנהל", "text", "מנהל אתר"),
+         _ap("attendance.deputy_google", "שמות הסגן בגוגל (מי שעורך את הקובץ)", "list", ["zion"]),
+         _ap("attendance.manager_google", "שמות המנהל בגוגל", "list", []),
+     ],
+     "tree": [
+         "רק בימי עבודה, כשהאוטומציה פעילה והנוסחים מאושרים.",
+         "בכל שעת תזכורת: אם הסגן כבר ערך את הקובץ היום — מדלג.",
+         "אם הסגן לא נוכח היום (לפי הקובץ) — הפנייה עוברת למנהל האתר בנוסחי \"הסגן לא נוכח\" (התזכורת האחרונה לסגן לא נשלחת).",
+         "ממלא את הנוסח: נוכחים, חריגים, לינה וקישור לקובץ — ושולח לטלפון של התפקיד (פטור, הודעה אחת).",
+         "כל תשובה של הנמען היום (טקסט או הקלטה) נקלטת: \"קיבלתי\" אליו ← סיכום ממוספר לך ← רק אחרי אישורך עדכון בקובץ ← הודעת תוצאה אליו.",
+         "מדווח לך על כל תזכורת שנשלחה או שלא נשלחה.",
+     ],
+     "log": r"\[segment_d\].*(attendance|deputy|manager|att_|absent|reply_texts|נוכחות)"},
+
+    {"id": "sheet", "group": "מקטע D", "icon": "👁️", "name": "מעקב קובץ החברה (קריאה בלבד)", "file": "seg", "plugin": "segment_d_auto.py",
+     "desc": "בודק כל כמה דקות אם קובץ החברה השתנה: יומן עריכות (מי, מתי, מה) וגיבוי של כל גרסה.",
+     "toggles": [{"path": "sheet_watch.enabled", "label": "האוטומציה פעילה", "default": True}, SEGD_PLUGIN],
+     "params": [
+         _ap("sheet_watch.every_minutes", "בדיקה כל (דקות)", "int", 5, min=1, max=240),
+         _ap("sheet_watch.keep_days", "שמירת גיבויי גרסאות (ימים)", "int", 14, min=1, max=365),
+         _ap("sheet_watch.editors", "שמות העורכים", "map", {}, help="שורה לכל עורך: שם בגוגל = שם שיוצג לך"),
+         _ap("sheet_watch.local_dir", "תיקיית גיבוי במחשב הזה", "text", os.path.expanduser("~/WhatsApp-Backup/google-sheet-segment-d")),
+         _ap("sheet_watch.peer_host", "המחשב השני (ssh) לעותק", "text", "ybhw"),
+         _ap("sheet_watch.peer_dir", "תיקיית העותק במחשב השני", "text", "C:/Users/walla/WhatsApp-Backup/google-sheet-segment-d"),
+     ],
+     "tree": [
+         "כל X דקות: קורא את זמן העריכה האחרון של הקובץ (קריאה בלבד, לעולם לא כותב).",
+         "אם יש גרסה חדשה: משווה לצילום הקודם ורושם ביומן העריכות (segment_d.db) מי ערך, מתי, איזה תא ומה השתנה — בלי התראה על כל עריכה.",
+         "שומר גיבוי xlsx של כל גרסה (ימי שמירה לפי ההגדרה) ומעתיק למחשב השני.",
+         "רושם מי ערך היום — משמש את תזכורות הנוכחות.",
+         "ב-20:00: סיכום יומי — כמה בדיקות ומי ערך.",
+     ],
+     "log": r"\[segment_d\].*(sheet|revision|גרסה)"},
+
+    {"id": "report", "group": "מקטע D", "icon": "🖼️", "name": "דוח יומי גרפי — מקטע D", "file": "seg", "plugin": "segment_d_auto.py",
+     "desc": "דוח תמונה (ppe-tracker/daily_report.py): טיוטה למנהל האתר לאישור, ואחר כך טיוטה לקבוצת האדמיניסטרציה. הכול כרטיסי טיוטה לאישורך.",
+     "toggles": [{"path": "report.enabled", "label": "האוטומציה פעילה", "default": False}, SEGD_PLUGIN],
+     "params": [
+         _ap("report.manager_time", "טיוטה למנהל האתר", "time", "09:30"),
+         _ap("report.group_time", "טיוטה לקבוצת האדמיניסטרציה", "time", "10:00"),
+         _ap("report.manager_text", "נוסח למנהל האתר", "textarea", "", help="משתנה: {day} (היום המדווח)."),
+         _ap("report.group_text", "נוסח לקבוצה", "textarea", "", help="משתנה: {day}."),
+         _ap("report.group_jid", "קבוצת האדמיניסטרציה (מזהה)", "text", ""),
+         _ap("report.exclude", "לא להציג בדוח", "list", [], help="שם בכל שורה."),
+         _ap("report.exempt", "פטור מאישור (שליחה בלי טיוטה)", "bool", False, help="כרגע הדוח לא פטור: נשלח רק כטיוטה לאישורך."),
+         _ap("report.lodging_sites.default", "אתר לינה ברירת מחדל", "text", ""),
+         _ap("report.lodging_sites.sites", "אתרי לינה נוספים", "maplist", {},
+             help="שורה לכל אתר: אתר = שם, שם. אם קיים segment_d_local.json עם lodging_sites — הוא גובר."),
+     ],
+     "tree": [
+         "רק בימי עבודה, כשהאוטומציה פעילה.",
+         "בשעת הטיוטה למנהל: קורא את קובץ החברה (קריאה בלבד) — נוכחות, חריגים, לינה; מחריג את השמות ברשימה ומחלק לינה לפי אתרים.",
+         "בונה תמונת דוח (HTML ← PNG) של היום המדווח, ותוספת קצרה של היום אם כבר דווח.",
+         "יוצר כרטיס טיוטה למנהל האתר עם התמונה (✅ שלך שולח).",
+         "בשעת הקבוצה: כרטיס טיוטה לקבוצת האדמיניסטרציה עם אותה תמונה.",
+         "אם הבנייה נכשלה — הודעה אליך.",
+     ],
+     "log": r"\[segment_d\].*report"},
+
+    {"id": "m4_report", "group": "ציוד 4M", "icon": "☀️", "name": "דוח בוקר — ציוד ומיגון 4M", "file": "wa", "plugin": "wa_plugin.py",
+     "desc": "דוח יומי אליך: חתימות שנקלטו, חליפות חסרות, מידות, דרישות פתוחות, בקשות שממתינות לאספקה וסקרים.",
+     "toggles": [{"plugin": "wa_plugin.py", "label": "תוסף 4M פעיל (כל אוטומציות 4M)"}],
+     "params": [
+         _ap("report_time", "שעת הדוח", "time", "08:00", restart=True),
+         _ap("reminder_after_days", "בקשה פתוחה מעל (ימים) — מופיעה כממתינה לאספקה", "int", 3, restart=True, min=1, max=60),
+         _ap("poll_days", "סקרים מהימים האחרונים", "int", 7, restart=True, min=1, max=60),
+         _ap("weekly_weekday", "יום שליחת קובץ המעקב השבועי", "weekday", 6, restart=True),
+         _ap("workbook", "קובץ המעקב (xlsx)", "text", "", restart=True),
+     ],
+     "tree": [
+         "בשעת הדוח: קורא state.json, טפסים חתומים, קישורי החתמה ודרישות פתוחות.",
+         "מרכיב את הדוח: חתימות שנקלטו, חליפות חסרות, חסרה חתימה, קישור שלא חזר, מידות, דרישות פתוחות ובטיפול, מה נסגר מאתמול.",
+         "מוסיף בקשות שממתינות לאספקה ממך וסקרים מהשבוע האחרון.",
+         "שולח לקבוצת הבקרה (אליך בלבד).",
+         "פעם בשבוע, ביום שנבחר: שולח אליך את קובץ המעקב כקובץ.",
+     ],
+     "log": r"\[4m\].*(report|reminders_section)|4m extra failed|4m_report"},
+
+    {"id": "m4_extract", "group": "ציוד 4M", "icon": "🔎", "name": "חילוץ בקשות ציוד מהצ'אטים", "file": "wa", "plugin": "wa_plugin.py",
+     "desc": "מזהה בקשות ציוד בהודעות ובהקלטות של העובדים ופותח/מעדכן דרישות (מודל זול, לפי מילות מפתח).",
+     "toggles": [{"plugin": "wa_plugin.py", "label": "תוסף 4M פעיל (כל אוטומציות 4M)"}],
+     "params": [
+         _ap("extract_every_minutes", "בדיקה כל (דקות)", "int", 60, restart=True, min=5, max=1440),
+         _ap("extract_model", "מודל", "choice", "haiku", restart=True, options=["haiku", "sonnet", "opus"]),
+         _ap("request_keywords", "מילות מפתח", "list", [], restart=True, help="מילה או תחילית בכל שורה."),
+         _ap("request_chats", "קבוצות לסריקה", "list", [], restart=True, help="מזהה קבוצה בכל שורה."),
+         _ap("watch_employees", "עובדים לסריקה (צ'אט פרטי)", "map", {}, restart=True, help="שורה לכל עובד: טלפון = שם"),
+     ],
+     "tree": [
+         "כל X דקות: אוסף הודעות והקלטות חדשות מהקבוצות ומהעובדים שברשימה.",
+         "מסנן לפי מילות המפתח.",
+         "מודל זול מסווג: בקשות חדשות ועדכונים לבקשות פתוחות.",
+         "רושם בטבלת הדרישות (plugin.db). לא שולח כלום לאף אחד — הבקשות הן רמז, לא מקור לחוסרים.",
+     ],
+     "log": r"\[4m\].*extract|4m_extract"},
+
+    {"id": "m4_procurement", "group": "ציוד 4M", "icon": "📦", "name": "תזכורת חוסרים לרכש (בר נוי)", "file": "wa", "plugin": "wa_plugin.py",
+     "desc": "כל כמה ימים בשעה קבועה: הודעה אחת לרכש עם החוסרים (חליפות מ-state.json + פריטים שהוספת).",
+     "toggles": [{"path": "procurement_approved", "label": "האוטומציה פעילה (נוסח מאושר)", "default": False}],
+     "params": [
+         _ap("procurement_time", "שעה", "time", "10:00"),
+         _ap("procurement_every_days", "כל (ימים)", "int", 2, min=1, max=30),
+         _ap("procurement_phone", "טלפון הרכש", "phone", ""),
+         _ap("procurement_text", "נוסח ההודעה", "textarea", "", help="משתנים: {blocks} (רשימת החוסרים) {expected}"),
+         _ap("procurement_with_suit", "פריטים שחסרים יחד עם חליפה", "list", [], help="פריט בכל שורה."),
+         _ap("procurement_extra", "פריטים נוספים", "items", [], help="שורה לכל פריט: פריט | כמות"),
+         _ap("procurement_expected.text", "הערת \"צפוי להגיע\"", "text", ""),
+         _ap("procurement_expected.until", "הערת \"צפוי להגיע\" — עד תאריך", "date", ""),
+         _ap("procurement_opened", "מתי נפתח כל חוסר", "map", {}, help="שורה לכל פריט: פריט = YYYY-MM-DD"),
+         _ap("procurement_note", "הערות לפריטים", "map", {}, help="שורה לכל פריט: פריט = הערה"),
+     ],
+     "tree": [
+         "כל דקה: בודק אם הגיעה השעה ואם עברו מספיק ימים מהשליחה הקודמת (שישי ושבת — עוברים ליום העבודה הבא).",
+         "קורא מחדש את wa_plugin.json ו-state.json (שינוי כאן נכנס לתוקף מיד).",
+         "בונה את רשימת החוסרים: חליפות + פריטים שהולכים עם חליפה + הפריטים הנוספים.",
+         "אם השליחה לאחרים מושהית — לא שולח ומדווח לך.",
+         "שולח הודעה אחת לרכש (פטור באישור הבעלים) ומדווח לך.",
+     ],
+     "log": r"\[4m\].*procurement"},
+
+    {"id": "m4_intake", "group": "ציוד 4M", "icon": "✍️", "name": "קליטת טפסי חתימה", "file": "wa", "plugin": "wa_plugin.py",
+     "desc": "טפסים חתומים מהטופס הדיגיטלי ומתמונות בווצאפ נקלטים אוטומטית ומעדכנים את קובץ המעקב.",
+     "toggles": [{"plugin": "wa_plugin.py", "label": "תוסף 4M פעיל (כל אוטומציות 4M)"}],
+     "params": [],
+     "tree": [
+         "מאזין לטופס הדיגיטלי (מוצפן) ולתמונות טופס בווצאפ (קוד QR).",
+         "רושם את החתימה ב-signed.json ובונה מחדש את קובץ המעקב.",
+         "מדווח לך על כל טופס שנקלט.",
+     ],
+     "log": r"\[4m\].*(intake|signature|form)|חתימה"},
+
+    {"id": "m4_backup_check", "group": "ציוד 4M", "icon": "🛟", "name": "התראה כשהגיבוי לא רץ", "file": "wa", "plugin": "wa_plugin.py",
+     "desc": "כל שעה: אם הגיבוי היומי לא הסתיים יותר מדי זמן — התראה אליך.",
+     "toggles": [{"plugin": "wa_plugin.py", "label": "תוסף 4M פעיל (כל אוטומציות 4M)"}],
+     "params": [_ap("backup_max_hours", "התראה אחרי (שעות בלי גיבוי)", "int", 26, restart=True, min=1, max=240)],
+     "tree": ["כל שעה: בודק מתי הסתיים הגיבוי האחרון.", "אם עבר יותר מהמותר — התראה אחת אליך (ולא שוב על אותו גיבוי)."],
+     "log": r"backup.*(alert|לא רץ)|הגיבוי היומי לא רץ"},
+
+    # ---- core agent jobs (config.json): schedules are edited in Settings -> Schedules; here only existing on/off flags
+    {"id": "core_backup", "group": "ליבת הסוכן", "icon": "💾", "name": "גיבוי לילי", "file": "cfg", "core": "backup",
+     "desc": "גיבוי מסדי הנתונים והמדיה כל לילה.", "toggles": [],
+     "params": [_ap("backup_time", "שעה", "time", "03:00", restart=True, readonly=True),
+                _ap("backup_keep_days", "שמירת גיבויים (ימים)", "int", 14, restart=True, readonly=True)],
+     "tree": ["מעתיק את messages.db ו-whatsapp.db לתיקיית הגיבוי של היום.", "משלים מדיה חסרה ומעתיק קבצים חדשים.",
+              "מוחק גיבויים ישנים לפי ימי השמירה.", "גיבוי גם למחשב השני (אם מופעל)."],
+     "log": r"backup"},
+    {"id": "core_selftest", "group": "ליבת הסוכן", "icon": "🩺", "name": "בדיקה עצמית לילית", "file": "cfg", "core": "selftest",
+     "desc": "בדיקה שקטה של כל המערכת; מדווח רק על כשל.", "toggles": [],
+     "params": [_ap("selftest_time", "שעה", "time", "04:30", restart=True, readonly=True)],
+     "tree": ["מריץ tools/selftest.py --quiet.", "אם משהו נכשל — הודעה אליך."], "log": r"selftest"},
+    {"id": "core_morning", "group": "ליבת הסוכן", "icon": "🌅", "name": "סיכום בוקר", "file": "cfg", "core": "morning_summary",
+     "desc": "סיכום קצר של פעילות הלילה בווצאפ ומי מחכה לתשובה.",
+     "toggles": [{"path": "morning_summary", "label": "פעיל", "default": True, "restart": True}],
+     "params": [_ap("morning_summary_time", "שעה", "time", "07:30", restart=True, readonly=True)],
+     "tree": ["אוסף את ההודעות מ-20:00 אתמול.", "ריצה קצרה של מודל קל: סיכום + מי מחכה לתשובה.", "שולח לקבוצת הבקרה."],
+     "log": r"morning_summary|morning summary"},
+    {"id": "core_checks", "group": "ליבת הסוכן", "icon": "🔁", "name": "בדיקות יומיות (עדכונים, קבוצות, התחברות)", "file": "cfg", "core": "update_check",
+     "desc": "בדיקת גרסה חדשה, שמות הקבוצות המחוברות ותוקף ההתחברות של Claude.", "toggles": [],
+     "params": [_ap("update_check_time", "בדיקת עדכון", "time", "09:00", restart=True, readonly=True),
+                _ap("group_check_time", "בדיקת קבוצות", "time", "10:00", restart=True, readonly=True),
+                _ap("signin_check_time", "בדיקת התחברות", "time", "09:30", restart=True, readonly=True)],
+     "tree": ["בדיקת עדכון: מודיע פעם אחת על כל גרסה חדשה.", "בדיקת קבוצות: משווה את שם כל קבוצה מחוברת לשם בווצאפ ומתקן.",
+              "בדיקת התחברות: מזהיר 3 ימים לפני שההתחברות של Claude פגה."],
+     "log": r"update_check|group_check|signin"},
+    {"id": "core_day_sync", "group": "ליבת הסוכן", "icon": "🔄", "name": "סנכרון קוד יומי", "file": "cfg", "core": "day_sync",
+     "desc": "שמירת הקוד של היום, סנכרון עם המאגר המשותף ובנייה מחדש כשצריך.",
+     "toggles": [{"path": "day_sync", "label": "פעיל", "default": True, "restart": True}],
+     "params": [_ap("day_sync_time", "שעה", "time", "23:15", restart=True, readonly=True)],
+     "tree": ["שומר את קבצי הקוד (רק אם הבדיקות עוברות).", "pull + push למאגר המשותף (hub).",
+              "אם הקוד השתנה — בונה את הגשר ומפעיל את הסוכן מחדש."], "log": r"day_sync"},
+    {"id": "core_release", "group": "ליבת הסוכן", "icon": "🚀", "name": "שחרור גרסה לילי", "file": "cfg", "core": "auto_release",
+     "desc": "פרסום השינויים החדשים כגרסה (מחשב המפתח בלבד).",
+     "toggles": [{"path": "auto_release", "label": "פעיל", "default": False, "restart": True}],
+     "params": [_ap("auto_release_time", "שעה", "time", "23:30", restart=True, readonly=True)],
+     "tree": ["ממזג עם hub ומוודא שהקוד של כל המחשבים כלול.", "בדיקות, סריקה, תג גרסה ופרסום ל-GitHub.", "אין חדש — לא קורה כלום."],
+     "log": r"auto_release|release"},
+    {"id": "core_update", "group": "ליבת הסוכן", "icon": "⬇️", "name": "עדכון אוטומטי לילי", "file": "cfg", "core": "auto_update",
+     "desc": "התקנת גרסה חדשה כשיש, עם בדיקה עצמית וחזרה לאחור בכשל.",
+     "toggles": [{"path": "auto_update", "label": "פעיל", "default": True, "restart": True}],
+     "params": [_ap("auto_update_time", "שעה", "time", "23:50", restart=True, readonly=True)],
+     "tree": ["בודק אם יש גרסה חדשה.", "מעדכן: עוצר גשר וסוכן, מתקין, מפעיל, בודק — וחוזר אחורה בכשל.", "הסוכן החדש מדווח לך על התוצאה."],
+     "log": r"auto_update|update\.py"},
+    {"id": "core_push", "group": "ליבת הסוכן", "icon": "🔔", "name": "התראות פוש לטלפון", "file": "cfg", "core": None,
+     "desc": "התראה לטלפון כשמשהו דורש את תשומת לבך עכשיו.",
+     "toggles": [{"path": "push_alerts", "label": "פעיל", "default": True, "restart": True}],
+     "params": [_ap("push_quiet", "שעות שקט", "text", "23:00-07:00", restart=True, readonly=True),
+                _ap("push_long_minutes", "התראה על משימה ארוכה מ- (דקות)", "int", 5, restart=True, readonly=True),
+                _ap("push_wait_hours", "מישהו מחכה יותר מ- (שעות)", "int", 3, restart=True, readonly=True),
+                _ap("push_merge_seconds", "איחוד התראות קרובות (שניות)", "int", 20, restart=True, readonly=True)],
+     "tree": ["Claude או תוסף מבקשים התראה (טקסט קצר).", "התראות קרובות מאוחדות.", "בשעות השקט נשמרות לבוקר (חוץ מתקלה דחופה)."],
+     "log": r"push"},
+    {"id": "core_reminders", "group": "ליבת הסוכן", "icon": "⏰", "name": "תזכורות וטיוטות מתוזמנות", "file": "cfg", "core": None,
+     "desc": "כל דקה: תזכורות שהגיע זמנן אליך, וטיוטות שתוזמנו נשלחות (אישור אחד = הודעה אחת).", "toggles": [],
+     "params": [], "tree": ["כל דקה: תזכורות שהגיע זמנן — לקבוצת הבקרה בלבד.", "תזכורת \"אם לא ענו\" — רק אם איש לא כתב מאז.",
+                            "טיוטה מתוזמנת שעדיין ממתינה — מאושרת בגשר ונשלחת."],
+     "log": r"remind|scheduled"},
+]
+AU_BY_ID = {x["id"]: x for x in AUTOMATIONS}
+
+
+def _au_dig(obj, path):
+    cur = obj
+    for k in path.split("."):
+        if not isinstance(cur, dict) or k not in cur:
+            return False, None
+        cur = cur[k]
+    return True, cur
+
+
+def _au_plant(obj, path, v):
+    keys, cur = path.split("."), obj
+    for k in keys[:-1]:
+        if not isinstance(cur.get(k), dict):
+            cur[k] = {}
+        cur = cur[k]
+    cur[keys[-1]] = v
+
+
+def _au_load(fkey):
+    f = _au_files()[fkey]
+    try:
+        with open(f, encoding="utf-8") as fh:
+            return json.load(fh)
+    except FileNotFoundError:
+        return None
+
+
+def _au_fmt(typ, v):
+    """Value -> what the edit box shows (lists / maps as one item per line)."""
+    if typ in ("list", "dates"):
+        return "\n".join(str(x) for x in (v or []))
+    if typ == "map":
+        return "\n".join(f"{k} = {x}" for k, x in (v or {}).items() if not str(k).startswith("_"))
+    if typ == "maplist":
+        return "\n".join(f"{k} = {', '.join(map(str, x or []))}" for k, x in (v or {}).items())
+    if typ == "items":
+        return "\n".join(f"{x.get('item', '')} | {x.get('qty', '')}" for x in (v or []) if isinstance(x, dict))
+    return v
+
+
+def _au_lines(v):
+    return [ln.strip() for ln in (v if isinstance(v, list) else str(v or "").split("\n")) if str(ln).strip()]
+
+
+def _au_sane(label, s):
+    if "????" in s or "\ufffd" in s:
+        raise ValueError(f"{label}: הטקסט נראה פגום (סימני שאלה במקום עברית)")
+    return s
+
+
+def _au_parse(p, v):
+    """Edit-box value -> the JSON value the plugin expects (raises ValueError with a Hebrew message)."""
+    t, lab = p["type"], p["label"]
+    if t == "time":
+        v = str(v or "").strip()
+        if v == "" and p["default"] == "":
+            return ""
+        if not HHMM.match(v):
+            raise ValueError(f"{lab}: שעה בפורמט HH:MM")
+        return v
+    if t == "date":
+        v = str(v or "").strip()
+        if v:
+            try:
+                dt.date.fromisoformat(v)
+            except ValueError:
+                raise ValueError(f"{lab}: תאריך YYYY-MM-DD")
+        return v
+    if t == "bool":
+        return v is True or str(v).lower() in ("true", "1", "on")
+    if t == "int":
+        try:
+            n = int(float(v))
+        except (TypeError, ValueError):
+            raise ValueError(f"{lab}: מספר שלם")
+        if not p.get("min", 0) <= n <= p.get("max", 100000):
+            raise ValueError(f"{lab}: בין {p.get('min', 0)} ל-{p.get('max', 100000)}")
+        return n
+    if t == "weekday":
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            n = -1
+        if not 0 <= n <= 6:
+            raise ValueError(f"{lab}: יום בשבוע")
+        return n
+    if t == "weekdays":
+        days = sorted({int(x) for x in (v if isinstance(v, list) else _au_lines(str(v).replace(",", "\n")))})
+        if not days or any(not 0 <= d <= 6 for d in days):
+            raise ValueError(f"{lab}: בחר לפחות יום אחד")
+        return days
+    if t == "choice":
+        if v not in p["options"]:
+            raise ValueError(f"{lab}: אחד מ-{', '.join(p['options'])}")
+        return v
+    if t == "phone":
+        v = re.sub(r"[\s\-+()]", "", str(v or ""))
+        if v and not re.fullmatch(r"\d{9,15}", v):
+            raise ValueError(f"{lab}: מספר טלפון בפורמט 9725XXXXXXXX")
+        return v
+    if t == "text":
+        v = _au_sane(lab, str(v or "").strip())
+        if len(v) > 300 or "\n" in v:
+            raise ValueError(f"{lab}: שורה אחת, עד 300 תווים")
+        return v
+    if t == "textarea":
+        v = _au_sane(lab, str(v or "").replace("\r\n", "\n").strip())
+        if len(v) > 5000:
+            raise ValueError(f"{lab}: עד 5000 תווים")
+        return v
+    if t == "list":
+        return [_au_sane(lab, x) for x in _au_lines(v)]
+    if t == "dates":
+        out = _au_lines(v)
+        for x in out:
+            try:
+                dt.date.fromisoformat(x)
+            except ValueError:
+                raise ValueError(f"{lab}: \"{x}\" — תאריך YYYY-MM-DD")
+        return out
+    if t in ("map", "maplist"):
+        out = {}
+        for ln in _au_lines(v):
+            if "=" not in ln:
+                raise ValueError(f"{lab}: בכל שורה צריך \"=\" ({ln})")
+            k, x = (s.strip() for s in ln.split("=", 1))
+            if not k:
+                raise ValueError(f"{lab}: חסר שם לפני \"=\" ({ln})")
+            out[_au_sane(lab, k)] = [_au_sane(lab, y.strip()) for y in x.split(",") if y.strip()] if t == "maplist" else _au_sane(lab, x)
+        return out
+    if t == "items":
+        out = []
+        for ln in _au_lines(v):
+            item, _, qty = (s.strip() for s in ln.partition("|"))
+            if not item:
+                raise ValueError(f"{lab}: חסר שם פריט ({ln})")
+            out.append({"item": _au_sane(lab, item), "qty": _au_sane(lab, qty)})
+        return out
+    raise ValueError(f"{lab}: סוג לא מוכר")
+
+
+def _au_tail(path, max_bytes=600_000):
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - max_bytes))
+            return fh.read().decode("utf-8", "replace").splitlines()[1 if size > max_bytes else 0:]
+    except OSError:
+        return []
+
+
+def _au_events():
+    """actions.log + agent.log as [{at, src, text}] (oldest first)."""
+    out = []
+    for ln in _au_tail(os.path.join(ROOT, "agent", "actions.log")):
+        m = re.match(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\t(.*)$", ln)
+        if m:
+            out.append({"at": m.group(1), "src": "actions", "text": m.group(2)})
+    for ln in _au_tail(paths()["log"]):
+        m = re.match(r"^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] (.*)$", ln)
+        if m:
+            out.append({"at": m.group(1), "src": "agent", "text": m.group(2)})
+    out.sort(key=lambda e: e["at"])
+    return out
+
+
+def _au_namer():
+    nm = names()
+
+    def sub(text):  # owner rule: names, not numbers
+        return re.sub(r"\b(\d{9,20})(@(?:g\.us|s\.whatsapp\.net|lid))?\b",
+                      lambda m: nm.get(m.group(1)) or (m.group(0) if not m.group(2) and not m.group(1).startswith("972") else "איש קשר לא מזוהה"),
+                      str(text))
+    return sub
+
+
+def _au_pkv(k):
+    r = rows(os.path.join(_au_plugin_dir(), "plugin.db"), "SELECT v FROM kv WHERE k = ?", (k,))
+    return r[0]["v"] if r else None
+
+
+def _au_hm(v):
+    """'2026-11-10T09:10:14' -> '10.11 09:10'."""
+    m = re.match(r"^\d{4}-(\d\d)-(\d\d)[T ](\d\d:\d\d)", str(v or ""))
+    return f"{m.group(2)}.{m.group(1)} {m.group(3)}" if m else (v or "—")
+
+
+def _au_perf(a, eff, events, today):
+    """[[label, value]] — what the automation did lately (read-only)."""
+    seg = lambda k: kv("segd:" + k)
+    done = lambda k: ("✓ " + _au_hm(seg(f"{k}:{today}"))) if seg(f"{k}:{today}") else "עוד לא היום"
+    i = a["id"]
+    if i == "lunch":
+        wd = eff.get("workdays") or [6, 0, 1, 2, 3]
+        work = dt.date.today().weekday() in wd and today not in (eff.get("lunch.skip_dates") or [])
+        sent = seg(f"lunch_sent_desc:{today}") or ""
+        return [["היום יום הזמנה", "כן" if work else "לא"],
+                ["נעצר להיום (\"עצור אוכל\")", "כן" if (seg("lunch_stop") or "") == today else "לא"],
+                ["עדכון תאריך", done("lunch_date")], ["תזכורת בקבוצה", done("lunch_reminder")],
+                ["בדיקה ותיקון התיאור", done("lunch_check")], ["שליחה לציפורה", done("lunch_send")],
+                ["מנות שנשלחו היום", str(len(re.findall(r"(?m)^\s*\d+\s*-", sent))) if sent else "—"]]
+    if i == "attendance":
+        names_ = {"deputy_1": "תזכורת ראשונה", "deputy_2": "תזכורת שנייה", "deputy_3": "תזכורת אחרונה", "manager": "מנהל האתר"}
+        out = [[v, done("att_" + k)] for k, v in names_.items()]
+        try:
+            opened = json.loads(seg(f"att_open:{today}") or "{}")
+        except ValueError:
+            opened = {}
+        out += [["ערכו את הקובץ היום", seg(f"sheet_editors:{today}") or "אף אחד"],
+                ["שיחה פתוחה היום עם", opened.get("role") or "—"]]
+        return out
+    if i == "sheet":
+        return [["בדיקות היום", seg(f"sheet_checks:{today}") or "0"], ["בדיקה אחרונה", _au_hm(seg("sheet_last_check"))],
+                ["עריכה אחרונה בקובץ", _au_hm(str(seg("sheet_rev") or "").replace("Z", ""))],
+                ["ערכו היום", seg(f"sheet_editors:{today}") or "אף אחד"], ["סיכום יומי (20:00)", done("sheet_daily_summary")]]
+    if i == "report":
+        return [["טיוטה למנהל האתר", done("report_manager")], ["טיוטה לקבוצה", done("report_group")],
+                ["דוח היום נבנה", "כן" if seg(f"report_png:{today}") else "לא"]]
+    if i == "m4_report":
+        return [["רץ היום", "✓" if kv("day:4m_report") == today else "עוד לא היום"], ["דוח אחרון", _au_hm(_au_pkv("last_report_at"))],
+                ["קובץ שבועי אחרון", _au_pkv("weekly_done") or "—"]]
+    if i == "m4_extract":
+        n = rows(os.path.join(_au_plugin_dir(), "plugin.db"), "SELECT count(*) n FROM requests WHERE status != 'סגור'")
+        return [["ריצה אחרונה", _au_hm(kv("at:4m_extract"))], ["נסרק עד", _au_hm(_au_pkv("extract_since"))],
+                ["דרישות פתוחות", str(n[0]["n"]) if n else "—"]]
+    if i == "m4_procurement":
+        last = _au_pkv("procurement_sent_date")
+        nxt = "—"
+        if last:
+            try:
+                d = dt.date.fromisoformat(last) + dt.timedelta(days=int(eff.get("procurement_every_days") or 2))
+                while d.weekday() in (4, 5):
+                    d += dt.timedelta(days=1)
+                nxt = f"{d:%d.%m} {eff.get('procurement_time') or '10:00'}"
+            except ValueError:
+                pass
+        return [["נשלח לאחרונה", last or "—"], ["השליחה הבאה (משוערת)", nxt if eff.get("_on") else "כבוי"],
+                ["בדיקה אחרונה", _au_hm(kv("at:4m_procurement"))]]
+    if i == "m4_intake":
+        r = rows(os.path.join(_au_plugin_dir(), "plugin.db"), "SELECT count(*) n, max(at) last FROM intake WHERE ok = 1")
+        rt = rows(os.path.join(_au_plugin_dir(), "plugin.db"), "SELECT count(*) n FROM intake WHERE ok = 1 AND substr(at,1,10) = ?", (today,))
+        return [["טפסים שנקלטו (סה\"כ)", str(r[0]["n"]) if r else "—"], ["היום", str(rt[0]["n"]) if rt else "—"],
+                ["אחרון", _au_hm(r[0]["last"]) if r else "—"]]
+    if i == "m4_backup_check":
+        return [["בדיקה אחרונה", _au_hm(kv("at:4m_backup_check"))], ["גיבוי אחרון הסתיים", _au_hm(kv("backup_done"))]]
+    if i == "core_reminders":
+        n = rows(paths()["agent"], "SELECT count(*) n FROM reminders WHERE status = 'active'")
+        s = rows(paths()["agent"], "SELECT count(*) n FROM scheduled_drafts WHERE status = 'scheduled'")
+        return [["תזכורות פעילות", str(n[0]["n"]) if n else "0"], ["טיוטות מתוזמנות", str(s[0]["n"]) if s else "0"],
+                ["בדיקה אחרונה", re.sub(r"^(\d{4})(\d\d)(\d\d)(\d\d)(\d\d)$", r"\3.\2 \4:\5", kv("at:reminders") or "—")]]
+    if a.get("core"):
+        out = [["ריצה אחרונה (תאריך)", kv(f"day:{a['core']}") or "—"]]
+        if a["core"] == "backup":
+            out.append(["גיבוי אחרון הסתיים", _au_hm(kv("backup_done"))])
+        return out
+    return []
+
+
+def automations_view():
+    files, c, today = _au_files(), cfg(), dt.date.today().isoformat()
+    docs = {k: _au_load(k) for k in files}
+    events, namer = _au_events(), _au_namer()
+    last_start = next((e["at"] for e in reversed(events) if e["src"] == "agent" and e["text"].startswith("agent starting")), "")
+    for k, since in list(_au_pending.items()):
+        if last_start and last_start >= since:
+            _au_pending.pop(k, None)
+    plugins_on = {os.path.basename(p) for p in c.get("plugins") or []}
+    items = []
+    for a in AUTOMATIONS:
+        doc = docs.get(a["file"])
+        toggles = []
+        for idx, t in enumerate(a["toggles"]):
+            if t.get("plugin"):
+                toggles.append({"idx": idx, "label": t["label"], "on": t["plugin"] in plugins_on, "restart": True})
+            else:
+                found, v = _au_dig(doc or {}, t["path"])
+                toggles.append({"idx": idx, "label": t["label"], "on": bool(v if found else t["default"]), "restart": bool(t.get("restart"))})
+        params, eff = [], {}
+        for p in a["params"]:
+            found, v = _au_dig(doc or {}, p["path"])
+            v = v if found else p["default"]
+            eff[p["path"]] = v
+            shown = _au_fmt(p["type"], v)
+            nums = re.findall(r"\b(?:972\d{8,9}|\d{15,20}@g\.us|\d{15,20})\b", str(shown)) if p["type"] in ("phone", "list", "map", "text") else []
+            hint = ", ".join(dict.fromkeys(namer(n) for n in nums)) if nums else ""
+            params.append({"path": p["path"], "label": p["label"], "type": p["type"], "value": shown, "is_default": not found,
+                           "restart": p["restart"], "help": p["help"], "options": p.get("options"), "min": p.get("min"), "max": p.get("max"),
+                           "readonly": bool(p.get("readonly")), "names": hint})
+        plugin_ok = a.get("plugin") is None or a["plugin"] in plugins_on
+        main_on = (toggles[0]["on"] if toggles else True) and plugin_ok
+        eff["_on"] = main_on
+        rx = re.compile(a["log"], re.I)
+        tag = r"\[dash\] automation " + re.escape(a["id"]) + r"\b"
+        log = [dict(e, text=namer(e["text"])[:400]) for e in events if rx.search(e["text"]) or re.search(tag, e["text"])][-40:][::-1]
+        try:
+            perf = _au_perf(a, eff, events, today)
+        except Exception as e:
+            perf = [["שגיאה בקריאת הביצועים", str(e)[:120]]]
+        fails = [e for e in log if re.search(r"FAILED|failed|נכשל|error|שגיאה", e["text"]) and e["at"][:10] == today]
+        items.append({"id": a["id"], "group": a["group"], "icon": a["icon"], "name": a["name"], "desc": a["desc"],
+                      "file": files[a["file"]], "file_ok": doc is not None, "plugin": a.get("plugin"), "plugin_on": plugin_ok,
+                      "on": main_on, "toggles": toggles, "params": params, "tree": a["tree"], "perf": [[x, namer(y)] for x, y in perf],
+                      "log": log, "last_event": log[0] if log else None, "fails_today": len(fails),
+                      "pending_restart": a["id"] in _au_pending})
+    return {"items": items, "pending_restart": [AU_BY_ID[k]["name"] for k in _au_pending], "plugin_dir": _au_plugin_dir()}
+
+
+def _au_write(fkey, changes, why):
+    """Read-modify-write only the changed keys of one JSON file; keep <file>.bak-ui first."""
+    f = _au_files()[fkey]
+    with AU_LOCK:
+        with open(f, encoding="utf-8") as fh:
+            doc = json.load(fh)
+        shutil.copy2(f, f + ".bak-ui")
+        for path, v in changes.items():
+            _au_plant(doc, path, v)
+        dump_json(doc, f, ensure_ascii=False, indent=2)
+    with open(os.path.join(ROOT, "agent", "actions.log"), "a", encoding="utf-8") as fh:
+        fh.write(f"{dt.datetime.now():%Y-%m-%d %H:%M:%S}\t[dash] automation {why}: {os.path.basename(f)} "
+                 f"{', '.join(changes)} (backup {os.path.basename(f)}.bak-ui)\n")
+
+
+def automation_action(a):
+    kind = a.get("do")
+    if kind == "automations":
+        return automations_view()
+    if kind == "auto_restart":
+        names_ = [AU_BY_ID[k]["name"] for k in _au_pending] or ["הגדרות אוטומציות"]
+        open(os.path.join(ROOT, "agent", "restart.request"), "w", encoding="utf-8").write(
+            "שינוי באוטומציות מלוח הבקרה: " + ", ".join(names_))
+        return {"ok": True}
+    au = AU_BY_ID.get(a.get("id"))
+    if not au:
+        return {"error": "אוטומציה לא מוכרת"}
+    if kind == "auto_toggle":
+        try:
+            t = au["toggles"][int(a.get("idx", 0))]
+        except (IndexError, TypeError, ValueError):
+            return {"error": "מתג לא מוכר"}
+        on = bool(a.get("on"))
+        if t.get("plugin"):
+            c = cfg()
+            all_p = list(c.get("plugins") or []) + list(c.get("plugins_disabled") or [])
+            full = next((p for p in all_p if os.path.basename(p) == t["plugin"]), None)
+            if not full:
+                return {"error": "התוסף לא מוגדר במחשב הזה"}
+            c["plugins"] = [p for p in c.get("plugins") or [] if p != full] + ([full] if on else [])
+            c["plugins_disabled"] = [p for p in c.get("plugins_disabled") or [] if p != full] + ([] if on else [full])
+            shutil.copy2(_au_files()["cfg"], _au_files()["cfg"] + ".bak-ui")
+            save_cfg(c)
+            with open(os.path.join(ROOT, "agent", "actions.log"), "a", encoding="utf-8") as fh:
+                fh.write(f"{dt.datetime.now():%Y-%m-%d %H:%M:%S}\t[dash] automation {au['id']} plugin {t['plugin']} -> {'on' if on else 'off'}\n")
+            _au_pending[au["id"]] = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            return {"ok": True, "restart": True}
+        if _au_load(au["file"]) is None:
+            return {"error": "קובץ ההגדרות לא נמצא במחשב הזה"}
+        _au_write(au["file"], {t["path"]: on}, f"{au['id']} switched {'on' if on else 'off'}")
+        if t.get("restart"):
+            _au_pending[au["id"]] = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return {"ok": True, "restart": bool(t.get("restart"))}
+    if kind == "auto_save":
+        doc = _au_load(au["file"])
+        if doc is None:
+            return {"error": "קובץ ההגדרות לא נמצא במחשב הזה"}
+        vals, changes, restart = a.get("values") or {}, {}, False
+        try:
+            for p in au["params"]:
+                if p["path"] not in vals or p.get("readonly"):
+                    continue
+                new = _au_parse(p, vals[p["path"]])
+                found, cur = _au_dig(doc, p["path"])
+                old = cur if found else p["default"]
+                try:  # compare in the same normal form (e.g. weekdays sorted), so an untouched card writes nothing
+                    old = _au_parse(p, _au_fmt(p["type"], old))
+                except (ValueError, TypeError):
+                    pass
+                if new != old:
+                    if p["type"] == "map" and isinstance(cur, dict):  # keep the plugin's own "_status"-style keys
+                        new = {**{k: x for k, x in cur.items() if str(k).startswith("_")}, **new}
+                    changes[p["path"]] = new
+                    restart = restart or p["restart"]
+        except ValueError as e:
+            return {"error": str(e)}
+        if not changes:
+            return {"ok": True, "changed": []}
+        _au_write(au["file"], changes, f"{au['id']} edited")
+        if restart:
+            _au_pending[au["id"]] = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return {"ok": True, "changed": [p["label"] for p in au["params"] if p["path"] in changes], "restart": restart}
+    return {"error": "unknown action"}
+
+
 def action(a):
     kind = a.get("do")
     p = paths()
+    if kind in ("automations", "auto_toggle", "auto_save", "auto_restart"):
+        return automation_action(a)
     if kind == "model":
         m = a.get("model", "auto")
         set_model(a.get("chat"), m, a.get("hours") or 0)
