@@ -28,8 +28,7 @@ def run(cmd, cwd=ROOT, env=None):
         print(out[-2000:])
         failed = [l for l in out.splitlines() if l.startswith(("FAILED", "ERROR"))]
         if failed:
-            print("
-".join(failed[:5]))
+            print("\n".join(failed[:5]))
         sys.exit(f"✖ נכשל: {' '.join(cmd)}")
     return r.stdout
 
