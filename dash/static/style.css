@@ -460,3 +460,24 @@ p.help { margin: 4px 0 0; }
 .au-log li.bad { background: var(--bad-bg); color: var(--bad); }
 .au-log time { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .bad-t { color: var(--bad); }
+
+/* ---- owner 10.11: bar polish ---- */
+/* chat header: "base rules" sits right next to "today's activity" (only the first of the pair is pushed to the end), bigger icons */
+.chat-card .card-head { gap: 10px; }
+#rulesBtn { margin-inline-start: auto; }
+#todayBtn { margin-inline-start: 0; }
+.chat-card .today-btn { font-size: .95rem; padding: 6px 14px; gap: 9px; }
+.chat-card .today-btn > span:first-child { font-size: 1.35rem; line-height: 1; }
+.chat-card .today-btn .today-ico { font-size: 1.35rem; }
+.chat-card .today-btn .caret { font-size: 1.1rem; }
+/* tabs: as wide as their text, never cut */
+.tab { max-width: none; white-space: nowrap; }
+.tab .t-name { overflow: visible; text-overflow: clip; }
+/* the open conversation: a thin desert-coloured frame */
+.chat-card { border: 1px solid #c8a96a; }
+/* the scrollbar of the chat (on the left in RTL): wider and easy to grab */
+.chat { scrollbar-width: auto; }
+.chat::-webkit-scrollbar { width: 18px; }
+.chat::-webkit-scrollbar-track { background: var(--surface-2); border-radius: 9px; }
+.chat::-webkit-scrollbar-thumb { background: var(--line); border: 4px solid var(--surface-2); border-radius: 9px; min-height: 48px; }
+.chat::-webkit-scrollbar-thumb:hover { background: var(--muted); }
