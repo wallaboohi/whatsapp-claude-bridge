@@ -2664,7 +2664,20 @@ def tunnel_keeper():
 
 # ---------- backup ----------
 
+_backup_running = threading.Event()
+
+
 def backup():
+    if _backup_running.is_set():
+        return
+    _backup_running.set()
+    try:
+        _backup()
+    finally:
+        _backup_running.clear()
+
+
+def _backup():
     root = _path(CFG["backup_dir"])
     day = os.path.join(root, "db", dt.date.today().isoformat())
     os.makedirs(day, exist_ok=True)
@@ -4064,7 +4077,9 @@ def push_guard(rows, now):
         sent = db.execute("SELECT text, kind, sent FROM push_queue WHERE status = 'sent' AND sent >= ?",
                           (iso(now_dt - dt.timedelta(hours=max(dedupe_h, 24))),)).fetchall()
     last_hour = [r for r in sent if r[2] >= iso(now_dt - dt.timedelta(hours=1))]
-    day_n, hour_n = len(sent), len(last_hour)
+    # owner 11.11: "per day" = since midnight (a rolling 24 h let yesterday's burst silence this morning's alerts)
+    midnight = iso(now_dt.replace(hour=0, minute=0, second=0, microsecond=0))
+    day_n, hour_n = sum(1 for r in sent if r[2] >= midnight), len(last_hour)
     seen_recent = {}
     for text, kind, when in sent:
         seen_recent[_push_norm(text)] = max(seen_recent.get(_push_norm(text), ""), when)
@@ -4669,6 +4684,14 @@ def scheduler():
                          (CFG.get("auto_update_time", "23:50"), "auto_update", auto_update),
                          (CFG.get("monthly_jobs_time", "02:00"), "monthly_jobs", monthly_jobs),
                          (CFG.get("health_report_time", "08:00"), "weekly_health", weekly_health)]
+                # owner 11.11: the PC slept in the middle of the 03:00 backup and the day was already marked: retry
+                # until it really finished today (backup_done), at most every 30 minutes
+                if (now.strftime("%H:%M") >= CFG["backup_time"] and (kv_get("backup_done") or "")[:10] != today
+                        and not _backup_running.is_set() and (not kv_get("at:backup_retry") or
+                        now - dt.datetime.fromisoformat(kv_get("at:backup_retry")) > dt.timedelta(minutes=30))):
+                    kv_set("at:backup_retry", now.isoformat())
+                    kv_set("day:backup", today)
+                    slow.put(backup)
                 for at, key, fn in daily + _daily:
                     if now.strftime("%H:%M") >= at and kv_get(f"day:{key}") != today:
                         kv_set(f"day:{key}", today)
