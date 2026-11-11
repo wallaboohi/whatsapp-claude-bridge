@@ -651,6 +651,7 @@ def data(chat=None):
         "chat": group, "groups": glist, "rules": rules_of(group),
         "presence": {"pc_last": str(pc_last).replace("T", " ") if pc_last else None, "phone_last": str(phone_last)[:19] if phone_last else None},
         "model": model_info(group),
+        "claude_meter": claude_meter(), "unlimited_all": bool(c.get("unlimited_all")),
         "live": (json.loads(kv(K("live_steps", group))) if kv(K("live_steps", group)) else None),
         "conversation": convo,
         "last_owner": jl("last_owner_msg"), "last_tool": jl("last_tool_msg"),
@@ -680,6 +681,28 @@ def data(chat=None):
         "cost_self": cost_summary(), "cost_by_chat": cost_by_chat(), "transcribe_gap": transcribe_gap_info(), "peer_backups": peer_backups(),
         "selftest": (json.load(open(os.path.join(ROOT, "agent", "selftest.json"), encoding="utf-8")) if os.path.exists(os.path.join(ROOT, "agent", "selftest.json")) else []),
     }
+
+
+_claude_cache = {"at": 0.0, "v": None}
+
+
+def claude_meter(max_age=120):
+    """Claude's plan meter (5 hours / weekly, % and reset time) for the model box. Same undocumented endpoint and sign-in
+    as agent.py's claude_usage; read-only, cached; None when unavailable (never raises)."""
+    if time.time() - _claude_cache["at"] < max_age:
+        return _claude_cache["v"]
+    v = None
+    try:
+        o = json.load(open(os.path.expanduser("~/.claude/.credentials.json"), encoding="utf-8")).get("claudeAiOauth") or {}
+        hd = {"Authorization": "Bearer " + (o.get("accessToken") or ""), "anthropic-beta": "oauth-2025-04-20", "User-Agent": "claude-code"}
+        u = json.loads(urllib.request.urlopen(urllib.request.Request("https://api.anthropic.com/api/oauth/usage", headers=hd), timeout=6).read().decode())
+        v = {k: {"pct": (u.get(k) or {}).get("utilization"), "resets_at": (u.get(k) or {}).get("resets_at")}
+             for k in ("five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet") if (u.get(k) or {}).get("utilization") is not None}
+        v["plan"] = o.get("subscriptionType") or ""
+    except Exception:
+        pass
+    _claude_cache.update(at=time.time(), v=v)
+    return v
 
 
 def kill(name_like):

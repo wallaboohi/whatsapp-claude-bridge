@@ -390,6 +390,30 @@ function drawCharts(d) {
   ];
 }
 
+// model box: every limit in one place (same numbers as /תקרה) — compact lines, click for the weekly / monthly detail
+const mbReset = iso => { try { const t = new Date(iso); const sameDay = t.toDateString() === new Date().toDateString();
+  return sameDay ? hhmm(t) : t.toLocaleDateString(LOCALE(), { day: "2-digit", month: "2-digit" }) + " " + hhmm(t); } catch (e) { return "?"; } };
+let mbOpen = false;
+function renderUsage(d) {
+  const cm = d.claude_meter || {}, a = d.agent || {}, groups = d.groups || [], cur = groups.find(g => g.jid === d.chat) || {};
+  const pc = (x, y) => y ? Math.round(100 * x / y) + "%" : "—";
+  const tot = a.spent_today || 0, ref = a.budget || 5, unl = d.unlimited_all;
+  const cp = k => cm[k] && cm[k].pct != null ? Math.round(cm[k].pct) + "%" : "—";
+  const bridge = unl ? L(`הגשר היום ${M(tot)} · ללא תקרה`, `Bridge today ${M(tot)} · no cap`) : L(`הגשר היום ${M(tot)} מתוך ${M(ref, 0)} (${pc(tot, ref)})`, `Bridge today ${M(tot)} of ${M(ref, 0)} (${pc(tot, ref)})`);
+  const chatLn = unl ? L(`השיחה ${M(cur.spent || 0)} · ללא תקרה`, `This chat ${M(cur.spent || 0)} · no cap`) : L(`השיחה ${M(cur.spent || 0)} מתוך ${M(cur.budget || ref, 0)} (${pc(cur.spent || 0, cur.budget || ref)})`, `This chat ${M(cur.spent || 0)} of ${M(cur.budget || ref, 0)}`);
+  $("mbUsage").innerHTML = `<div>☁️ Claude · ${L("5 שעות", "5 h")} ${cp("five_hour")} · ${L("שבועי", "weekly")} ${cp("seven_day")}</div><div>💰 ${chatLn}</div><div>💰 ${bridge}</div>`;
+  const row = (name, k) => { const x = cm[k]; if (!x) return ""; const p = Math.round(x.pct);
+    return `<div class="u-row"><div class="u-top"><span>${name}</span><b>${p}%</b></div><span class="meter${p >= 90 ? " bad" : p >= 80 ? " warn" : ""}"><span style="width:${Math.min(100, p)}%"></span></span>` +
+           `<span class="u-sub">${L("מתאפס", "Resets")} ${mbReset(x.resets_at)}</span></div>`; };
+  const month = (d.costs || []).reduce((n, r) => n + (r.cost || 0), 0);
+  $("mbDetail").innerHTML = (cm.five_hour || cm.seven_day ? row(L("חלון 5 שעות", "5-hour window"), "five_hour") + row(L("שבועי · כל המודלים", "Weekly · all models"), "seven_day") +
+      row(L("שבועי · Opus", "Weekly · Opus"), "seven_day_opus") + row(L("שבועי · Sonnet", "Weekly · Sonnet"), "seven_day_sonnet") : `<span class="u-sub">${L("מד השימוש של Claude לא זמין כרגע.", "Claude's usage meter is unavailable right now.")}</span>`) +
+    `<div class="u-row"><div class="u-top"><span>${L("חודשי · Claude", "Monthly · Claude")}</span><b>—</b></div><span class="u-sub">${L("Claude לא מספק נתון חודשי", "Claude gives no monthly figure")}</span></div>` +
+    `<div class="u-row"><div class="u-top"><span>${L("הגשר · 14 ימים אחרונים", "Bridge · last 14 days")}</span><b>${M(month)}</b></div><span class="u-sub">${L("הערכה לפי מחירון API; במנוי לא משלמים לפיה", "API-price estimate; not billed on a plan")}</span></div>`;
+  $("mbDetail").hidden = !mbOpen;
+}
+$("mbUsage").onclick = () => { mbOpen = !mbOpen; $("mbDetail").hidden = !mbOpen; };
+
 function render(d) {
   last = d;
   if (d.maintainer && !pubShown) { pubShown = true; $("pubBox").hidden = false; gitRefresh(); }
@@ -484,6 +508,7 @@ function render(d) {
   $("modelNow").innerHTML = `<strong>${esc(cg.name || "")}</strong><br>` + $("modelNow").innerHTML;
   const rc = mi.recommend;
   $("modelRec").textContent = rc && rc.model ? `💡 ${L("המלצה: ", "Suggestion: ")}${(guide[rc.model] || {}).he || rc.model} (${rc.why})` : "";
+  renderUsage(d);
   $("modelBox").classList.toggle("working", !!(d.live && !d.live.done));
   $("log").textContent = (d.log || []).join("\n");
   renderControl(d);

@@ -94,6 +94,17 @@
         <button class="tile" data-detail="cost" style="--accent: var(--brand)"><span class="tile-ico">💲</span><span class="tile-value" id="kCost">—</span><span class="tile-label" data-en="Claude cost today">עלות Claude היום</span>
           <span class="meter" role="progressbar" aria-label="ניצול תקציב יומי" id="kCostMeter"><span id="kCostBar"></span></span></button>
       </div>
+      <div class="chat-top">
+        <section class="model-box" id="modelBox" aria-labelledby="h-model">
+          <div class="card-head"><h2 id="h-model" data-en="Claude model">מודל Claude</h2><button class="mb-toggle" id="mbToggle" aria-expanded="true" title="מזער / הרחב" data-en-title="Minimize / expand">▾ מזער</button></div>
+          <p class="note tight" id="modelNow"></p>
+          <select id="modelSel" class="btn sel" aria-label="בחירת מודל" data-en-aria="Choose model"></select>
+          <p class="note tight" id="modelTip"></p>
+          <p class="note tight" id="modelRec"></p>
+          <button type="button" class="mb-usage" id="mbUsage" title="פירוט שבועי וחודשי" data-en-title="Weekly and monthly detail"></button>
+          <div class="mb-detail" id="mbDetail" hidden></div>
+        </section>
+      </div>
       <div class="chat-row">
         <div class="chat" id="chat" tabindex="0" aria-live="polite"></div>
       </div>
@@ -113,14 +124,6 @@
 
     <!-- side rail: only what is used every day -->
     <aside class="rail" aria-label="כלים" data-en-aria="Tools">
-      <section class="card compact model-box" id="modelBox" aria-labelledby="h-model">
-        <div class="card-head"><h2 id="h-model" data-en="Claude model">מודל Claude</h2><button class="mb-toggle" id="mbToggle" aria-expanded="true" title="מזער / הרחב" data-en-title="Minimize / expand">▾ מזער</button></div>
-        <p class="note tight" id="modelNow"></p>
-        <select id="modelSel" class="btn sel" aria-label="בחירת מודל" data-en-aria="Choose model"></select>
-        <p class="note tight" id="modelTip"></p>
-        <p class="note tight" id="modelRec"></p>
-      </section>
-
       <section class="card compact" aria-labelledby="h-status">
         <div class="card-head"><h2 id="h-status" data-en="Status">מצב</h2><span class="chip warn-chip" id="pausedChip" hidden>⏸</span></div>
         <button type="button" class="mach-line" id="machLine" title="פתח הגדרות ← מחשבים וחיבור" data-en-title="Open Settings → Computers"></button>
