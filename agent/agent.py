@@ -2320,6 +2320,12 @@ def run_command(row):
         if guest and text.lstrip("!").lstrip().startswith("/") and not GUEST_CMDS.match(text.lstrip("!").lstrip()):
             reply("הפקודה הזו לא זמינה בקבוצה הזו. אפשר: /מודל, /סשן, /🛞")
             return
+        # owner 11.11: "/מודל אופוס <a whole request>" switched the model and silently dropped the request — switch,
+        # then go on with the rest of the message as a normal command
+        mm = re.match(r"^\s*/\s*(מודל|model)\s+(\S+)((?:\s+(?:שעה|hour))?)\s+(\S[\s\S]*)$", text)
+        if mm and mm.group(2).lower() in set(MODELS) | {"אוטו", "אופוס", "סונט", "הייקו", "חייקו", "פייבל"}:
+            reply(owner_command(f"/מודל {mm.group(2)}{mm.group(3)}", chat) or "", quoted=mid if src == "wa" else None)
+            text = mm.group(4).strip()
         local = owner_command(text, chat)
         if local is not None:
             reply(local, quoted=mid if src == "wa" else None)
@@ -3896,6 +3902,15 @@ def handle(row):
             def file_cmd():
                 try:
                     p = media_path(cj, mid)
+                    g = guest_cfg(cj)
+                    if p and g:
+                        # owner 11.11: a guest group's Claude is confined to its own folder and could not open the image
+                        # in the bridge store — give it a copy inside its folder (inbox/)
+                        dst = os.path.join(guest_home(g), "inbox")
+                        os.makedirs(dst, exist_ok=True)
+                        dst = os.path.join(dst, os.path.basename(p))
+                        shutil.copy2(p, dst)
+                        p = dst
                     enqueue_command(mid, (content + "\n" if content else "") + T["attached"].format(path=p or T["download_failed"]), ts[:16], cj)
                 except Exception as e:
                     intake_failed(cj, mid, e)
