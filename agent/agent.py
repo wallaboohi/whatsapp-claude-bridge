@@ -4905,6 +4905,53 @@ def chrome_keeper():
         time.sleep(600)
 
 
+ADB_TEXT = {
+    "unauthorized": "הטלפון לא מאשר את המחשב הזה. בטלפון: לסמן \"אפשר תמיד\" בחלון ניפוי הבאגים (אם אין חלון: הגדרות ← אפשרויות למפתחים ← ניפוי באגים אלחוטי).",
+    "no_port": "ניפוי באגים אלחוטי כבוי בטלפון (קורה אחרי הפעלה מחדש). בטלפון: הגדרות ← אפשרויות למפתחים ← ניפוי באגים אלחוטי ← להדליק. משם אני מרים לבד.",
+    "unreachable": "הטלפון לא זמין ב-Tailscale (כבוי, בלי רשת או ש-Tailscale סגור בו).",
+}
+
+
+def adb_keeper():
+    """Owner 11.11: someone must bring adb back up when it drops. Every 5 minutes tools/adb_keeper.py heal (reconnects,
+    finds the wireless-debugging port and restores the fixed port 5555). Config "adb_keeper": {"enabled": true,
+    "notify": false, "after_min": 15} — notify only on one PC (the owner gets one message when it has been down
+    after_min minutes, with what to do on the phone, and one when it is back)."""
+    kc = CFG.get("adb_keeper") or {}
+    if not kc.get("enabled", True) or not os.path.exists(os.path.join(ROOT, "tools", "adb_keeper.py")):
+        return
+    time.sleep(90)
+    down_since, told = None, False
+    while True:
+        try:
+            r = subprocess.run([sys.executable, "-I", "-X", "utf8", os.path.join(ROOT, "tools", "adb_keeper.py"), "heal"], capture_output=True, timeout=400,
+                               creationflags=NO_WINDOW, cwd=ROOT)
+            res = json.loads((r.stdout or b"{}").decode("utf-8", "replace").strip().splitlines()[-1] or "{}")
+            state = res.get("state", "error")
+            if state.startswith("healed"):
+                log("adb keeper:", res)
+            if state in ("ok", "healed", "healed_partial"):
+                if told and kc.get("notify"):
+                    _adb_tell("📱 ה-adb לטלפון חזר לעבוד" + (" (הרמתי אותו לבד)." if state.startswith("healed") else "."))
+                down_since, told = None, False
+            else:
+                down_since = down_since or time.time()
+                if not told and kc.get("notify") and time.time() - down_since >= kc.get("after_min", 15) * 60:
+                    _adb_tell("📱 ה-adb לטלפון נפל ואני לא מצליח להרים אותו לבד. " + ADB_TEXT.get(state, state))
+                    told = True
+        except Exception as e:
+            log("adb keeper failed", e)
+        time.sleep(300)
+
+
+def _adb_tell(text):
+    _ctx.chat = PRIMARY
+    try:
+        reply(text)
+    finally:
+        _ctx.chat = None
+
+
 def run_job(job, mark):
     """One scheduled Claude task for the control group: its answer and any outbox files go to the owner only."""
     started = time.time()
@@ -5049,7 +5096,7 @@ if __name__ == "__main__":
         failover_resume()  # backup machine still holding another machine's plugins
     except Exception:
         log("failover resume failed", traceback.format_exc())
-    for target in [worker, slow_worker, command_worker, scheduler, event_listener, watchdog, tunnel_keeper, peer_watch, local_health_watch, push_loop, keep_awake, chrome_keeper] + list(_threads):
+    for target in [worker, slow_worker, command_worker, scheduler, event_listener, watchdog, tunnel_keeper, peer_watch, local_health_watch, push_loop, keep_awake, chrome_keeper, adb_keeper] + list(_threads):
         threading.Thread(target=target, daemon=True).start()
     if _defer:
         threading.Thread(target=deferred_plugins, daemon=True).start()
