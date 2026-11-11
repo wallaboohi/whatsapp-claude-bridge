@@ -97,6 +97,32 @@ def tray(window):
     threading.Thread(target=refresh, daemon=True).start()
 
 
+def allow_mic_camera(window):
+    """Owner 11.11: the composer's 🎤 and 📷 buttons. WebView2 asks for microphone / camera access; the dashboard's own
+    local page (127.0.0.1) gets it at once, anything else keeps WebView2's default (ask)."""
+    done = []
+
+    def hook():
+        if done:
+            return
+        done.append(1)
+        try:
+            from System import Action
+            from Microsoft.Web.WebView2.Core import CoreWebView2PermissionKind, CoreWebView2PermissionState
+
+            def on_request(sender, args):
+                if str(args.Uri).startswith("http://127.0.0.1:") and args.PermissionKind in (
+                        CoreWebView2PermissionKind.Microphone, CoreWebView2PermissionKind.Camera):
+                    args.State = CoreWebView2PermissionState.Allow
+
+            def attach():
+                window.native.browser.webview.CoreWebView2.PermissionRequested += on_request
+            window.native.Invoke(Action(attach))
+        except Exception as e:  # never block the dashboard over this; the browser's own prompt still works
+            print("mic/camera permission hook failed:", e)
+    window.events.loaded += hook  # fires once the page (and so CoreWebView2) is ready
+
+
 def main():
     if already_running():
         return
@@ -104,6 +130,7 @@ def main():
     window = webview.create_window(f"ווצאפ ↔ Claude · לוח בקרה {server.VERSION}", f"http://127.0.0.1:{port}/",
                                    width=1360, height=900, min_size=(760, 600), text_select=True)
     listen_for_show(window)
+    allow_mic_camera(window)
     webview.start(tray, window, gui="edgechromium", private_mode=False,
                   storage_path=os.path.join(os.environ.get("LOCALAPPDATA", "."), "WhatsAppDash", "webview"))
 

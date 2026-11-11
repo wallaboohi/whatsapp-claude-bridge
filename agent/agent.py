@@ -937,6 +937,24 @@ def transcribe(path):
         return " ".join(s.text.strip() for s in segs).strip()
 
 
+PC_VOICE = re.compile(r"\[(?:קובץ מצורף|attached file): ([^\]]+\.(?:webm|ogg|oga|opus|m4a|wav|mp3))\]", re.I)
+
+
+def pc_voice_to_text(text):
+    """Owner 11.11: a recording made with the dashboard's mic button arrives as an attached audio file. It is
+    transcribed like a WhatsApp voice note, so the command is the spoken text (the file reference stays)."""
+    def sub(m):
+        if not voice_enabled() or not os.path.isfile(m.group(1)):
+            return m.group(0)
+        try:
+            said = transcribe(m.group(1))
+        except Exception as e:
+            log("dashboard recording transcription failed", str(e)[:120])
+            return m.group(0)
+        return f"🎤 {said}\n{m.group(0)}" if said else m.group(0)
+    return PC_VOICE.sub(sub, text or "")
+
+
 def transcript_of(chat_jid, msg_id, sender, ts):
     with adb() as db:
         r = db.execute("SELECT text FROM transcripts WHERE id=? AND chat_jid=?", (msg_id, chat_jid)).fetchone()
@@ -2263,6 +2281,8 @@ def run_command(row):
     cid, mid, text, when, chat, src, sync = row
     chat, src, sync = chat or PRIMARY, src or "wa", sync or 0
     text = re.sub(r"^(\s*!*)\s*/\s+", r"\1/", text or "")  # "/ מודל" == "/מודל" for every slash command (owner 09.11)
+    if src == "pc":
+        text = pc_voice_to_text(text)
     _ctx.chat, _ctx.src, _ctx.sync, _ctx.auto_pick = chat, src, sync, False
     g = load_groups().get(chat) or {}
     parked = False

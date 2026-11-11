@@ -111,6 +111,10 @@
         <div class="chat" id="chat" tabindex="0" aria-live="polite"></div>
       </div>
       <div class="attach-row" id="attachRow" hidden></div>
+      <div class="cam-box" id="camBox" hidden>
+        <video id="camVideo" autoplay playsinline muted></video>
+        <div class="cam-btns"><button type="button" class="btn primary small" id="camShot" data-en="Capture">צלם</button><button type="button" class="btn small" id="camCancel" data-en="Cancel">ביטול</button></div>
+      </div>
       <form class="composer" id="composer" autocomplete="off">
         <textarea id="say" rows="1" placeholder="המשך את השיחה עם הכלי… (Enter לשליחה, Shift+Enter לשורה חדשה)" aria-label="הודעה לכלי" data-en-aria="Message to the tool"></textarea>
         <button class="btn primary" id="sayBtn" type="submit" data-en="Send">שלח</button>
@@ -118,6 +122,8 @@
       <div class="composer-opts" id="composerOpts">
         <button type="button" class="btn small" id="attachBtn" title="צרף קובץ או תמונה (אפשר גם להדביק Ctrl+V או לגרור)" data-en-title="Attach a file or image (or paste Ctrl+V / drag)" data-en="📎 Attach">📎 צרף</button>
         <input type="file" id="fileInp" multiple hidden>
+        <button type="button" class="btn small" id="micBtn" title="הקלט הודעה קולית (לחיצה נוספת עוצרת ושולחת; מתומלל כמו בווצאפ)" data-en-title="Record a voice message (click again to stop and send)" data-en="🎤 Record">🎤 הקלט</button>
+        <button type="button" class="btn small" id="camBtn" title="צלם תמונה במצלמת המחשב ונצרף אותה" data-en-title="Take a photo with the PC camera and attach it" data-en="📷 Photo">📷 צלם</button>
         <label class="chk" id="syncLbl" title="כשמסומן, ההודעה והתשובה נשלחות גם לקבוצה בווצאפ (ובנייד תראה אותן). כשלא — הכול נשאר כאן, והשיחה ממשיכה מהנייד מאותה נקודה." data-en-title="When checked, the message and answer also go to the WhatsApp group. Otherwise everything stays here and the phone continues from the same point."><input type="checkbox" id="syncChk"> <span data-en="Also send to WhatsApp">שלח גם לווצאפ</span></label>
         <button type="button" class="btn small danger-soft" id="stopBtn" hidden data-en="⛔ Stop">⛔ עצור</button>
         <span class="note" id="sendHint"></span>

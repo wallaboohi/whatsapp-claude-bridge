@@ -1568,3 +1568,15 @@ def test_no_time_cap_by_default(agent, monkeypatch):
     assert agent.run_timeout_minutes("g") is None
     monkeypatch.setitem(agent.CFG, "claude_timeout_minutes", 30)
     assert agent.run_timeout_minutes("g") == 30
+
+
+def test_dashboard_recording_is_transcribed(agent, monkeypatch, tmp_path):
+    """Owner 11.11: the dashboard's 🎤 recording (an attached .webm) becomes the spoken text; other files stay as they are."""
+    agent, _ = agent
+    f = tmp_path / "voice.webm"
+    f.write_bytes(b"x")
+    monkeypatch.setattr(agent, "voice_enabled", lambda: True)
+    monkeypatch.setattr(agent, "transcribe", lambda p: "שלום עולם")
+    out = agent.pc_voice_to_text(f"[קובץ מצורף: {f}]")
+    assert out.startswith("🎤 שלום עולם\n") and str(f) in out
+    assert agent.pc_voice_to_text("[קובץ מצורף: C:/x/a.pdf]") == "[קובץ מצורף: C:/x/a.pdf]"

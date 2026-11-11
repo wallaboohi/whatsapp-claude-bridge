@@ -170,9 +170,47 @@ async function upload(file) {
   try {
     const j = await (await fetch(base() + "/upload?name=" + encodeURIComponent(file.name || "image.png"), { method: "POST", body: file })).json();
     if (j.ok) attached.push(j); else toast(L("העלאה נכשלה: ", "Upload failed: ") + (j.error || ""));
+    drawAttach(); return !!j.ok;
   } catch (e) { toast(L("העלאה נכשלה", "Upload failed")); }
-  drawAttach();
+  drawAttach(); return false;
 }
+// 🎤 record a voice message: second click stops and sends it; the agent transcribes it like a WhatsApp voice note (owner 11.11)
+let rec = null, recTimer = null;
+const mediaErr = e => toast(e && e.name === "NotReadableError"
+  ? L("המכשיר תפוס בתוכנה אחרת (למשל הקלטת המצלמות) — סגור אותה ונסה שוב", "The device is busy in another program — close it and try again")
+  : L("אין גישה למיקרופון/מצלמה: ", "No access to mic/camera: ") + (e && (e.name || e.message) || ""));
+$("micBtn").onclick = async () => {
+  if (rec) { rec.stop(); return; }
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch (e) { mediaErr(e); return; }
+  const chunks = [], t0 = Date.now(), btn = $("micBtn");
+  rec = new MediaRecorder(stream, { mimeType: "audio/webm" });
+  rec.ondataavailable = e => e.data.size && chunks.push(e.data);
+  rec.onstop = async () => {
+    clearInterval(recTimer); stream.getTracks().forEach(t => t.stop()); rec = null;
+    btn.classList.remove("rec"); btn.textContent = L("🎤 הקלט", "🎤 Record");
+    if (Date.now() - t0 < 700) return;  // a mis-click, not a recording
+    const ok = await upload(new File(chunks, "voice.webm", { type: "audio/webm" }));
+    if (ok) $("composer").requestSubmit();
+  };
+  rec.start(); btn.classList.add("rec");
+  const tick = () => { const s = Math.floor((Date.now() - t0) / 1000); btn.textContent = `⏹ ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+  tick(); recTimer = setInterval(tick, 500);
+};
+// 📷 take a photo with the PC camera: preview, capture -> attached like any image (owner 11.11)
+let camStream = null;
+const camClose = () => { if (camStream) camStream.getTracks().forEach(t => t.stop()); camStream = null; $("camBox").hidden = true; };
+$("camBtn").onclick = async () => {
+  if (camStream) { camClose(); return; }
+  try { camStream = await navigator.mediaDevices.getUserMedia({ video: true }); } catch (e) { mediaErr(e); return; }
+  $("camVideo").srcObject = camStream; $("camBox").hidden = false;
+};
+$("camCancel").onclick = camClose;
+$("camShot").onclick = () => {
+  const v = $("camVideo"), c = document.createElement("canvas");
+  c.width = v.videoWidth; c.height = v.videoHeight; c.getContext("2d").drawImage(v, 0, 0);
+  c.toBlob(b => { camClose(); if (b) upload(new File([b], "photo.png", { type: "image/png" })); }, "image/png");
+};
 say.addEventListener("paste", e => { const fs = [...((e.clipboardData && e.clipboardData.files) || [])]; if (fs.length) { e.preventDefault(); fs.forEach(upload); } });
 $("attachBtn").onclick = () => $("fileInp").click();
 $("fileInp").onchange = e => { [...e.target.files].forEach(upload); e.target.value = ""; };
