@@ -90,6 +90,11 @@ func pollCreation(msg *waProto.Message) *waProto.PollCreationMessage {
 			return p
 		}
 	}
+	// owner 11.11: the weekly lodging poll in the segment group never reached the database — newer clients send
+	// pollCreationMessageV4, a FutureProofMessage that wraps the real poll message
+	if fp := msg.GetPollCreationMessageV4(); fp != nil && fp.GetMessage() != nil {
+		return pollCreation(fp.GetMessage())
+	}
 	return nil
 }
 

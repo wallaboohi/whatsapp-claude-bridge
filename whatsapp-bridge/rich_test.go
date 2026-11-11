@@ -59,3 +59,11 @@ func TestEventAnswerLine(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestPollCreationV4Unwrapped(t *testing.T) {
+	inner := &waE2E.Message{PollCreationMessageV3: &waE2E.PollCreationMessage{Name: proto.String("לינה השבוע")}}
+	msg := &waE2E.Message{PollCreationMessageV4: &waE2E.FutureProofMessage{Message: inner}}
+	if p := pollCreation(msg); p == nil || p.GetName() != "לינה השבוע" {
+		t.Fatal("a V4 poll (FutureProof wrapper) must be read (owner 11.11: the weekly lodging poll was lost)")
+	}
+}

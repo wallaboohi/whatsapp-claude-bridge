@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"
@@ -113,8 +115,17 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 		filename = mediaFilename(msg.Info.ID, mediaType, filename)
 	}
 
-	// Skip if there's no content and no media
+	// Skip if there's no content and no media — but say which message type was dropped (owner 11.11: a weekly poll
+	// vanished without a trace; this log is how an unknown type is found next time)
 	if content == "" && mediaType == "" {
+		var kinds []string
+		msg.Message.ProtoReflect().Range(func(fd protoreflect.FieldDescriptor, _ protoreflect.Value) bool {
+			kinds = append(kinds, string(fd.Name()))
+			return true
+		})
+		if len(kinds) > 0 && !(len(kinds) == 1 && kinds[0] == "messageContextInfo") {
+			logger.Infof("Dropped message %s in %s (no text/media): %s", msg.Info.ID, chatJID, strings.Join(kinds, ","))
+		}
 		return
 	}
 
