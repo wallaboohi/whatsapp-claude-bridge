@@ -2034,6 +2034,8 @@ def owner_command(text, chat=None):
                 + "\n\nלהוספה: /כלל בסיס ואחריו הכלל. אבדוק שהוא ברור ולא סותר כללים קיימים לפני שאוסיף.")
     if re.match(r"^/(תקרה|תקרת שימוש|שימוש|usage)\s*$", text.strip()):
         return usage_report(chat or PRIMARY)
+    if re.match(r"^/\s*(כרום|chrome)\s*$", text.strip()):   # owner 10.11: bring the Chrome extension back remotely
+        return chrome_start()
     if re.match(r"^/(הפעל מחדש|אתחל|restart)\s*$", text.strip()):
         RESTART_REQ.set()
         return "🔄 מפעיל את הסוכן מחדש. אכתוב כאן כשאעלה (בערך 20 שניות)."
@@ -4857,6 +4859,52 @@ def keep_awake():
         time.sleep(60)
 
 
+CHROME_EXE = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+
+
+def chrome_running():
+    try:
+        out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq chrome.exe", "/NH"], capture_output=True, text=True,
+                             timeout=20, creationflags=NO_WINDOW).stdout
+        return "chrome.exe" in out.lower()
+    except Exception:
+        return True  # unknown: do not start a second copy
+
+
+def chrome_start():
+    """Starts Chrome in the background (no window; the Claude extension connects inside it). Returns a short status."""
+    exe = CFG.get("chrome_exe") or CHROME_EXE
+    if chrome_running():
+        return "כרום כבר פועל במחשב, והתוסף של Claude מחובר דרכו."
+    if not os.path.exists(exe):
+        return "לא מצאתי את כרום במחשב הזה."
+    subprocess.Popen([exe, "--no-startup-window"], creationflags=NO_WINDOW, close_fds=True)
+    time.sleep(8)
+    return "✅ הפעלתי את כרום ברקע; התוסף של Claude מתחבר אליו לבד." if chrome_running() else "⚠️ ניסיתי להפעיל את כרום ולא הצלחתי."
+
+
+def chrome_keeper():
+    """Owner 10.11: the Claude in Chrome extension must always be available (also when the owner is away). Every 10 minutes:
+    if Chrome is not running, start it in the background and tell the owner once. Config "chrome_keepalive" (default true
+    where config "chrome" is on). Remote: the owner writes /כרום."""
+    if os.name != "nt" or not CFG.get("chrome") or not CFG.get("chrome_keepalive", True):
+        return
+    time.sleep(120)
+    while True:
+        try:
+            if not chrome_running():
+                msg = chrome_start()
+                log("chrome keeper:", msg)
+                _ctx.chat = PRIMARY
+                try:
+                    reply("🌐 כרום לא רץ במחשב, ולכן התוסף של Claude היה מנותק. " + msg)
+                finally:
+                    _ctx.chat = None
+        except Exception as e:
+            log("chrome keeper failed", e)
+        time.sleep(600)
+
+
 def run_job(job, mark):
     """One scheduled Claude task for the control group: its answer and any outbox files go to the owner only."""
     started = time.time()
@@ -5001,7 +5049,7 @@ if __name__ == "__main__":
         failover_resume()  # backup machine still holding another machine's plugins
     except Exception:
         log("failover resume failed", traceback.format_exc())
-    for target in [worker, slow_worker, command_worker, scheduler, event_listener, watchdog, tunnel_keeper, peer_watch, local_health_watch, push_loop, keep_awake] + list(_threads):
+    for target in [worker, slow_worker, command_worker, scheduler, event_listener, watchdog, tunnel_keeper, peer_watch, local_health_watch, push_loop, keep_awake, chrome_keeper] + list(_threads):
         threading.Thread(target=target, daemon=True).start()
     if _defer:
         threading.Thread(target=deferred_plugins, daemon=True).start()
