@@ -858,10 +858,39 @@ def media_path(chat_jid, msg_id):
             return p
     try:
         res = bridge("/download", {"message_id": msg_id, "chat_jid": chat_jid}, timeout=300)
-        return res.get("path") if res.get("success") else None
+        if res.get("success"):
+            return res.get("path")
     except Exception as e:
         log("download failed", msg_id, e)
-        return None
+    return media_from_phone(chat_jid, msg_id)
+
+
+def phone_sync():
+    """Copy the phone's new WhatsApp media and documents into its data folder (tools/phone_sync.py sync)."""
+    try:
+        r = subprocess.run([sys.executable, "-I", "-X", "utf8", os.path.join(ROOT, "tools", "phone_sync.py"), "sync"],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=6 * 3600, creationflags=NO_WINDOW)
+        log("phone sync:", (r.stdout or r.stderr or "").strip()[-200:])
+        if r.returncode == 0:
+            kv_set("phone_sync_done", dt.datetime.now().isoformat(timespec="seconds"))
+    except Exception as e:
+        log("phone sync failed", e)
+
+
+def media_from_phone(chat_jid, msg_id):
+    """Owner 11.11: old media WhatsApp's servers no longer give (410 / invalid media hmac) is taken from the phone's own
+    copy over adb, matched exactly by the message's file hash (tools/phone_sync.py find)."""
+    try:
+        r = subprocess.run([sys.executable, "-I", "-X", "utf8", os.path.join(ROOT, "tools", "phone_sync.py"), "find", msg_id, chat_jid],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900, creationflags=NO_WINDOW)
+        p = (r.stdout or "").strip().splitlines()[-1:] or [""]
+        if r.returncode == 0 and os.path.exists(p[0]):
+            log("media taken from the phone", msg_id)
+            return p[0]
+        log("media not on the phone either", msg_id, (r.stdout or r.stderr or "")[-160:])
+    except Exception as e:
+        log("phone media lookup failed", msg_id, e)
+    return None
 
 
 def phone_of(chat_jid):
@@ -4840,6 +4869,12 @@ def scheduler():
                         slow.put(once_jobs)
                     slow.put(sync_all_group_names)
                     work.put(transcribe_backfill_check)
+                # owner 11.11: the phone's data folder once a day (tools/phone_sync.py); the phone is not always
+                # reachable or on Wi-Fi, so it is tried every hour until a full sync succeeded today
+                if (CFG.get("phone") and (kv_get("phone_sync_done") or "")[:10] != today and (not kv_get("at:phone_sync") or
+                        now - dt.datetime.fromisoformat(kv_get("at:phone_sync")) > dt.timedelta(minutes=60))):
+                    kv_set("at:phone_sync", now.isoformat())
+                    slow.put(phone_sync)
                 if CFG.get("home_sync") and (not kv_get("at:home_sync") or
                                              now - dt.datetime.fromisoformat(kv_get("at:home_sync")) > dt.timedelta(minutes=10)):
                     kv_set("at:home_sync", now.isoformat())
