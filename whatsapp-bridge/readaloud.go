@@ -1,6 +1,6 @@
 package main
 
-// Read-aloud grants (owner 09.11 17:25): when the owner reacts 🛞 on a message of someone else, in any chat, the agent may
+// Read-aloud grants (owner 09.11 17:25; 11.11: any message, his own too): when the owner reacts 🛞 on a message in any chat, the agent may
 // send ONE voice note into that same chat (TTS of that message) without a draft. The grant is created here, from the
 // owner's own reaction as WhatsApp delivered it, so nothing else can open the draft gate: one reaction = one voice note
 // to that chat, quoting that message, within 10 minutes.

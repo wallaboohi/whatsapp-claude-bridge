@@ -238,10 +238,10 @@ func registerExtras2API(client *whatsmeow.Client) {
 			return nil, errString("store not ready")
 		}
 		var mt string
-		var fromMe bool
-		if globalStore.db.QueryRow("SELECT coalesce(media_type,''), is_from_me FROM messages WHERE id=? AND chat_jid=?", id, chat.String()).Scan(&mt, &fromMe) != nil ||
-			mt != "audio" || fromMe {
-			return nil, errString("not an incoming voice message in this chat")
+		// owner 11.11: the owner's own voice notes too (🛞 on any message in the chat)
+		if globalStore.db.QueryRow("SELECT coalesce(media_type,'') FROM messages WHERE id=? AND chat_jid=?", id, chat.String()).Scan(&mt) != nil ||
+			mt != "audio" {
+			return nil, errString("not a voice message in this chat")
 		}
 		var n int
 		globalStore.db.QueryRow("SELECT count(*) FROM messages WHERE chat_jid=? AND is_from_me=1 AND quoted_id=? AND content LIKE '🤖%'", chat.String(), id).Scan(&n)

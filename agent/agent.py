@@ -2537,7 +2537,7 @@ def read_aloud(chat, mid=None):
 
 
 def read_other(chat, mid, wait=90):
-    """Owner 09.11 17:25/17:27: 🛞 on someone else's message in any chat, without a draft: a text message → a voice note (the
+    """Owner 09.11 17:25/17:27 + 11.11: 🛞 on any message in any chat (his own too), without a draft: a text message → a voice note (the
     bot's voice) reading it, sent into that same chat quoting it (the bridge allows exactly that one voice note, see
     readaloud.go); a voice note → its transcript as a text message there (/api/send_transcript); images etc.: nothing. One PC per account
     sends it (watches_people), so two bridges on the same number never send it twice."""
@@ -2547,9 +2547,9 @@ def read_other(chat, mid, wait=90):
     except sqlite3.Error as e:
         log("read_other db", e)
         return
-    if not r or r[1]:
+    if not r:
         return
-    content, _, mtype = r
+    content, _, mtype = r  # owner 11.11: his own messages too — both sides of the chat hear / read it
     if mtype in ("audio", "ptt", "voice"):
         # owner 09.11 17:27: 🛞 on a voice note = its transcript as a text message in that chat (not automatic, not a voice)
         with mdb() as db:

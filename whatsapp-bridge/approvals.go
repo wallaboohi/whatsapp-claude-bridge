@@ -24,7 +24,7 @@ func handleReaction(client *whatsmeow.Client, msg *events.Message) bool {
 		return true
 	}
 	chatJID := normalizeChat(client, msg.Info.Chat).String()
-	if r.GetText() == readAloudEmoji && !r.GetKey().GetFromMe() {
+	if r.GetText() == readAloudEmoji { // owner 11.11: any message in the chat, his own too
 		grantReadAloud(chatJID, r.GetKey().GetID()) // one voice note into this chat may skip the draft (readaloud.go)
 	}
 	publish(map[string]any{"type": "reaction", "chat_jid": chatJID,
