@@ -4661,8 +4661,8 @@ def run_job(job, mark):
     started = time.time()
     _ctx.chat = PRIMARY
     try:
-        out = claude(job["prompt"], model=job.get("model"), session=False, timeout=int(job.get("timeout_min", 30)) * 60,
-                     chat=PRIMARY)
+        limit = int(job.get("timeout_min") or 0) * 60 or None  # owner 11.11: no time cap unless the job sets one
+        out = claude(job["prompt"], model=job.get("model"), session=False, timeout=limit, chat=PRIMARY)
         reply(f"{mark} *{job.get('name', 'משימה מתוזמנת')}*\n{(out or 'המשימה נכשלה, אפשר להריץ אותה שוב ידנית.').strip()}")
         send_outbox(started)
     except Exception:
