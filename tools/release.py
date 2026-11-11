@@ -78,6 +78,9 @@ def main():
         rewrite(rel, lambda t: re.sub(r"^\S+", ver, t, count=1))
     rewrite(".claude-plugin/plugin.json", lambda t: re.sub(r'("version"\s*:\s*")[^"]*"', rf'\g<1>{ver}"', t, count=1))
     rewrite("agent/pyproject.toml", lambda t: re.sub(r'(?m)^version = ".*"', f'version = "{ver}"', t, count=1))
+    # uv.lock carries the project version too; left stale, every `uv run` rewrites it and the dirty tree blocks the
+    # nightly save / release (owner 11.11)
+    rewrite("agent/uv.lock", lambda t: re.sub(r'(name = "whatsapp-claude-agent"\r?\nversion = ")[^"]*"', rf'\g<1>{ver}"', t, count=1))
 
     # 2. changelog
     entry = f"## {ver} — {dt.date.today().isoformat()}\n{notes or '—'}\n\n"
@@ -138,7 +141,7 @@ def main():
     print(f"✔ v{ver} פורסמה. GitHub בונה את הקבצים: https://github.com/WallaBoohi/whatsapp-claude-bridge/actions")
 
 
-BUMPED = ["VERSION", "dash/VERSION", ".claude-plugin/plugin.json", "agent/pyproject.toml", "CHANGELOG.md"]
+BUMPED = ["VERSION", "dash/VERSION", ".claude-plugin/plugin.json", "agent/pyproject.toml", "agent/uv.lock", "CHANGELOG.md"]
 
 if __name__ == "__main__":
     try:
