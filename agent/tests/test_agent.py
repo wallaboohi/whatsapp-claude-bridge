@@ -504,6 +504,17 @@ def test_signin_expiry_parsing_and_warning(agent, monkeypatch):
     assert mod.parse_signin("nothing here") is None
     sent = []
     monkeypatch.setattr(mod, "send", lambda chat, text, media=None, quoted=None: sent.append(text) or True)
+    # exact end from `claude auth status` first
+    exp = {"v": (mod.dt.datetime.now(mod.dt.timezone.utc) + mod.dt.timedelta(days=2)).isoformat().replace("+00:00", "Z")}
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: type("P", (), {"stdout": mod.json.dumps({"loginExpiresAt": exp["v"]})})())
+    mod.signin_check()
+    assert sent and "claude auth login" in sent[-1]
+    sent.clear()
+    exp["v"] = (mod.dt.datetime.now(mod.dt.timezone.utc) + mod.dt.timedelta(days=20)).isoformat().replace("+00:00", "Z")
+    mod.signin_check()
+    assert not sent
+    # fallback: no expiry in the status -> the estimate from the run output
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: type("P", (), {"stdout": "{}"})())
     soon = (mod.dt.date.today() + mod.dt.timedelta(days=2)).isoformat()
     mod.kv_set("signin_ends", f"{soon}|{soon}")
     mod.signin_check()
