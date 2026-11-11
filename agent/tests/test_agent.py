@@ -1580,3 +1580,11 @@ def test_dashboard_recording_is_transcribed(agent, monkeypatch, tmp_path):
     out = agent.pc_voice_to_text(f"[קובץ מצורף: {f}]")
     assert out.startswith("🎤 שלום עולם\n") and str(f) in out
     assert agent.pc_voice_to_text("[קובץ מצורף: C:/x/a.pdf]") == "[קובץ מצורף: C:/x/a.pdf]"
+
+
+def test_edit_pairs_learns_word_swaps(agent):
+    mod, _ = agent
+    assert mod.edit_pairs("תבדוק את האפשיט של הרכבים", "תבדוק את ה-AppSheet של הרכבים") == [("האפשיט", "ה-AppSheet")]
+    assert mod.edit_pairs("חמה של נדב תוקן", "המה של נדב תוקן") == [("חמה", "המה")]
+    assert mod.edit_pairs("שלח ב 9:15", "שלח ב 9:20") == []          # numbers are not vocabulary
+    assert mod.edit_pairs("אותו דבר", "אותו דבר") == []

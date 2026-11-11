@@ -3961,8 +3961,56 @@ def event_listener():
                                     work.put(lambda cj=cj, m=ev.get("message_id"): read_other(cj, m))
                             except Exception as e:
                                 log("reaction event", e)
+                        elif b'"edited"' in line:
+                            try:
+                                ev = json.loads(line[5:].decode("utf-8", "replace"))
+                                if ev.get("type") == "edited":
+                                    work.put(lambda e=ev: learn_from_edit(e.get("chat_jid", ""), e.get("id", ""), e.get("content", "")))
+                            except Exception as e:
+                                log("edit event", e)
         except Exception:
             time.sleep(5)
+
+
+EDIT_WORD = re.compile(r"^[֐-׿A-Za-z'\"׳״-]{2,}$")
+
+
+def edit_pairs(old, new):
+    """Word swaps between the text as first received and the owner's edit: [(wrong, right)] for 1-3 word
+    replacements of real words (no numbers, no punctuation-only, not the same word). Pure (testable)."""
+    import difflib
+    a, b = (old or "").split(), (new or "").split()
+    out = []
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes():
+        if op != "replace" or not (1 <= i2 - i1 <= 3 and 1 <= j2 - j1 <= 3):
+            continue
+        w, r = " ".join(a[i1:i2]).strip(".,!?:;()"), " ".join(b[j1:j2]).strip(".,!?:;()")
+        if w != r and all(EDIT_WORD.match(x) for x in (w + " " + r).split()) and len(w) <= 40 and len(r) <= 40:
+            out.append((w, r))
+    return out
+
+
+def learn_from_edit(chat, mid, new_text):
+    """Owner 10.11: learn transcription fixes from the owner's own edits, without asking — the original text (as the
+    agent received it, commands.text) against the edited one; each word swap goes to home/dictionary.md
+    ("wrong → right  # date"). Junk (too long, numbers, whole rewrites) is skipped and logged, never added."""
+    if not mid or (chat != PRIMARY and chat not in load_groups()):
+        return
+    with adb() as db:
+        row = db.execute("SELECT text FROM commands WHERE msg_id = ? ORDER BY id LIMIT 1", (mid,)).fetchone()
+    if not row:
+        return
+    pairs = edit_pairs(row[0], new_text)
+    if not pairs:
+        log("edit: nothing to learn", mid)
+        return
+    path = os.path.join(HOME, "dictionary.md")
+    have = open(path, encoding="utf-8").read() if os.path.exists(path) else ""
+    added = [f"{w} → {r}  # {dt.date.today():%d.%m.%Y} (מעריכה)" for w, r in pairs if f"{w} → {r}" not in have]
+    if added:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(("" if have.endswith("\n") or not have else "\n") + "\n".join(added) + "\n")
+        log("dictionary learned from an edit:", "; ".join(added))
 
 
 def sweep_once(cursor, on_row=None):
