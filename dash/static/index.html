@@ -80,6 +80,8 @@
     <section class="card chat-card" aria-labelledby="h-chat">
       <div class="card-head">
         <h2 id="h-chat" data-en="Your conversation with the tool">השיחה שלך עם הכלי</h2>
+        <button type="button" class="today-btn" id="renameBtn" title="שנה את שם הקבוצה (אותו מסלול כמו שינוי שם בווצאפ)" data-en-title="Rename the group (same path as a rename from WhatsApp)" hidden>✏️</button>
+        <input type="text" id="renameInp" maxlength="100" aria-label="שם חדש לקבוצה" data-en-aria="New group name" hidden>
         <span class="chip" id="pendingChip" hidden></span>
         <button class="today-btn" id="rulesBtn" title="כללי הבסיס של השיחה הזו" data-en-title="This conversation's base rules"><span>📜</span><span data-en="Base rules">כללי בסיס</span><span class="today-sum" id="rulesSum"></span></button>
         <button class="today-btn" id="todayBtn" aria-expanded="false" aria-controls="todayPanel">
@@ -288,11 +290,15 @@
   <button role="menuitem" data-cmd="copy" data-en="📋 Copy">📋 העתק</button>
   <button role="menuitem" data-cmd="cut" data-en="✂️ Cut">✂️ גזור</button>
   <button role="menuitem" data-cmd="paste" data-en="📥 Paste">📥 הדבק</button>
+  <button role="menuitem" data-cmd="pastetext" data-en="🧹 Paste as clean text">🧹 הדבק כטקסט נקי</button>
   <button role="menuitem" data-cmd="selectall" data-en="🔲 Select all">🔲 בחר הכול</button>
   <button role="menuitem" data-cmd="draft" data-en="♻️ Restore the last unsent draft">♻️ שחזר טיוטה אחרונה שלא נשלחה</button>
   <button role="menuitem" data-cmd="lastsent" data-en="🔁 Restore the last sent message">🔁 שחזר הודעה אחרונה שנשלחה</button>
   <hr>
+  <button role="menuitem" data-cmd="delmsg" data-en="🗑️ Delete for everyone">🗑️ מחק לכולם</button>
   <button role="menuitem" data-cmd="copymsg" data-en="📄 Copy the whole message">📄 העתק את כל ההודעה</button>
+  <button role="menuitem" data-cmd="copyfull" data-en="🕘 Copy with date and sender">🕘 העתק עם תאריך ושולח</button>
+  <button role="menuitem" data-cmd="quotereply" data-en="💬 Quote as a reply">💬 צטט כתשובה</button>
   <button role="menuitem" data-cmd="quote" data-en="↩️ Move to the input box">↩️ העבר לשורת הכתיבה</button>
 </div>
 <script src="app.js"></script>

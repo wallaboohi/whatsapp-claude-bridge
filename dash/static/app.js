@@ -469,7 +469,7 @@ function render(d) {
     const long = (txt.length > 700 || txt.split("\n").length > 14) && !expanded.has(String(m.id));
     const files = (m.files || []).map(f => `<a href="${base()}/lf/${encodeURIComponent(f)}" target="_blank" rel="noopener">📎 ${esc(f.replace(/^\d{8}_\d{6}_/, ""))}</a>`).join("");
     const canFold = txt.length > 700 || txt.split("\n").length > 14;
-    return `<div class="bubble ${m.tool ? "tool" : "me"}" data-k="${esc(m.id)}"><span class="who">${m.tool ? L("🤖 הכלי", "🤖 Tool") : L("אתה", "You")}${m.src === "pc" ? `<span class="pc-tag" title="${L("נכתב בלוח הבקרה במחשב", "typed in the dashboard on the PC")}">💻</span>` : ""}</span>` +
+    return `<div class="bubble ${m.tool ? "tool" : "me"}" data-k="${esc(m.id)}"${m.is_from_me && !String(m.id).startsWith("L") ? ` data-wa="${esc(m.id)}"` : ""}><span class="who">${m.tool ? L("🤖 הכלי", "🤖 Tool") : L("אתה", "You")}${m.src === "pc" ? `<span class="pc-tag" title="${L("נכתב בלוח הבקרה במחשב", "typed in the dashboard on the PC")}">💻</span>` : ""}</span>` +
       `<div class="bt${long ? " fold" : ""}">${wa(txt)}</div>${canFold ? `<button class="more" type="button">${long ? L("הצג עוד ▾", "Show more ▾") : L("הצג פחות ▴", "Show less ▴")}</button>` : ""}` +
       `${files ? `<div class="files">${files}</div>` : ""}<span class="meta">${fmt(m.timestamp)}</span></div>`;
   };
@@ -546,6 +546,7 @@ function renderTabs(d) {
   $("grpMeta").textContent = `${PURPOSE[g.purpose] || ""} · ${L("תקרת שימוש", "cap")} ${g.budget == null ? "—" : M(g.budget, 0)} · ${L("היום", "today")} ${M(g.spent ?? 0)}`;
   $("grpEdit").hidden = local; $("grpOff").hidden = !!g.primary;
   { const n = rulesCount(d); $("rulesSum").textContent = n ? String(n) : ""; }
+  if ($("renameInp").hidden) $("renameBtn").hidden = local;
   $("h-chat").textContent = local ? L("שיחה מקומית עם Claude", "Local chat with Claude") : L("השיחה בקבוצה", "Conversation in group") + " · " + (g.name || "");
   $("syncChk").checked = !!syncMap[d.chat]; sendHint();
   const run = !!(d.live && !d.live.done); $("stopBtn").hidden = !run;
@@ -589,6 +590,17 @@ $("grpRename").onclick = async () => {
   if (!confirm(L(`לשנות את שם הקבוצה ל: ${n}?`, `Rename the group to: ${n}?`))) return;
   const j = await act({ do: "group_rename", jid: curChat, name: n }, L("השם שונה", "Renamed")); if (j && !j.error) $("grpInput").value = "";
 };
+// rename from the chat header: same action as settings → the agent learns it exactly like a rename made in WhatsApp
+const renameShow = on => { $("renameInp").hidden = !on; $("h-chat").hidden = on; $("renameBtn").hidden = on || curChat === "local"; };
+$("renameBtn").onclick = () => { const g = groupOf(curChat); $("renameInp").value = (g && g.name) || ""; renameShow(true); $("renameInp").focus(); $("renameInp").select(); };
+$("renameInp").onkeydown = async e => {
+  if (e.key === "Escape") { renameShow(false); return; }
+  if (e.key !== "Enter") return; e.preventDefault();
+  const n = $("renameInp").value.trim(); if (!n) { toast(L("כתוב שם", "Type a name")); return; }
+  if (!confirm(L(`לשנות את שם הקבוצה ל: ${n}?`, `Rename the group to: ${n}?`))) return;
+  renameShow(false); await act({ do: "group_rename", jid: curChat, name: n }, L("השם שונה", "Renamed"));
+};
+$("renameInp").onblur = () => setTimeout(() => renameShow(false), 150);
 $("grpBudget").onclick = async () => {
   const g = groupOf(curChat), v = prompt(L(`תקרת שימוש יומית (דולר) ל"${g.name}":`, `Daily cost cap (USD) for "${g.name}":`), g.budget);
   if (v === null) return; const j = await act({ do: "group_budget", jid: curChat, budget: v }, L("תקרת השימוש עודכנה", "Cap updated")); if (j && j.error) toast(j.error);
@@ -715,10 +727,11 @@ document.addEventListener("contextmenu", e => {
   ctxTarget = inBox ? say : null; ctxBubble = bubble;
   const sel = String(window.getSelection() || "");
   ctx.querySelector('[data-cmd="cut"]').hidden = !inBox;
-  ctx.querySelector('[data-cmd="paste"]').hidden = !inBox;
+  ctx.querySelector('[data-cmd="paste"]').hidden = ctx.querySelector('[data-cmd="pastetext"]').hidden = !inBox;
   ctx.querySelector('[data-cmd="draft"]').hidden = !inBox || !(stored(draftKey()) || stored("wa-dash-draft-last"));
   ctx.querySelector('[data-cmd="lastsent"]').hidden = !inBox || !stored("wa-dash-sent-last");
-  ctx.querySelector('[data-cmd="copymsg"]').hidden = ctx.querySelector('[data-cmd="quote"]').hidden = !bubble;
+  ["copymsg", "copyfull", "quotereply", "quote"].forEach(c => ctx.querySelector(`[data-cmd="${c}"]`).hidden = !bubble);
+  ctx.querySelector('[data-cmd="delmsg"]').hidden = !(bubble && bubble.dataset.wa);
   ctx.querySelector('[data-cmd="copy"]').disabled = !sel && !(inBox && say.selectionStart !== say.selectionEnd);
   ctx.hidden = false;
   const w = ctx.offsetWidth, h = ctx.offsetHeight;
@@ -735,13 +748,14 @@ ctx.addEventListener("click", async e => {
   const boxSel = () => say.value.slice(say.selectionStart, say.selectionEnd);
   if (cmd === "copy") { await copyText(ctxTarget ? boxSel() : String(window.getSelection())); toast(L("הועתק", "Copied")); }
   if (cmd === "cut") { const t = boxSel(); await copyText(t); say.setRangeText("", say.selectionStart, say.selectionEnd, "start"); grow(); }
-  if (cmd === "paste") {
+  if (cmd === "paste" || cmd === "pastetext") {
     say.focus();
     let t = null;
     // WebView2 blocks navigator.clipboard.readText (the menu's paste did nothing, owner 10.11): the dashboard server
     // reads this PC's clipboard; the browser API stays as the fallback (e.g. the dashboard opened in a browser)
     try { const j = await (await fetch("/clipboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json(); if (typeof j.text === "string") t = j.text; } catch (err) {}
     if (t == null) { try { t = await Promise.race([navigator.clipboard.readText(), new Promise((_, no) => setTimeout(() => no(), 1500))]); } catch (err) {} }
+    if (t != null && cmd === "pastetext") t = t.replace(/\r\n?/g, "\n").replace(/[ \t\u00a0]+/g, " ").replace(/ ?\n ?/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
     if (t != null) { say.setRangeText(t, say.selectionStart, say.selectionEnd, "end"); grow(); }
     else if (!document.execCommand("paste")) toast(L("להדבקה: Ctrl+V", "To paste: Ctrl+V"));
   }
@@ -752,9 +766,25 @@ ctx.addEventListener("click", async e => {
   }
   if (cmd === "selectall") {
     if (ctxTarget) { say.focus(); say.select(); }
-    else if (ctxBubble) { const r = document.createRange(); r.selectNodeContents(ctxBubble); const s2 = getSelection(); s2.removeAllRanges(); s2.addRange(r); }
+    else if (ctxBubble) { say.blur(); const r = document.createRange(); r.selectNodeContents(ctxBubble); const s2 = getSelection(); s2.removeAllRanges(); s2.addRange(r); }
   }
   if (cmd === "copymsg" && ctxBubble) { await copyText(msgText(ctxBubble)); toast(L("ההודעה הועתקה", "Message copied")); }
+  if (cmd === "delmsg" && ctxBubble && ctxBubble.dataset.wa) {
+    const t = msgText(ctxBubble).slice(0, 80);
+    if (!confirm(L(`למחוק לכולם את ההודעה?
+
+"${t}"
+
+אי אפשר לשחזר.`, `Delete this message for everyone?
+
+"${t}"
+
+This cannot be undone.`))) return;
+    const j = await act({ do: "delete_message", jid: curChat, id: ctxBubble.dataset.wa }, L("ההודעה נמחקה לכולם", "Message deleted for everyone")); if (j && j.error) toast(j.error);
+  }
+  const who = b => (b.querySelector(".who") || {}).innerText || "", when = b => (b.querySelector(".meta") || {}).innerText || "";
+  if (cmd === "copyfull" && ctxBubble) { await copyText(`[${when(ctxBubble)}] ${who(ctxBubble).replace(/💻/g, "").trim()}: ${msgText(ctxBubble)}`); toast(L("הועתק עם תאריך ושולח", "Copied with date and sender")); }
+  if (cmd === "quotereply" && ctxBubble) { say.value = (say.value ? say.value + "\n" : "") + msgText(ctxBubble).split("\n").map(l => "> " + l).join("\n") + "\n"; grow(); say.focus(); say.setSelectionRange(say.value.length, say.value.length); }
   if (cmd === "quote" && ctxBubble) { const t = msgText(ctxBubble); say.value = (say.value ? say.value + "\n" : "") + t; grow(); say.focus(); }
 });
 

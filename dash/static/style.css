@@ -481,3 +481,4 @@ p.help { margin: 4px 0 0; }
 .chat::-webkit-scrollbar-track { background: var(--surface-2); border-radius: 9px; }
 .chat::-webkit-scrollbar-thumb { background: var(--line); border: 4px solid var(--surface-2); border-radius: 9px; min-height: 48px; }
 .chat::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+#renameInp { flex: 1; min-width: 160px; max-width: 360px; padding: 5px 10px; font: inherit; font-weight: 700; border: 2px solid var(--brand); border-radius: 9px; background: var(--surface); color: var(--text); }

@@ -1883,6 +1883,14 @@ def action(a):
             raw[jid]["name"] = name
             save_groups_raw(raw)
         return res
+    if kind == "delete_message":  # "delete for everyone" of one of this account's own messages (bridge /api/delete_message)
+        jid, mid = a.get("jid") or "", str(a.get("id") or "")
+        if jid not in conversations() or jid == LOCAL or not re.fullmatch(r"[A-Za-z0-9]{6,64}", mid):
+            return {"error": "הודעה לא תקינה"}
+        mine = rows(paths()["msg"], "SELECT 1 FROM messages WHERE id = ? AND chat_jid = ? AND is_from_me = 1", (mid, jid))
+        if not mine:
+            return {"error": "אפשר למחוק רק הודעה שנשלחה מהחשבון הזה"}
+        return bridge("/delete_message", {"jid": jid, "id": mid})
     if kind == "draft_decide":
         res = bridge("/draft_decide", {"id": int(a["id"]), "approve": bool(a.get("approve"))})
         if "error" in res and not a.get("approve"):  # bridge down: cancelling needs no bridge
