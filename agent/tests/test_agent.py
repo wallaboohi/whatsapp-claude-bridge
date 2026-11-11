@@ -276,26 +276,75 @@ def test_rule_command(multi, tmp_path, monkeypatch):
 
 # ---------- review fixes 08.11: interrupted commands, dev-work on raw text, sticky model, total cap, text approval ----------
 
-def test_interrupted_command_is_not_rerun(multi, monkeypatch):
+def test_interrupted_command_is_resumed(multi, monkeypatch):
+    """Owner 11.11: a command cut off by a restart / sleep is resumed (Claude first checks what was already done);
+    after RESUME_MAX_ATTEMPTS tries it is not run again."""
     mod, _ = multi
     sent = []
     monkeypatch.setattr(mod, "send", lambda chat, text, media=None, quoted=None: sent.append((chat, text)) or True)
     monkeypatch.setattr(mod, "wait_bridge", lambda *a, **k: True)
     with mod.adb() as db:
-        db.execute("INSERT INTO commands (msg_id, text, at, chat_jid, source, sync, status) VALUES ('r1', 'עבודה ארוכה', '2026-11-08 07:00', ?, 'wa', 0, 'running')", (DEV,))
+        db.execute("INSERT INTO commands (msg_id, text, at, chat_jid, source, sync, status, attempts) VALUES ('r1', 'עבודה ארוכה', '2026-11-08 07:00', ?, 'wa', 0, 'running', 1)", (DEV,))
+        db.execute("INSERT INTO commands (msg_id, text, at, chat_jid, source, sync, status, attempts) VALUES ('r2', 'קורסת', '2026-11-08 06:00', ?, 'wa', 0, 'running', 3)", (DEV,))
         db.execute("INSERT INTO commands (msg_id, text, at, chat_jid, source, sync, status) VALUES ('p1', 'עוד לא התחיל', '2026-11-08 07:01', ?, 'wa', 0, 'pending')", (DEV,))
     rows = mod.mark_interrupted()
-    assert [r[1] for r in rows] == ["r1"]
+    assert sorted((r[1], r[5]) for r in rows) == [("r1", True), ("r2", False)]
     mod.notify_interrupted(rows)
     with mod.adb() as db:
         st = dict(db.execute("SELECT msg_id, status FROM commands").fetchall())
-    assert st == {"r1": "interrupted", "p1": "pending"}, "running → interrupted (not re-run); pending still answered"
-    assert any(c == DEV and "נקטעה" in t for c, t in sent)
+    assert st == {"r1": "pending", "r2": "interrupted", "p1": "pending"}
+    assert any(c == DEV and "ממשיך" in t for c, t in sent) and any(c == DEV and "נקטעה" in t and "לא מריץ" in t for c, t in sent)
+    row = mod.claim_next(DEV)
+    assert row[1] == "r1", "the cut command first, then the rest in order"
+    prompts = []
+    monkeypatch.setattr(mod, "claude", lambda prompt, **k: prompts.append(prompt) or "סיימתי")
+    monkeypatch.setattr(mod, "react", lambda *a: None)
+    mod.run_command(row)
+    assert prompts and "נקטעה באמצע" in prompts[0] and "אל תכפיל" in prompts[0]
+    assert not mod.kv_get(f"cut:{row[0]}"), "the resume note is used once"
     row = mod.claim_next(DEV)
     assert row[1] == "p1"
-    with mod.adb() as db:
-        assert db.execute("SELECT status, attempts FROM commands WHERE msg_id = 'p1'").fetchone() == ("running", 1)
-    assert mod.claim_next(DEV) is None
+    mod.run_command(row)
+    assert "נקטעה באמצע" not in prompts[1]
+
+
+def test_limit_mid_run_resumes_with_a_check(agent, monkeypatch):
+    mod, _ = agent
+    sent = []
+    monkeypatch.setattr(mod, "send", lambda chat, text, media=None, quoted=None: sent.append(text) or True)
+    monkeypatch.setattr(mod, "react", lambda *a: None)
+    mod.enqueue_command("M1", "בנה דוח", "2026-11-11 01:00")
+    soon = mod.dt.datetime.now() + mod.dt.timedelta(minutes=5)
+
+    def hit(*a, **k):
+        mod.kv_set("limit_until", soon.isoformat(timespec="seconds"))
+        raise mod.LimitHit(soon)
+    monkeypatch.setattr(mod, "claude", hit)
+    row = mod.claim_next(mod.PRIMARY)
+    mod.run_command(row)
+    assert mod.kv_get(f"cut:{row[0]}")
+    mod.kv_set("limit_until", (mod.dt.datetime.now() - mod.dt.timedelta(minutes=1)).isoformat(timespec="seconds"))
+    assert mod.release_limit_waiters() == 1
+    prompts = []
+    monkeypatch.setattr(mod, "claude", lambda prompt, **k: prompts.append(prompt) or "ok")
+    mod.run_command(mod.claim_next(mod.PRIMARY))
+    assert "מכסת השימוש נגמרה באמצע" in prompts[0]
+
+
+def test_scheduled_job_waits_for_the_limit(agent, monkeypatch):
+    mod, _ = agent
+    sent, ran = [], []
+    monkeypatch.setattr(mod, "send", lambda chat, text, media=None, quoted=None: sent.append(text) or True)
+    monkeypatch.setattr(mod, "send_outbox", lambda *a: None)
+    mod.kv_set("limit_until", (mod.dt.datetime.now() + mod.dt.timedelta(minutes=30)).isoformat(timespec="seconds"))
+    mod.run_job({"name": "דוח לילה", "prompt": "x"}, "🌙")
+    assert any("מכסת השימוש" in t for t in sent) and not any("נכשלה" in t for t in sent)
+    monkeypatch.setattr(mod, "run_deferred", lambda items: ran.extend(items))
+    monkeypatch.setattr(mod.threading, "Thread", lambda target, args=(), daemon=None: type("T", (), {"start": lambda self: target(*args)})())
+    mod.kv_set("limit_until", (mod.dt.datetime.now() - mod.dt.timedelta(minutes=1)).isoformat(timespec="seconds"))
+    mod.release_limit_waiters()
+    assert ran and ran[0]["job"]["name"] == "דוח לילה"
+    assert not mod.kv_get("limit_deferred")
 
 
 def test_dev_work_uses_the_owners_own_words(agent):

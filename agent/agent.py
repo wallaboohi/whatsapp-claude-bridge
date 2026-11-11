@@ -2034,27 +2034,47 @@ def came_back_from_pc(chat, cid):
     return bool(prev) and prev[0] == "pc" and not prev[1]
 
 
-INTERRUPTED_HE = "⚠️ הפקודה נקטעה בהפעלה מחדש — שלח שוב אם צריך"
-INTERRUPTED_EN = "⚠️ This command was cut off by a restart — send it again if needed"
+INTERRUPTED_HE = "⚠️ הפקודה נקטעה בהפעלה מחדש כמה פעמים ברצף — לא מריץ אותה שוב; שלח שוב אם צריך"
+INTERRUPTED_EN = "⚠️ This command was cut off by restarts several times — not running it again; send it again if needed"
+RESUMING_HE = "▶️ הפקודה נקטעה באמצע (הפעלה מחדש / המחשב נרדם) — ממשיך אותה עכשיו מהנקודה שעצרתי, בלי לחזור על מה שכבר בוצע"
+RESUMING_EN = "▶️ This command was cut off midway (restart / the PC slept) — continuing it now from where I stopped"
+RESUME_CUT = {"he": "⚠️ ההודעה הזו כבר התחילה להתבצע ונקטעה באמצע ({why}). לפני שאתה ממשיך: בדוק מה כבר בוצע "
+                    "(מה שעשית בסשן הזה, agent/actions.log, טבלת drafts, קבצים ששינית, תזכורות) והשלם רק את מה שחסר — "
+                    "אל תכפיל שליחות, טיוטות או שינויים. בתשובה כתוב בקצרה מה כבר היה בוצע ומה הושלם עכשיו.\n\n",
+              "en": "⚠️ This message had already started and was cut off midway ({why}). Before continuing: check what was "
+                    "already done (this session, agent/actions.log, the drafts table, files you changed, reminders) and finish only "
+                    "what is missing — never repeat sends, drafts or changes. Say briefly what had been done and what you finished now.\n\n"}
+RESUME_MAX_ATTEMPTS = 3  # a command that keeps killing the agent is not resumed forever
 
 
 def mark_interrupted():
-    """At start-up (before the dispatcher starts): commands that were running when the agent stopped are NOT run again
-    (that could double drafts, edits and cost). Returns them; notify_interrupted tells the owner."""
+    """At start-up (before the dispatcher starts): commands that were running when the agent stopped. Owner 11.11: they are
+    resumed (back to the queue, marked so Claude first checks what was already done and finishes only the rest), unless
+    they were already tried RESUME_MAX_ATTEMPTS times. Returns (id, msg_id, chat, source, sync, resumed)."""
+    out = []
+    now = dt.datetime.now()
     with adb() as db:
-        rows = db.execute("SELECT id, msg_id, chat_jid, source, sync FROM commands WHERE status = 'running'").fetchall()
-        db.execute("UPDATE commands SET status = 'interrupted', answered = ? WHERE status = 'running'", (dt.datetime.now().isoformat(),))
-    return rows
+        rows = db.execute("SELECT id, msg_id, chat_jid, source, sync, coalesce(attempts, 0) FROM commands WHERE status = 'running'").fetchall()
+        for cid, mid, chat, src, sync, tries in rows:
+            again = tries < RESUME_MAX_ATTEMPTS
+            db.execute("UPDATE commands SET status = ?, answered = ? WHERE id = ?",
+                       ("pending" if again else "interrupted", None if again else now.isoformat(), cid))
+            out.append((cid, mid, chat, src, sync, again))
+    for cid, *_, again in out:
+        if again:
+            kv_set(f"cut:{cid}", f"הפעלה מחדש / המחשב נרדם, {now:%H:%M}" if LANG == "he" else f"restart / the PC slept, {now:%H:%M}")
+    return out
 
 
 def notify_interrupted(rows):
     """Tell the owner, in each conversation, that a command was cut off (waits for the bridge; runs in its own thread)."""
     if rows and not pc_rows_only(rows):
         wait_bridge(300)
-    for cid, mid, chat, src, sync in rows:
+    for cid, mid, chat, src, sync, again in rows:
         _ctx.chat, _ctx.src, _ctx.sync = chat or PRIMARY, src or "wa", sync or 0
         try:
-            reply(INTERRUPTED_HE if LANG == "he" else INTERRUPTED_EN, quoted=mid if (src or "wa") == "wa" else None)
+            msg = (RESUMING_HE if LANG == "he" else RESUMING_EN) if again else (INTERRUPTED_HE if LANG == "he" else INTERRUPTED_EN)
+            reply(msg, quoted=mid if (src or "wa") == "wa" else None)
         except Exception as e:
             log("interrupted notice failed", cid, e)
         finally:
@@ -2062,7 +2082,7 @@ def notify_interrupted(rows):
 
 
 def pc_rows_only(rows):
-    return all((src or "wa") == "pc" and not sync or (chat == LOCAL) for _, _, chat, src, sync in rows)
+    return all((src or "wa") == "pc" and not sync or (chat == LOCAL) for _, _, chat, src, sync, *_ in rows)
 
 
 def claim_next(chat):
@@ -2081,8 +2101,12 @@ LIMIT_NOTE_HE = "⏳ נגמרה מכסת השימוש של Claude — אמשיך
 LIMIT_NOTE_EN = "⏳ Claude's usage limit was reached — I'll continue by myself at {at}"
 
 
-def wait_for_limit(cid, chat, mid, src, until):
-    """Park the command until the usage limit resets (the dispatcher re-queues it); one notice per conversation per window."""
+def wait_for_limit(cid, chat, mid, src, until, mid_run=False):
+    """Park the command until the usage limit resets (the dispatcher re-queues it); one notice per conversation per window.
+    mid_run = the limit stopped Claude in the middle of this command: on the re-run it first checks what was already done."""
+    if mid_run:
+        kv_set(f"cut:{cid}", (f"מכסת השימוש נגמרה באמצע, {dt.datetime.now():%H:%M}" if LANG == "he"
+                              else f"the usage limit ran out midway, {dt.datetime.now():%H:%M}"))
     with adb() as db:
         db.execute("UPDATE commands SET status = 'waiting_limit', retry_at = ? WHERE id = ?", (until.isoformat(timespec="seconds"), cid))
     key = K("limit_notice", chat)
@@ -2175,18 +2199,51 @@ def release_budget_waiters():
     return n
 
 
+def defer_for_limit(item):
+    """Background work (a scheduled job, the morning summary) skipped by the usage limit: kept and run once it is back."""
+    try:
+        items = json.loads(kv_get("limit_deferred") or "[]")
+    except ValueError:
+        items = []
+    if item not in items:
+        items.append(item)
+    kv_set("limit_deferred", json.dumps(items, ensure_ascii=False))
+    log("deferred until the usage limit is back:", item.get("kind"), (item.get("job") or {}).get("name", ""))
+
+
+def run_deferred(items):
+    for it in items:
+        try:
+            if it.get("kind") == "job":
+                run_job(it["job"], it.get("mark") or "🗓")
+            elif it.get("kind") == "morning":
+                morning_summary()
+        except Exception:
+            log("deferred work failed", it, traceback.format_exc())
+
+
 def release_limit_waiters():
-    """Once the limit has reset: commands parked by it go back to the queue (oldest first, as before)."""
+    """Once the limit has reset: commands parked by it go back to the queue (oldest first, as before), then the notice;
+    background work it skipped (scheduled jobs, the morning summary) runs (owner 11.11)."""
     if limit_until():
         return 0
     by = parked_by_chat("waiting_limit")  # also commands stranded by an earlier crash / restart (owner 11.11)
     with adb() as db:
         n = db.execute("UPDATE commands SET status = 'pending' WHERE status = 'waiting_limit'").rowcount
+    try:
+        deferred = json.loads(kv_get("limit_deferred") or "[]")
+    except ValueError:
+        deferred = []
+    if deferred:
+        kv_set("limit_deferred", "")
     if kv_get("limit_until"):
         kv_set("limit_until", "")
     if n:
         log(f"usage limit over: {n} command(s) re-queued")
         resume_notice("waiting_limit", "מכסת השימוש של Claude חזרה" if LANG == "he" else "Claude's usage limit has reset", by=by)
+    if deferred:
+        log(f"usage limit over: running {len(deferred)} deferred background task(s)")
+        threading.Thread(target=run_deferred, args=(deferred,), daemon=True).start()
     return n
 
 
@@ -2269,6 +2326,9 @@ def run_command(row):
             prompt += "\n\n" + hints
         if src == "wa" and came_back_from_pc(chat, cid):
             prompt = (T_BACK_HE if LANG == "he" else T_BACK_EN) + prompt
+        cut = kv_get(f"cut:{cid}")
+        if cut:  # owner 11.11: resumed after a limit / restart — finish what was left, don't redo what was done
+            prompt = RESUME_CUT.get(LANG, RESUME_CUT["en"]).format(why=cut) + prompt
         model, how = pick_model_info(text, chat)
         _ctx.auto_pick = how == "auto"
         threading.Thread(target=sync_group_name, args=(chat, model), daemon=True).start()  # the name shows who is answering
@@ -2280,10 +2340,12 @@ def run_command(row):
                             raw=raw_text(text.lstrip("!")), timeout=limit_min * 60 if limit_min else None)
         except LimitHit as e:
             parked = True
-            wait_for_limit(cid, chat, mid, src, e.until)
+            wait_for_limit(cid, chat, mid, src, e.until, mid_run=True)
             return
         finally:
             status.finish()
+        if cut:
+            kv_set(f"cut:{cid}", "")
         stopped = (answer or "").startswith("⛔ עצרתי")
         streak = 0 if answer else int(kv_get(K("fail_streak", chat)) or 0) + 1
         kv_set(K("fail_streak", chat), str(streak))
@@ -4539,6 +4601,9 @@ def morning_summary():
                   "only what matters or needs action, then 'Waiting for your reply:' with the list below.\n\n" + "\n".join(lines)
                   + ("\n\nWaiting:\n" + wait_txt if wait_txt else ""))
         out = claude(prompt, model=CFG.get("light_model") or "haiku", session=False, timeout=300, chat=PRIMARY, budget_check=True)
+        if out is None and limit_until():  # owner 11.11: summarize when the usage limit is back
+            defer_for_limit({"kind": "morning"})
+            return
     if not out and not lines and not waiting:
         return  # a quiet night: nothing to say
     head = "☀️ *סיכום בוקר*" if LANG == "he" else "☀️ *Morning summary*"
@@ -4656,6 +4721,30 @@ def monthly_jobs():
         run_job(job, "🗓")
 
 
+def keep_awake():
+    """Owner 11.11: on mains power the PC never sleeps while the agent runs (Windows; on battery the normal settings
+    apply). Config "keep_awake_on_ac" (default true). The execution state belongs to this thread, so it loops forever."""
+    if os.name != "nt" or not CFG.get("keep_awake_on_ac", True):
+        return
+    import ctypes
+
+    class SPS(ctypes.Structure):
+        _fields_ = [("ac", ctypes.c_ubyte), ("flag", ctypes.c_ubyte), ("pct", ctypes.c_ubyte), ("saver", ctypes.c_ubyte),
+                    ("life", ctypes.c_ulong), ("full", ctypes.c_ulong)]
+    k32, last = ctypes.windll.kernel32, None
+    while True:
+        try:
+            st = SPS()
+            on_ac = bool(k32.GetSystemPowerStatus(ctypes.byref(st))) and st.ac == 1
+            k32.SetThreadExecutionState(0x80000000 | (0x00000001 if on_ac else 0))  # ES_CONTINUOUS | ES_SYSTEM_REQUIRED
+            if on_ac != last:
+                log("keep awake:", "on (mains power)" if on_ac else "off (battery)")
+                last = on_ac
+        except Exception as e:
+            log("keep awake failed", e)
+        time.sleep(60)
+
+
 def run_job(job, mark):
     """One scheduled Claude task for the control group: its answer and any outbox files go to the owner only."""
     started = time.time()
@@ -4663,6 +4752,11 @@ def run_job(job, mark):
     try:
         limit = int(job.get("timeout_min") or 0) * 60 or None  # owner 11.11: no time cap unless the job sets one
         out = claude(job["prompt"], model=job.get("model"), session=False, timeout=limit, chat=PRIMARY)
+        lu = limit_until()
+        if out is None and lu:  # owner 11.11: work skipped by the usage limit runs when it is back, not lost
+            defer_for_limit({"kind": "job", "job": job, "mark": mark})
+            reply(f"⏳ *{job.get('name', 'משימה מתוזמנת')}* — מכסת השימוש נגמרה; תרוץ לבד ב-{lu:%H:%M}")
+            return
         reply(f"{mark} *{job.get('name', 'משימה מתוזמנת')}*\n{(out or 'המשימה נכשלה, אפשר להריץ אותה שוב ידנית.').strip()}")
         send_outbox(started)
     except Exception:
@@ -4789,7 +4883,7 @@ if __name__ == "__main__":
         failover_resume()  # backup machine still holding another machine's plugins
     except Exception:
         log("failover resume failed", traceback.format_exc())
-    for target in [worker, slow_worker, command_worker, scheduler, event_listener, watchdog, tunnel_keeper, peer_watch, local_health_watch, push_loop] + list(_threads):
+    for target in [worker, slow_worker, command_worker, scheduler, event_listener, watchdog, tunnel_keeper, peer_watch, local_health_watch, push_loop, keep_awake] + list(_threads):
         threading.Thread(target=target, daemon=True).start()
     if _defer:
         threading.Thread(target=deferred_plugins, daemon=True).start()
