@@ -728,7 +728,33 @@ def budget_for(chat):
     return float((load_groups().get(chat or PRIMARY) or {}).get("budget_usd") or CFG.get("daily_budget_usd", 5))
 
 
+GUEST_TOOLS = "Read,Write,Edit,Glob,Grep,WebSearch,WebFetch"
+GUEST_CMDS = re.compile(r"^/\s*(🛞|מודלים|מודל|models|model|סשן|session)(\s|$)")
+
+
+def guest_cfg(chat):
+    """Owner 10.11: a guest group (groups.json "guest": true) — someone else (e.g. Rita) talks to Claude in the owner's
+    bridge, isolated: Claude runs in the group's own folder ("home") with --restricted --safe-mode (no shell, file tools
+    confined to that folder, no CLAUDE.md / memory / MCP / Chrome), only the slash commands in GUEST_CMDS, no owner data
+    in the prompt. "guests" = the phone / LID numbers whose messages are answered (the owner's too)."""
+    g = load_groups().get(chat) if chat and chat != PRIMARY and chat != LOCAL else None
+    return g if g and g.get("guest") and g.get("home") else None
+
+
+def is_guest_sender(chat, sender):
+    g = guest_cfg(chat)
+    who = (sender or "").split("@")[0].split(":")[0]
+    return bool(g and who) and who in {str(x) for x in g.get("guests") or []}
+
+
+def guest_home(g):
+    os.makedirs(os.path.join(g["home"], "outbox"), exist_ok=True)
+    return g["home"]
+
+
 def handoff_path(chat):
+    if guest_cfg(chat):
+        return os.path.join(guest_home(guest_cfg(chat)), "handoff.md")
     if not chat or chat == PRIMARY:
         return os.path.join(HOME, "handoff.md")
     g = load_groups().get(chat) or {}
@@ -1117,18 +1143,23 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
     # config "permission_mode" (default "auto"; e.g. "bypassPermissions" on a PC where nothing should wait for a click);
     # restricted runs over other people's text never get more than "auto"
     mode = "auto" if tools == "" else CFG.get("permission_mode", "auto")
+    guest = guest_cfg(chat)
+    if guest:  # isolated guest group: never the owner's permission mode, tools, connectors or browser
+        mode = "acceptEdits"
     cmd = [shutil.which("claude") or "claude", "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", mode]
     if model:
         cmd += ["--model", model]
     if append:
         cmd += ["--append-system-prompt", append]
-    if tools is not None:
+    if guest:
+        cmd += ["--restricted", "--safe-mode", "--strict-mcp-config", "--tools", GUEST_TOOLS if tools is None else tools]
+    elif tools is not None:
         cmd += ["--tools", tools, "--strict-mcp-config"]  # --tools alone still loads MCP connector tools (e.g. Gmail send)
     elif CFG.get("strict_mcp"):
         cmd += ["--strict-mcp-config"]  # skip the heavy connector tool lists (Gmail, Shopify...) to cut tokens
     if max_budget:
         cmd += ["--max-budget-usd", f"{float(max_budget):.2f}"]
-    if CFG.get("chrome") and tools is None:
+    if CFG.get("chrome") and tools is None and not guest:
         cmd += ["--chrome"]  # owner 09.11: Claude in Chrome (needs the extension signed in with this PC's Claude account)
     if resume:
         cmd += ["--resume", resume]
@@ -1136,7 +1167,7 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
     if stoppable is None:
         stoppable = on_stage is not None  # only the owner's interactive runs; plugin / hand-off runs never eat a stop request
     t0 = time.time()
-    proc = subprocess.Popen(cmd, cwd=HOME, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    proc = subprocess.Popen(cmd, cwd=guest_home(guest) if guest else HOME, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, encoding="utf-8", errors="replace")
     errbuf = []
 
@@ -1549,13 +1580,16 @@ def enqueue_command(msg_id, text, when, chat=None):
 
 
 def send_outbox(since):
-    """Files Claude saved in home/outbox during the answer are sent to the owner (WhatsApp, or shown in the dashboard chat), then archived."""
-    if not os.path.isdir(OUTBOX):
+    """Files Claude saved in home/outbox during the answer are sent to the owner (WhatsApp, or shown in the dashboard chat), then archived.
+    A guest group uses its own folder's outbox."""
+    g = guest_cfg(cur_chat())
+    box = os.path.join(guest_home(g), "outbox") if g else OUTBOX
+    if not os.path.isdir(box):
         return
-    done = os.path.join(OUTBOX, "sent")
+    done = os.path.join(box, "sent")
     os.makedirs(done, exist_ok=True)
-    for f in sorted(os.listdir(OUTBOX)):
-        p = os.path.join(OUTBOX, f)
+    for f in sorted(os.listdir(box)):
+        p = os.path.join(box, f)
         if os.path.isfile(p) and os.path.getmtime(p) >= since - 5:
             stamp = f"{dt.datetime.now():%Y%m%d_%H%M%S}_{f}"
             if pc_only():
@@ -1659,7 +1693,7 @@ def sync_group_name(chat, model):
     dashboard). Renames only when the name would change, at most once per 20 s per group. Config group_name_model."""
     if not CFG.get("group_name_model", True) or not model or not str(chat).endswith("@g.us"):
         return
-    if chat != PRIMARY and chat not in load_groups():
+    if chat != PRIMARY and chat not in load_groups() or guest_cfg(chat):
         return
     with _rename_lock:
         try:
@@ -1750,6 +1784,8 @@ def pick_model_info(text, chat=None):
     if forced:
         return forced, "forced"
     s = text.lstrip()
+    if guest_cfg(chat) and not (s.startswith("!!") and not s.startswith("!!!")):
+        return guest_cfg(chat).get("model") or "haiku", "forced"
     if s.startswith("!!") and not s.startswith("!!!"):  # "!!" = this one message on the strongest model (owner request 07.11)
         return CFG.get("deep_model") or "opus", "bang"
     t = text.lstrip("!").strip()
@@ -2058,15 +2094,22 @@ RESUME_NOTE = {"he": "▶️ {why} — קיבלתי {n} הודעות ששלחת 
                "en": "▶️ {why} — I received {n} messages you sent while waiting ({times}). Answering all of them in order, each quoting its message."}
 
 
-def resume_notice(status, why, chat=None):
-    """Owner 09.11: when a limit is over, say per conversation which parked messages arrived and that each will be answered
-    (before they go back to the queue). chat=None = every conversation with commands in this status."""
+def parked_by_chat(status, chat=None):
+    """{conversation: [HH:MM, ...]} of the commands in this status (chat=None = every conversation)."""
     q = "SELECT coalesce(chat_jid, ?), at FROM commands WHERE status = ?" + (" AND coalesce(chat_jid, ?) = ?" if chat else "") + " ORDER BY id"
     with adb() as db:
         rows = db.execute(q, (PRIMARY, status) + ((PRIMARY, chat) if chat else ())).fetchall()
     by = {}
     for c, at in rows:
         by.setdefault(c, []).append(str(at or "")[11:16] or "?")
+    return by
+
+
+def resume_notice(status, why, chat=None, by=None):
+    """Owner 09.11: when a limit is over, say per conversation which parked messages arrived and that each will be answered.
+    by = parked_by_chat() taken before the commands went back to the queue (owner 11.11: re-queue first, then notify, so a
+    hung send / a sleeping PC can never strand them)."""
+    by = parked_by_chat(status, chat) if by is None else by
     for c, times in by.items():
         _ctx.chat = c
         try:
@@ -2119,11 +2162,12 @@ def release_budget_waiters():
     n = 0
     for chat in chats:
         if not over_budget(chat):
-            resume_notice("waiting_budget", "תקרת השימוש מאפשרת שוב" if LANG == "he" else "The cost cap allows again", chat)
+            by = parked_by_chat("waiting_budget", chat)
             with adb() as db:
                 n += db.execute("UPDATE commands SET status = 'pending' WHERE status = 'waiting_budget' AND coalesce(chat_jid, ?) = ?",
                                 (PRIMARY, chat)).rowcount
             kv_set(K("budget_notice", chat), "")
+            resume_notice("waiting_budget", "תקרת השימוש מאפשרת שוב" if LANG == "he" else "The cost cap allows again", chat, by=by)
     if n:
         log(f"cost cap allows again: {n} command(s) re-queued")
     return n
@@ -2131,15 +2175,17 @@ def release_budget_waiters():
 
 def release_limit_waiters():
     """Once the limit has reset: commands parked by it go back to the queue (oldest first, as before)."""
-    v = kv_get("limit_until") or ""
-    if v and not limit_until():
+    if limit_until():
+        return 0
+    by = parked_by_chat("waiting_limit")  # also commands stranded by an earlier crash / restart (owner 11.11)
+    with adb() as db:
+        n = db.execute("UPDATE commands SET status = 'pending' WHERE status = 'waiting_limit'").rowcount
+    if kv_get("limit_until"):
         kv_set("limit_until", "")
-        resume_notice("waiting_limit", "מכסת השימוש של Claude חזרה" if LANG == "he" else "Claude's usage limit has reset")
-        with adb() as db:
-            n = db.execute("UPDATE commands SET status = 'pending' WHERE status = 'waiting_limit'").rowcount
+    if n:
         log(f"usage limit over: {n} command(s) re-queued")
-        return n
-    return 0
+        resume_notice("waiting_limit", "מכסת השימוש של Claude חזרה" if LANG == "he" else "Claude's usage limit has reset", by=by)
+    return n
 
 
 def run_timeout_minutes(chat):
@@ -2160,7 +2206,11 @@ def run_command(row):
     _ctx.chat, _ctx.src, _ctx.sync, _ctx.auto_pick = chat, src, sync, False
     g = load_groups().get(chat) or {}
     parked = False
+    guest = guest_cfg(chat)
     try:
+        if guest and text.lstrip("!").lstrip().startswith("/") and not GUEST_CMDS.match(text.lstrip("!").lstrip()):
+            reply("הפקודה הזו לא זמינה בקבוצה הזו. אפשר: /מודל, /סשן, /🛞")
+            return
         local = owner_command(text, chat)
         if local is not None:
             reply(local, quoted=mid if src == "wa" else None)
@@ -2207,11 +2257,11 @@ def run_command(row):
             where, dest = (f'בקבוצה "{gname}" בווצאפ', "לקבוצה") if LANG == "he" else (f'in the WhatsApp group "{gname}"', "to the group")
         body = text.lstrip("!").strip()
         rm = RULE_CMD.match(body)
-        if rm and rm.group(2).strip():  # /כלל בסיס <rule>: Claude checks it and adds it to this conversation's rules file
+        if rm and rm.group(2).strip() and not guest:  # /כלל בסיס <rule>: Claude checks it and adds it to this conversation's rules file
             body = RULE_PROMPT.format(owner=OWNER, rule=rm.group(2).strip(), path=os.path.join(HOME, rules_rel(chat)),
                                       general=os.path.join(HOME, "CLAUDE.md"))
-        prompt = T["prompt"].format(owner=OWNER, when=when, text=body, where=where, dest=dest)
-        hints = dictionary_hints(body)
+        prompt = T["prompt"].format(owner=(guest or {}).get("speaker") or OWNER, when=when, text=body, where=where, dest=dest)
+        hints = None if guest else dictionary_hints(body)
         if hints:
             prompt += "\n\n" + hints
         if src == "wa" and came_back_from_pc(chat, cid):
@@ -2250,7 +2300,7 @@ def run_command(row):
                     if LANG == "he" else "\n\n💡 For deep analysis start the message with !! (strongest model for one message).")
         reply(out, quoted=mid if (CFG.get("quote_replies", True) and src == "wa") else None)
         send_outbox(started)
-        if answer and not stopped and time.time() - started >= float(CFG.get("push_long_minutes", 5)) * 60:
+        if answer and not stopped and not guest and time.time() - started >= float(CFG.get("push_long_minutes", 5)) * 60:
             with adb() as db:  # Claude may already have queued its own push (a question waiting for the owner)
                 own = db.execute("SELECT 1 FROM push_queue WHERE created >= ? AND (chat IS NULL OR chat = ?)",
                                  (dt.datetime.fromtimestamp(started).isoformat(timespec="seconds"), chat)).fetchone()
@@ -3688,7 +3738,7 @@ def handle(row):
             return  # "מאשר לנייח": answered by the failover code, never a Claude run
     except Exception:
         log("failover approve error", traceback.format_exc())
-    if cj != LOCAL and cj in load_groups() and me:  # the owner's own message in a connected group (others' messages stay plain information)
+    if cj != LOCAL and cj in load_groups() and (me or is_guest_sender(cj, sender)):  # the owner's own message in a connected group (others' messages stay plain information; a guest group also takes its guests')
         if content.startswith(CFG["reply_prefix"].strip()):
             return  # our own reply
         if sent_special(mid):
@@ -3725,7 +3775,7 @@ def handle(row):
             work.put(file_cmd)
         elif content:
             try:
-                if schedule_from_reply(cj, mid, content):
+                if not guest_cfg(cj) and schedule_from_reply(cj, mid, content):
                     return
             except Exception as e:
                 log("schedule from reply failed", e)

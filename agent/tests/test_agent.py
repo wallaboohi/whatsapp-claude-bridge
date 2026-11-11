@@ -433,6 +433,40 @@ def test_usage_limit_parks_and_requeues_commands(agent, monkeypatch):
         assert [r[0] for r in db.execute("SELECT status FROM commands ORDER BY id")] == ["pending", "pending"]
 
 
+def test_stranded_limit_waiters_are_requeued(agent, monkeypatch):
+    """Owner 11.11: the limit flag was cleared but the PC slept / the notice hung before the re-queue, so the commands sat
+    in waiting_limit forever. Now: any waiting_limit command with no active limit goes back to the queue, notice after."""
+    mod, _ = agent
+    sent = []
+    monkeypatch.setattr(mod, "send", lambda chat, text, media=None, quoted=None: sent.append(text) or True)
+    mod.enqueue_command("S1", "מה המצב", "2026-11-10 22:42")
+    with mod.adb() as db:
+        db.execute("UPDATE commands SET status = 'waiting_limit'")
+    mod.kv_set("limit_until", "")
+    assert mod.release_limit_waiters() == 1
+    with mod.adb() as db:
+        assert [r[0] for r in db.execute("SELECT status FROM commands")] == ["pending"]
+    assert any("▶️" in t and "22:42" in t for t in sent)
+    assert mod.release_limit_waiters() == 0
+
+
+def test_requeue_happens_even_if_the_notice_fails(agent, monkeypatch):
+    mod, _ = agent
+    def boom(*a, **k):
+        raise RuntimeError("bridge hung")
+    monkeypatch.setattr(mod, "resume_notice", boom)
+    mod.enqueue_command("S2", "x", "2026-11-10 23:00")
+    with mod.adb() as db:
+        db.execute("UPDATE commands SET status = 'waiting_limit'")
+    mod.kv_set("limit_until", (mod.dt.datetime.now() - mod.dt.timedelta(minutes=1)).isoformat(timespec="seconds"))
+    try:
+        mod.release_limit_waiters()
+    except RuntimeError:
+        pass
+    with mod.adb() as db:
+        assert [r[0] for r in db.execute("SELECT status FROM commands")] == ["pending"]
+
+
 def test_limit_hit_during_a_run_parks_the_command(agent, monkeypatch):
     mod, _ = agent
     sent = []
@@ -1421,3 +1455,46 @@ def test_once_job_runs_once_after_its_time(agent, monkeypatch):
     mod.once_jobs()
     mod.once_jobs()
     assert calls == ["עבודת לילה"]
+
+
+GUEST = "1203638888@g.us"
+
+
+@pytest.fixture()
+def guest(agent, tmp_path, monkeypatch):
+    mod, db = agent
+    gf = tmp_path / "groups.json"
+    gf.write_text(json.dumps({GUEST: {"name": "ריטה", "purpose": "guest", "guest": True, "home": str(tmp_path / "rita"),
+                                      "guests": ["972501111111", "238800000000"], "model": "haiku", "speaker": "ריטה"},
+                              DEV: {"name": "פיתוח", "purpose": "dev"}}), encoding="utf-8")
+    monkeypatch.setattr(mod, "GROUPS_FILE", str(gf))
+    return mod, db, tmp_path
+
+
+def test_guest_group_isolation(guest, monkeypatch):
+    mod, _, tmp = guest
+    assert mod.guest_cfg(GUEST) and not mod.guest_cfg(DEV) and not mod.guest_cfg(mod.PRIMARY)
+    assert mod.is_guest_sender(GUEST, "972501111111") and mod.is_guest_sender(GUEST, "238800000000@lid")
+    assert not mod.is_guest_sender(GUEST, "972509999999") and not mod.is_guest_sender(DEV, "972501111111")
+    assert mod.GUEST_CMDS.match("/מודל סונט") and mod.GUEST_CMDS.match("/🛞") and mod.GUEST_CMDS.match("/סשן")
+    assert not mod.GUEST_CMDS.match("/חפש יקיר") and not mod.GUEST_CMDS.match("/הפעל מחדש") and not mod.GUEST_CMDS.match("/תקרה")
+    assert mod.pick_model_info("שלום", GUEST) == ("haiku", "forced")
+    assert mod.handoff_path(GUEST).startswith(str(tmp / "rita"))
+    seen = {}
+
+    class P:
+        def __init__(self, cmd, cwd=None, **kw):
+            seen["cmd"], seen["cwd"] = cmd, cwd
+            raise RuntimeError("stop")
+    monkeypatch.setattr(mod.subprocess, "Popen", P)
+    monkeypatch.setitem(mod.CFG, "chrome", True)
+    monkeypatch.setitem(mod.CFG, "permission_mode", "bypassPermissions")
+    with pytest.raises(RuntimeError):
+        mod._run_claude("hi", "haiku", None, 10, chat=GUEST)
+    c = seen["cmd"]
+    assert seen["cwd"] == str(tmp / "rita") and "--restricted" in c and "--safe-mode" in c and "--strict-mcp-config" in c
+    assert c[c.index("--tools") + 1] == mod.GUEST_TOOLS and "Bash" not in mod.GUEST_TOOLS
+    assert c[c.index("--permission-mode") + 1] == "acceptEdits" and "--chrome" not in c
+    with pytest.raises(RuntimeError):
+        mod._run_claude("hi", "haiku", None, 10, chat=DEV)
+    assert seen["cwd"] == mod.HOME and "--restricted" not in seen["cmd"] and "--chrome" in seen["cmd"]
