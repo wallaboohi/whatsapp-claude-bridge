@@ -5,6 +5,8 @@ a few seconds later; asking again continues from the new oldest message. This ke
 stops moving (the start of the chat) or is older than --until.
 
 Usage: uv run --no-project python tools/wa_history.py <chat_jid> [--until 2024-01-01] [--max-pages 40]
+       ... <chat_jid> --before <message_id>   one request for the messages just before a stored message (fills a gap
+       in the middle of a chat, e.g. a missing day; owner 11.11)
 """
 import argparse
 import json
@@ -25,9 +27,9 @@ def oldest(chat):
     return n, str(ts or "")
 
 
-def ask(chat, count=500):
+def ask(chat, count=500, before=""):
     tok = open(os.path.join(STORE, "api_token")).read().strip()
-    req = urllib.request.Request("http://127.0.0.1:8765/api/history_sync", json.dumps({"jid": chat, "count": count}).encode(),
+    req = urllib.request.Request("http://127.0.0.1:8765/api/history_sync", json.dumps({"jid": chat, "count": count, **({"before_id": before} if before else {})}).encode(),
                                  {"Content-Type": "application/json", "Authorization": "Bearer " + tok})
     try:
         return json.loads(urllib.request.urlopen(req, timeout=60).read().decode())
@@ -41,7 +43,16 @@ def main():
     a.add_argument("--until", default="")
     a.add_argument("--max-pages", type=int, default=40)
     a.add_argument("--wait", type=int, default=25, help="seconds to wait for each batch")
+    a.add_argument("--before", default="", help="message id: fill the gap just before it (one request)")
     o = a.parse_args()
+    if o.before:
+        n0 = oldest(o.chat)[0]
+        r = ask(o.chat, 100, o.before)
+        if not r.get("success", True) or "requested" not in r:
+            sys.exit(f"history request failed: {r.get('message', r)}")
+        time.sleep(o.wait)
+        print(f"done: +{oldest(o.chat)[0] - n0} messages before {o.before}")
+        return
     n0, first = oldest(o.chat)
     print(f"start: {n0} messages, oldest {first[:16] or '-'}")
     still = 0

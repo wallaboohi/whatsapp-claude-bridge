@@ -28,7 +28,16 @@ func oldestMessage(db *sql.DB, chat string) (storedMsg, error) {
 	return m, err
 }
 
+// storedMessage returns one stored message of a chat by id (anchor for filling a gap in the middle of a chat).
+func storedMessage(db *sql.DB, chat, id string) (storedMsg, error) {
+	var m storedMsg
+	err := db.QueryRow(`SELECT id, timestamp, coalesce(is_from_me, 0), coalesce(sender, '') FROM messages
+		WHERE chat_jid = ? AND id = ?`, chat, id).Scan(&m.ID, &m.Timestamp, &m.FromMe, &m.Sender)
+	return m, err
+}
+
 // {"jid":"<chat>","count":50} (max 500) → asks the phone for up to count messages older than the oldest stored one.
+// With "before_id" the anchor is that stored message instead, so a gap in the middle of a chat can be filled (owner 11.11).
 func registerHistoryAPI(client *whatsmeow.Client) {
 	adminHandler("/api/history_sync", func(ctx context.Context, b map[string]any) (map[string]any, error) {
 		chat, err := types.ParseJID(str(b, "jid"))
@@ -49,7 +58,15 @@ func registerHistoryAPI(client *whatsmeow.Client) {
 			return nil, errString("not connected to WhatsApp")
 		}
 		chat = normalizeChat(client, chat) // LID chats are stored under the phone number
-		old, err := oldestMessage(globalStore.db, chat.String())
+		var old storedMsg
+		if before := str(b, "before_id"); before != "" {
+			old, err = storedMessage(globalStore.db, chat.String(), before)
+			if err == sql.ErrNoRows {
+				return nil, errString("before_id is not a stored message of this chat")
+			}
+		} else {
+			old, err = oldestMessage(globalStore.db, chat.String())
+		}
 		if err == sql.ErrNoRows {
 			return nil, errString("no stored messages in this chat yet — nothing to anchor the request on")
 		} else if err != nil {
