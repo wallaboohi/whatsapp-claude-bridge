@@ -219,6 +219,9 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 		// Media expired on the server, or (old / history-synced media, owner 10.11) the CDN no longer serves the
 		// original blob: ask the phone — which still has every file — to re-upload it, then retry with the new path
 		fmt.Printf("Media not downloadable (%v), requesting re-upload from phone for %s...\n", err, messageID)
+		// diagnostics for the invalid-hmac bug (owner 11.11): key fingerprint, stored type and length, hash sizes
+		keyFp := sha256.Sum256(mediaKey)
+		fmt.Printf("Media diag %s: type=%s key=%d bytes fp=%x file_length=%d sha256=%d enc_sha256=%d\n", messageID, mediaType, len(mediaKey), keyFp[:4], fileLength, len(fileSHA256), len(fileEncSHA256))
 		var newPath string
 		newPath, err = requestMediaReupload(client, messageStore, messageID, chatJID, mediaKey)
 		if err == nil {
