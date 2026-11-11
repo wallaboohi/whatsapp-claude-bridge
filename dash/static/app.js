@@ -431,8 +431,11 @@ function render(d) {
   const lv = d.live || null, steps = (lv && lv.steps) || [];
   const statusBody = () => {
     const head = lv.done ? L(`✅ סיימתי · ${Math.floor(lv.secs / 60)}:${String(lv.secs % 60).padStart(2, "0")} · ${esc(lv.model)} · ${steps.length} שלבים`, `✅ done · ${esc(lv.model)}`)
-                         : L(`⏳ עובד · ${esc(lv.model)}`, `⏳ working · ${esc(lv.model)}`);
-    return `<span class="st-head">${head}</span><ol>${steps.map((x, j) => `<li class="${j === steps.length - 1 && !lv.done ? "now" : ""}" title="${esc(x.text)}">${hhmm(toDate(x.at))} · ${esc(x.text)}</li>`).join("")}</ol>`;
+                         : L(`⏳ עובד · ${esc(lv.model)}`, `⏳ working · ${esc(lv.model)}`) + ` · <span class="live-clock" data-from="${esc(lv.started || "")}"></span>`;
+    // while Claude thinks there are no new steps: a ticking clock + "thinking" line so the screen never looks frozen (owner 10.11)
+    const lastAt = steps.length ? steps[steps.length - 1].at : lv.started;
+    const think = lv.done ? "" : `<li class="now thinking">🧠 ${L("חושב", "thinking")}<span class="dots"><i>.</i><i>.</i><i>.</i></span> <span class="live-clock since" data-from="${esc(lastAt || "")}"></span></li>`;
+    return `<span class="st-head">${head}</span><ol>${steps.map((x, j) => `<li class="${j === steps.length - 1 && !lv.done ? "cur" : ""}" title="${esc(x.text)}">${hhmm(toDate(x.at))} · ${esc(x.text)}</li>`).join("")}${think}</ol>`;
   };
   const statusHtml = (m, i) => (i !== lastStatus || !steps.length)
     ? `<div class="bubble tool status old"><span class="st-head">${wa(m.content)}</span><span class="meta">${fmt(m.timestamp)}</span></div>`
@@ -669,6 +672,12 @@ function renderOffline(d) {
   $("chat").innerHTML = `<p class="empty">${L("אין חיבור למחשב השני", "No connection to the other computer")}</p>`;
 }
 load(); setInterval(load, 10000);
+// live clocks in the working status bubble tick every second between data refreshes
+setInterval(() => document.querySelectorAll(".live-clock[data-from]").forEach(el => {
+  const t = toDate(el.dataset.from); if (isNaN(t)) return;
+  const sec = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  el.textContent = (el.classList.contains("since") ? L("כבר ", "for ") : "") + Math.floor(sec / 60) + ":" + String(sec % 60).padStart(2, "0");
+}), 1000);
 
 // ---- right-click menu: copy / cut / paste / select all, copy a whole message, move it to the input box ----
 let ctxTarget = null, ctxBubble = null;
