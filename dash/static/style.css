@@ -489,3 +489,6 @@ p.help { margin: 4px 0 0; }
 .cam-box[hidden] { display: none; }
 .cam-box video { max-width: 360px; max-height: 270px; border-radius: 10px; border: 1px solid var(--line); background: #000; }
 .cam-btns { display: flex; gap: 6px; }
+/* online / typing next to the chat name (owner 11.11) */
+.presence { font-size: .8rem; color: var(--muted); white-space: nowrap; }
+.presence.live { color: #25a35a; font-weight: 600; }

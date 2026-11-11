@@ -34,6 +34,7 @@ func registerAllAPI(client *whatsmeow.Client, messageStore *MessageStore) {
 	registerSyncAPI(client)
 	registerExperimentAPI(client)
 	registerHistoryAPI(client)
+	registerPresenceAPI(client)
 
 	// Handler for sending messages
 	http.HandleFunc("/api/send", func(w http.ResponseWriter, r *http.Request) {

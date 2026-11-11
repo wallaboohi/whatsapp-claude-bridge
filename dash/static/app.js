@@ -174,6 +174,23 @@ async function upload(file) {
   } catch (e) { toast(L("העלאה נכשלה", "Upload failed")); }
   drawAttach(); return false;
 }
+// online / typing of the open chat, like WhatsApp (owner 11.11). Polled only while the window is visible: the bridge is
+// "available" to WhatsApp only while watched (the phone gets no notifications meanwhile, as with WhatsApp Web).
+async function presenceTick() {
+  const el = $("presence");
+  if (document.hidden || !curChat || curChat === "local" || curPeer !== null) { el.hidden = true; return; }
+  try {
+    const j = await (await fetch(base() + "/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ do: "presence", chat: curChat }) })).json();
+    let txt = "", live = false;
+    if (j.state === "typing") { txt = L("מקליד…", "typing…"); live = true; }
+    else if (j.state === "recording") { txt = L("מקליט…", "recording…"); live = true; }
+    else if (j.online) { txt = L("מחובר", "online"); live = true; }
+    else if (j.last_seen) { const d = new Date(j.last_seen); txt = L("נראה לאחרונה ", "last seen ") + d.toLocaleString("he-IL", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }); }
+    if (live && j.by && curChat.endsWith("@g.us")) txt = (j.by_name || "") + " " + txt;
+    el.textContent = txt.trim(); el.hidden = !txt; el.classList.toggle("live", live);
+  } catch (e) { el.hidden = true; }
+}
+setInterval(presenceTick, 4000);
 // 🎤 record a voice message: second click stops and sends it; the agent transcribes it like a WhatsApp voice note (owner 11.11)
 let rec = null, recTimer = null;
 const mediaErr = e => toast(e && e.name === "NotReadableError"

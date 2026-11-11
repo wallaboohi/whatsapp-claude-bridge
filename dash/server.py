@@ -1614,6 +1614,14 @@ def action(a):
         m = a.get("model", "auto")
         set_model(a.get("chat"), m, a.get("hours") or 0)
         return {"ok": True, "model": m}
+    if kind == "presence":  # owner 11.11: online / typing of the open chat; keeps the bridge "available" while watched
+        chat = a.get("chat") or ""
+        if not chat or chat == "local":
+            return {"known": False}
+        res = bridge("/presence_watch", {"jid": chat}, timeout=10)
+        if res.get("by"):
+            res["by_name"] = names().get(res["by"].split("@")[0]) or ""
+        return res
     if kind == "say_pc":  # a message typed in the dashboard: answered in the dashboard chat (sync=1: also posted to WhatsApp)
         chat = a.get("chat") or primary()
         if chat not in conversations():
