@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>מפת המערכת</title>
+<link rel="stylesheet" href="heebo.css">
+<link rel="stylesheet" href="style.css">
+<style>
+/* system map (owner 10.11 / 11.11): engine shared by both PCs, project data per conversation, data, connections */
+body { margin: 0; background: var(--bg); color: var(--text); font-family: Heebo, system-ui, sans-serif; }
+.map { position: relative; display: grid; grid-template-columns: 1.15fr 1fr 1fr .9fr; gap: 26px; padding: 18px 20px 24px; }
+.lane h3 { margin: 0 0 8px; font-size: .95rem; color: var(--muted); font-weight: 700; }
+.lane h3 small { font-weight: 400; }
+.node { position: relative; z-index: 1; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 9px 12px;
+  margin-bottom: 10px; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+.node.click { cursor: pointer; } .node.click:hover { border-color: var(--brand); }
+.node b { font-size: .92rem; } .node .what { font-size: .78rem; color: var(--muted); margin-top: 2px; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-inline-start: 6px; vertical-align: middle; background: #b8c2cc; }
+.dot.ok { background: #25a35a; } .dot.bad { background: #d9453b; } .dot.wait { background: #e8a33d; } .dot.plan { background: #8c9bab; }
+.machine { border-width: 2px; } .machine.self { border-color: var(--brand); }
+.convs { margin: 8px 0 0; display: flex; flex-direction: column; gap: 5px; }
+.conv { display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: .8rem; padding: 4px 8px;
+  background: var(--surface-2); border-radius: 8px; cursor: pointer; }
+.conv:hover { outline: 1px solid var(--brand); }
+.conv .r { font-size: .74rem; color: var(--info); white-space: nowrap; }
+.engine { border-color: var(--violet); border-width: 2px; }
+.tools { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.tool { font-size: .72rem; background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px; padding: 1px 7px; direction: ltr; }
+.warn { border-color: #e8a33d; background: color-mix(in srgb, #e8a33d 8%, var(--surface)); font-size: .8rem; }
+svg.wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
+svg.wires path { fill: none; stroke: var(--muted); stroke-opacity: .45; stroke-width: 1.6; }
+.top { display: flex; align-items: center; gap: 10px; padding: 12px 20px 0; }
+.top h2 { margin: 0; font-size: 1.15rem; } .top .note { font-size: .8rem; color: var(--muted); }
+.legend { font-size: .75rem; color: var(--muted); padding: 0 20px; }
+</style>
+</head>
+<body>
+<div class="top"><h2>🗺️ מפת המערכת</h2><span class="note" id="at"></span></div>
+<p class="legend">המנוע (יכולות, שיטות וכלים) נשמר בגשר ומשותף לשני המחשבים · המידע של כל פרויקט נשמר בשיחה שלו · לחיצה על שיחה פותחת אותה, על 📜 את כללי הבסיס, על מאגר את התיקייה.</p>
+<div class="map" id="map"><svg class="wires" id="wires"></svg></div>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const dot = st => `<span class="dot ${st}"></span>`;
+const PURPOSE = { "4m": "פרויקט", dev: "פיתוח הגשר", guest: "אורח", general: "כללי", local: "מקומית" };
+const post = msg => { try { parent.postMessage(Object.assign({ from: "system-map" }, msg), "*"); } catch (e) {} };
+
+async function draw() {
+  const m = await (await fetch("/system_map")).json();
+  if (m.error) { $("map").insertAdjacentHTML("beforeend", `<p>${esc(m.error)}</p>`); return; }
+  $("at").textContent = "עודכן " + new Date(m.at).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" });
+  const machines = m.machines.map((x, i) => `
+    <div class="node machine ${x.self ? "self" : ""}" data-wire="m${i}">
+      <b>${x.self ? "🖥️" : "💻"} ${esc(x.name)}</b>${dot(x.online ? "ok" : "bad")}
+      <div class="what">גשר ${dot(x.bridge ? "ok" : "bad")} ${esc(x.bridge_version)} · סוכן ${dot(x.agent ? "ok" : "bad")} · לוח ${esc(x.dash_version)} · קוד ${esc(x.git)}${x.dirty ? " ✎" : ""}</div>
+      <div class="convs">${x.conversations.map(c => `
+        <div class="conv" data-jid="${esc(c.jid)}" data-peer="${x.self ? "" : i - 1}"><span>💬 ${esc(c.name)} <small>· ${esc(PURPOSE[c.purpose] || c.purpose)}</small></span>
+          <span class="r" data-rules="1">📜 כללים</span></div>`).join("")}</div>
+    </div>`).join("");
+  const engine = `
+    <div class="node engine" data-wire="engine"><b>⚙️ המנוע (הגשר)</b>
+      <div class="what">משותף לשני המחשבים · מאגר הקוד hub · עדכון אוטומטי 23:50</div></div>
+    <div class="node" data-wire="e1"><b>📡 גשר ווצאפ (Go)</b><div class="what">חיבור לווצאפ, הודעות, מדיה, טיוטות, מחובר/מקליד</div></div>
+    <div class="node" data-wire="e2"><b>🤖 הסוכן (Python)</b><div class="what">Claude לכל שיחה, תמלול, תזמונים, גיבוי, סנכרון</div></div>
+    <div class="node" data-wire="e3"><b>🪟 לוח הבקרה</b><div class="what">שיחות, מודל, הגדרות, המפה הזו</div></div>
+    <div class="node" data-wire="e4"><b>🧰 כלים</b><div class="tools">${m.tools.map(t => `<span class="tool" title="${esc(t.what)}">${esc(t.name.replace(/\.py$/, ""))}</span>`).join("")}</div></div>`;
+  const data = m.data.map((d, i) => `
+    <div class="node ${d.exists ? "click" : ""}" data-wire="d${i}" ${d.exists ? `data-path="${esc(d.path)}"` : ""}>
+      <b>🗄️ ${esc(d.name)}</b>${dot(d.path ? (d.exists ? "ok" : "bad") : "plan")}<div class="what">${esc(d.what)}</div></div>`).join("");
+  const links = m.links.map((l, i) => `
+    <div class="node" data-wire="l${i}"><b>🔌 ${esc(l.name)}</b>${dot(l.state)}<div class="what">${esc(l.detail)}</div></div>`).join("")
+    + (m.overlaps.length ? `<h3 style="margin-top:16px">⚠️ לסידור <small>(כפילויות / פיצול)</small></h3>` + m.overlaps.map(o => `<div class="node warn">${esc(o)}</div>`).join("") : "");
+  $("map").insertAdjacentHTML("beforeend", `
+    <div class="lane"><h3>מחשבים ושיחות <small>(המידע של כל פרויקט)</small></h3>${machines}</div>
+    <div class="lane"><h3>מנוע <small>(יכולות, שיטות וכלים)</small></h3>${engine}</div>
+    <div class="lane"><h3>מידע ומאגרים</h3>${data}</div>
+    <div class="lane"><h3>חיבורים</h3>${links}</div>`);
+  document.querySelectorAll(".conv").forEach(el => el.onclick = e => post({ open: el.dataset.jid, peer: el.dataset.peer, rules: !!e.target.closest("[data-rules]") }));
+  document.querySelectorAll("[data-path]").forEach(el => el.onclick = () =>
+    fetch("/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ do: "open_path", path: el.dataset.path }) }));
+  wires(m);
+}
+
+function wires(m) {  // machines -> engine -> each part; engine parts -> data and connections
+  const svg = $("wires"), box = $("map").getBoundingClientRect();
+  const at = (k, side) => { const el = document.querySelector(`[data-wire="${k}"]`); if (!el) return null;
+    const r = el.getBoundingClientRect(); return { x: (side === "r" ? r.right : r.left) - box.left, y: r.top + r.height / 2 - box.top }; };
+  const line = (a, b) => a && b ? `<path d="M${a.x},${a.y} C${(a.x + b.x) / 2},${a.y} ${(a.x + b.x) / 2},${b.y} ${b.x},${b.y}"/>` : "";
+  let p = "";
+  m.machines.forEach((_, i) => p += line(at(`m${i}`, "l"), at("engine", "r")));
+  ["e1", "e2", "e3", "e4"].forEach(k => p += line(at("engine", "r"), at(k, "r")));
+  m.data.forEach((_, i) => p += line(at(i < 3 ? "e1" : "e2", "l"), at(`d${i}`, "r")));
+  m.links.forEach((_, i) => p += line(at(`d${Math.min(i, m.data.length - 1)}`, "l"), at(`l${i}`, "r")));
+  svg.innerHTML = p;
+}
+draw();
+addEventListener("resize", () => fetch("/system_map").then(r => r.json()).then(wires));
+</script>
+</body>
+</html>

@@ -6,6 +6,7 @@ and by the agent on http://127.0.0.1:8770. Bound to localhost only.
 """
 import datetime as dt
 import json
+import glob
 import mimetypes
 import os
 import sqlite3
@@ -529,6 +530,84 @@ def brief():
             "agent_alive": alive, "heartbeat": hb, "listen_paused": kv("listen_paused") or "", "groups": gl, "tunnels": tunnels,
             "services": services(), "backup_dir": backup_dir_abs(), "cost": cost_summary(),
             "host_label": c.get("host_label") or "", "account": c.get("claude_account") or "", "git": git_state()}
+
+
+def _first_doc_line(path):
+    """First line of a tool's docstring: what it is for (system map)."""
+    try:
+        txt = open(path, encoding="utf-8").read(3000)
+        m = re.search(r'"""(.+?)(?:\n\n|""")', txt, re.S)
+        return (m.group(1).strip() if m else "")[:140]
+    except OSError:
+        return ""
+
+
+TOOL_HE = {"gmail.py": "מייל: חיפוש, קריאה, קבצים מצורפים וטיוטות (בלי שליחה)", "gsheet.py": "קריאת גיליון מקטע D",
+           "gsheet_write.py": "כתיבה לגיליון — רק אחרי אישור", "migrate_lid.py": "איחוד שיחות LID למספר טלפון (חד-פעמי)",
+           "phone_sync.py": "תיקיית הטלפון וקבצים ישנים מהטלפון", "release.py": "שחרור גרסה של הכלי",
+           "release_dash.py": "בניית הלוח", "selftest.py": "בדיקה עצמית מלאה", "setup.py": "אשף התקנה",
+           "update.py": "עדכון אוטומטי עם חזרה לאחור", "wa_admin.py": "פעולות ניהול בגשר (קבוצות, תמונות)",
+           "wa_draft_cancel.py": "ביטול טיוטות", "wa_history.py": "טעינת היסטוריה ישנה מהטלפון",
+           "wa_push.py": "התראה לטלפון", "wa_remind.py": "תזכורות", "wa_rich.py": "אירוע, תיוג, מיקום",
+           "wa_send.py": "שליחה (טיוטה לאנשים אחרים)", "install_dash.ps1": "התקנת הלוח"}
+
+
+def map_data():
+    """The data stores on the map (also the only paths the map may open in Explorer)."""
+    c = cfg()
+    home = os.path.join(ROOT, "agent", "home")
+    return [{"name": "messages.db", "what": "כל הודעות הווצאפ, קבוצות, סקרים, טיוטות", "path": paths()["msg"]},
+            {"name": "agent.db", "what": "פקודות, תמלולים, עלויות, שיחות מקומיות", "path": paths()["agent"]},
+            {"name": "whatsapp.db", "what": "אנשי קשר (השמות מהטלפון), LID ↔ מספר", "path": paths()["wa"]},
+            {"name": "תיקיית הבית", "what": "handoff, מילון תמלול, נהלים (ציפורה), קבצים משותפים", "path": home},
+            {"name": "תיקיית הטלפון", "what": "עותק יומי של מדיה ומסמכים מהטלפון", "path": os.path.expanduser((c.get("phone") or {}).get("data_dir") or "~/phone-data")},
+            {"name": "גיבוי יומי", "what": "גיבוי 03:00", "path": backup_dir_abs()},
+            {"name": "hub (קוד משותף)", "what": "מקור האמת לקוד, בלפטופ", "path": ""},
+            {"name": "GitHub", "what": "פרסום יומי 23:30", "path": ""}]
+
+
+def system_map():
+    """Owner 10.11/11.11: the live map of the whole system, opened from the dashboard (and as an image for WhatsApp).
+    Engine = capabilities, methods and tools — kept in the bridge's code, shared by both PCs; project data = per
+    conversation; data stores; outside connections; overlaps that need cleaning. Built from the current state each time."""
+    ps = peers_status()
+    machines = []
+    for who, b in [("self", ps["self"])] + [(x["name"], x.get("brief")) for x in ps["peers"]]:
+        b = b or {}
+        machines.append({"name": (b.get("host_label") or b.get("machine") or who) if who == "self" else who,
+                         "self": who == "self", "online": bool(b), "bridge": bool((b.get("bridge") or {}).get("connected")),
+                         "bridge_version": (b.get("bridge") or {}).get("version") or "", "agent": bool(b.get("agent_alive")),
+                         "dash_version": b.get("dash_version") or "", "git": ((b.get("git") or {}).get("head") or "")[:7],
+                         "dirty": (b.get("git") or {}).get("dirty") or 0, "account": b.get("account") or "",
+                         "conversations": [{"jid": g["jid"], "name": g["name"], "purpose": g.get("purpose", "")}
+                                           for g in (b.get("groups") or [])]})
+    tools = [{"name": os.path.basename(f), "what": TOOL_HE.get(os.path.basename(f)) or _first_doc_line(f)}
+             for f in sorted(glob.glob(os.path.join(ROOT, "tools", "*.py")))]
+    data = map_data()
+    for d in data:
+        d["exists"] = bool(d["path"]) and os.path.exists(d["path"])
+    secrets = os.path.join(ROOT, "secrets")
+    try:
+        ph = json.load(open(os.path.join(data[4]["path"], "_sync_state.json"), encoding="utf-8"))
+    except (OSError, ValueError):
+        ph = {}
+    links = [{"name": "טלפון (adb דרך Tailscale)", "state": "ok" if ph.get("last_sync") else "wait", "detail": ph.get("last_sync") or ph.get("last_error") or "עוד לא סונכרן"},
+             {"name": "Gmail", "state": "ok" if glob.glob(os.path.join(secrets, "gmail-*.json")) and os.path.exists(os.path.join(secrets, "gmail-client.json")) else "wait",
+              "detail": "מחובר" if os.path.exists(os.path.join(secrets, "gmail-client.json")) else "ממתין לקובץ gmail-client.json"},
+             {"name": "Google Sheets", "state": "ok" if os.path.exists(os.path.join(secrets, "google-sa.json")) else "wait", "detail": "חשבון שירות"},
+             {"name": "TrueNAS", "state": "plan", "detail": "מתוכנן: גיבוי והעברת נתונים"}]
+    overlaps = []
+    for d in ("lodging_meals", "lunch", "fleet", "failover", "agent/failover"):
+        if os.path.isdir(os.path.join(ROOT, d)):
+            overlaps.append(f"{d}/ קיים במחשב הזה מחוץ למאגר הקוד (כלי שצריך לעבור למנוע)")
+    heads = {m["git"] for m in machines if m["online"] and m["git"]}
+    if len(heads) > 1:
+        overlaps.append("המחשבים על גרסאות קוד שונות: " + ", ".join(sorted(heads)))
+    vers = {m["bridge_version"] for m in machines if m["online"] and m["bridge_version"]}
+    if len(vers) > 1:
+        overlaps.append("גרסאות גשר שונות: " + ", ".join(sorted(vers)))
+    return {"at": dt.datetime.now().isoformat(timespec="seconds"), "machines": machines, "tools": tools, "data": data,
+            "links": links, "overlaps": overlaps}
 
 
 def peers_status():
@@ -1614,6 +1693,13 @@ def action(a):
         m = a.get("model", "auto")
         set_model(a.get("chat"), m, a.get("hours") or 0)
         return {"ok": True, "model": m}
+    if kind == "open_path":  # system map: open one of its data stores in Explorer (only those, nothing else)
+        allowed = {d["path"] for d in map_data() if d["path"]}
+        pth = a.get("path") or ""
+        if pth not in allowed or not os.path.exists(pth):
+            return {"error": "not a map data store"}
+        subprocess.Popen(["explorer.exe", "/select," + pth if os.path.isfile(pth) else pth])
+        return {"ok": True}
     if kind == "presence":  # owner 11.11: online / typing of the open chat; keeps the bridge "available" while watched
         chat = a.get("chat") or ""
         if not chat or chat == "local":
@@ -2012,6 +2098,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/brief":
             try:
                 return self.send_json(brief())
+            except Exception as e:
+                return self.send_json({"error": str(e)}, 500)
+        if path == "/system_map":
+            try:
+                return self.send_json(system_map())
             except Exception as e:
                 return self.send_json({"error": str(e)}, 500)
         if path == "/peers":

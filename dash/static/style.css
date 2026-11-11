@@ -492,3 +492,8 @@ p.help { margin: 4px 0 0; }
 /* online / typing next to the chat name (owner 11.11) */
 .presence { font-size: .8rem; color: var(--muted); white-space: nowrap; }
 .presence.live { color: #25a35a; font-weight: 600; }
+/* system map overlay (owner 11.11) */
+.map-overlay { position: fixed; inset: 18px; z-index: 50; background: var(--bg); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 10px 40px rgba(0,0,0,.25); overflow: hidden; }
+.map-overlay[hidden] { display: none; }
+.map-overlay iframe { width: 100%; height: 100%; border: 0; }
+.map-overlay #mapClose { position: absolute; top: 10px; inset-inline-end: 14px; z-index: 2; }

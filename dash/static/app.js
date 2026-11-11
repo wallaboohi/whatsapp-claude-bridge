@@ -634,6 +634,17 @@ function showRules() {
 }
 function fmtRuleAt(s) { const m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?: (\d{2}:\d{2}))?/); return m ? `${m[3]}.${m[2]}.${m[1].slice(2)}${m[4] ? " " + m[4] : ""}` : s; }
 $("rulesBtn").onclick = showRules;
+// 🗺️ system map: a live page (map.html) over the dashboard; a click on a conversation opens it here (owner 11.11)
+$("mapBtn").onclick = () => { $("mapFrame").src = "map.html?t=" + Date.now(); $("mapOverlay").hidden = false; };
+$("mapClose").onclick = () => { $("mapOverlay").hidden = true; $("mapFrame").src = "about:blank"; };
+addEventListener("message", async e => {
+  const d = e.data || {}; if (d.from !== "system-map" || !d.open) return;
+  $("mapOverlay").hidden = true;
+  curChat = d.open; curPeer = d.peer === "" || d.peer === undefined ? null : +d.peer;
+  try { localStorage.setItem("wa-dash-chat", curChat); localStorage.setItem("wa-dash-peer", curPeer === null ? "" : String(curPeer)); } catch (er) {}
+  const c = $("chat"); c._init = false; c.innerHTML = ""; await load();
+  if (d.rules) showRules();
+});
 $("tabs").addEventListener("click", e => {
   const t = e.target.closest(".tab"); if (!t) return;
   curChat = t.dataset.chat; curPeer = t.dataset.peer === "" ? null : +t.dataset.peer;

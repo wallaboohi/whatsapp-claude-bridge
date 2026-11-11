@@ -89,10 +89,10 @@ def local_path(remote):
 
 def pull(paths):
     """Copy phone files into DATA, keeping their dates: one tar stream per batch (much faster than adb pull per file)."""
-    done = 0
+    done, failed = 0, 0
     os.makedirs(DATA, exist_ok=True)
-    for i in range(0, len(paths), 1000):
-        batch = paths[i:i + 1000]
+    for i in range(0, len(paths), 300):
+        batch = paths[i:i + 300]
         listfile = "/data/local/tmp/phone_sync.list"
         tmp = os.path.join(DATA, "_list.txt")
         with open(tmp, "w", encoding="utf-8", newline="\n") as f:
@@ -101,19 +101,26 @@ def pull(paths):
         os.remove(tmp)
         proc = subprocess.Popen([adb_exe(), "-s", DEVICE, "exec-out", f"cd /sdcard && tar -cf - -T {listfile}"],
                                 stdout=subprocess.PIPE, creationflags=NO_WINDOW)
-        with tarfile.open(fileobj=proc.stdout, mode="r|") as tar:
-            for m in tar:
-                if not m.isfile():
-                    continue
-                dst = os.path.join(DATA, *m.name.split("/"))
-                if not os.path.abspath(dst).startswith(os.path.abspath(DATA) + os.sep):
-                    continue  # never write outside the data folder
-                os.makedirs(os.path.dirname(dst), exist_ok=True)
-                with tar.extractfile(m) as src, open(dst + ".part", "wb") as out:
-                    shutil.copyfileobj(src, out)
-                os.replace(dst + ".part", dst)
-                os.utime(dst, (m.mtime, m.mtime))
-                done += 1
+        try:
+            with tarfile.open(fileobj=proc.stdout, mode="r|") as tar:
+                for m in tar:
+                    if not m.isfile():
+                        continue
+                    dst = os.path.join(DATA, *m.name.split("/"))
+                    if not os.path.abspath(dst).startswith(os.path.abspath(DATA) + os.sep):
+                        continue  # never write outside the data folder
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    with tar.extractfile(m) as src, open(dst + ".part", "wb") as out:
+                        shutil.copyfileobj(src, out)
+                    os.replace(dst + ".part", dst)
+                    os.utime(dst, (m.mtime, m.mtime))
+                    done += 1
+        except (tarfile.TarError, OSError) as e:  # the stream broke (network / phone): the next run continues from here
+            failed += 1
+            print("batch interrupted:", e, flush=True)
+            proc.kill()
+            if failed >= 3 or not connect():
+                break
         proc.wait()
     return done
 
@@ -151,6 +158,8 @@ def sync(any_net=False):
             want.append(path)
     os.makedirs(DATA, exist_ok=True)
     got = pull(want) if want else 0
+    if got < len(want):
+        skipped += len(want) - got  # not copied this time (interrupted): counts as "not done yet"
     st = load_state()
     st.update({"last_sync": dt.datetime.now().isoformat(timespec="seconds"), "network": "wifi" if wifi else "mobile",
                "copied": got, "skipped_big_on_mobile": skipped, "last_error": ""})
