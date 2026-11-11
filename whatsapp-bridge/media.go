@@ -222,7 +222,17 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 		var newPath string
 		newPath, err = requestMediaReupload(client, messageStore, messageID, chatJID, mediaKey)
 		if err == nil {
-			mediaData, err = downloadReuploadedMedia(client, newPath, mediaKey, waMediaType, mediaType)
+			// the phone re-uploads the same encrypted blob under a new path, so the stored hashes still apply
+			// (whatsmeow's documented MediaRetry flow); fall back to the new file's own hash only if that fails (owner 11.11)
+			mediaData, err = client.DownloadMediaWithPath(context.Background(), newPath, fileEncSHA256, fileSHA256, mediaKey, waMediaType, "", false)
+			if err != nil {
+				fmt.Printf("Re-uploaded media with the stored hashes failed (%v), trying the new file's hash...\n", err)
+				mediaData, err = downloadReuploadedMedia(client, newPath, mediaKey, waMediaType, mediaType)
+			}
+			if s, ok := lastRetrySecret.LoadAndDelete(messageID); ok && err != nil && len(s.([]byte)) == 32 {
+				fmt.Printf("Trying the re-upload's message secret as the media key...\n")
+				mediaData, err = downloadReuploadedMedia(client, newPath, s.([]byte), waMediaType, mediaType)
+			}
 		}
 	}
 	if err != nil {
@@ -255,11 +265,15 @@ func downloadReuploadedMedia(client *whatsmeow.Client, directPath string, mediaK
 		return nil, fmt.Errorf("failed to read re-uploaded media: %v", err)
 	}
 	encHash := sha256.Sum256(raw)
+	fmt.Printf("Re-uploaded file: %d bytes, enc sha256 %x\n", len(raw), encHash[:4])
 	return client.DownloadMediaWithPath(context.Background(), directPath, encHash[:], nil, mediaKey, waMediaType, mmsType, true)
 }
 
 // mediaRetryWaiters maps a message ID to the channel waiting for its MediaRetry event
 var mediaRetryWaiters sync.Map
+
+// lastRetrySecret keeps the message secret the phone sent with a re-upload (experiment, owner 11.11)
+var lastRetrySecret sync.Map
 
 // requestMediaReupload asks the phone to re-upload expired media and returns the new direct path
 func requestMediaReupload(client *whatsmeow.Client, messageStore *MessageStore, messageID, chatJID string, mediaKey []byte) (string, error) {
@@ -308,6 +322,10 @@ func requestMediaReupload(client *whatsmeow.Client, messageStore *MessageStore, 
 		}
 		if retryData.GetResult() != waMmsRetry.MediaRetryNotification_SUCCESS {
 			return "", fmt.Errorf("phone could not re-upload media: %s", retryData.GetResult())
+		}
+		if s := retryData.GetMessageSecret(); len(s) > 0 {
+			fmt.Printf("Re-upload came with a message secret (%d bytes)\n", len(s))
+			lastRetrySecret.Store(messageID, s)
 		}
 		return retryData.GetDirectPath(), nil
 	case <-time.After(45 * time.Second):
