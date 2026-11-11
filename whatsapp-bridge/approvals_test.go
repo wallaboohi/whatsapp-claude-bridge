@@ -65,8 +65,8 @@ func TestDraftCardText(t *testing.T) {
 	// owner 10.11: a long Hebrew text makes a link the phone cuts (~400 chars) -> no link, the text comes separately
 	long := strings.Repeat("ציון, בקובץ של החברה אין דיווח לינה. ", 3)
 	lc := draftCardText(22, "ציון", who, long, "")
-	if strings.Contains(lc, "?text=") || !strings.Contains(lc, "להעתקה בהודעה הבאה") || !needsCopyText(who, long, "") {
-		t.Fatalf("long text: no pre-typed link, copy text promised:\n%s", lc)
+	if strings.Contains(lc, "?text=") || strings.Contains(lc, "להעתקה") || !needsCopyText(who, long, "") {
+		t.Fatalf("long text: no pre-typed link and no second copy (owner 11.11):\n%s", lc)
 	}
 	if needsCopyText(who, "שלום עולם", "") {
 		t.Fatal("a short text keeps its link")

@@ -187,12 +187,11 @@ func draftCardText(draftID int64, name string, jid types.JID, message, mediaPath
 			card.WriteString("\n\n🔗 לשליחה בעצמך (פותח את השיחה עם הטקסט מוכן):\n")
 			card.WriteString(waLink(jid, message))
 		} else {
-			// owner 10.11: WhatsApp on the phone cuts a tapped link at ~400 characters (≈60 Hebrew letters), so the
-			// pre-typed text arrived cut. Long texts: the full text comes as the next message, to copy and paste.
-			card.WriteString("\n\n📋 הטקסט המלא להעתקה בהודעה הבאה (לחיצה ארוכה ← העתק). השיחה: https://wa.me/" + jid.User)
+			// owner 10.11: WhatsApp on the phone cuts a tapped link at ~400 characters, so long texts get no
+			// pre-typed link. Owner 11.11: and no second copy of the text either (every draft arrived twice) — the
+			// text is in the card and ✅ sends it.
+			card.WriteString("\n\n🔗 השיחה: https://wa.me/" + jid.User)
 		}
-	} else {
-		card.WriteString("\n📋 הטקסט המלא להעתקה בהודעה הבאה (לחיצה ארוכה ← העתק)")
 	}
 	return card.String()
 }
@@ -245,11 +244,6 @@ func makeDraftKind(client *whatsmeow.Client, p SendPolicy, jid types.JID, messag
 	}
 	if ok && mediaPath != "" {
 		sendWhatsAppMessage(client, p.ControlGroup, "🤖 📎 קובץ לטיוטה → "+name, mediaPath)
-	}
-	if ok && kind == "" && strings.TrimSpace(message) != "" && needsCopyText(jid, message, mediaPath) {
-		// the exact text alone (no prefix), so long-press → copy gives just the message. The agent ignores it because
-		// it equals a pending draft's text (agent.py is_draft_copy).
-		sendWhatsAppMessage(client, p.ControlGroup, message, "")
 	}
 	if !ok {
 		return false, "Draft could not be posted: " + res
