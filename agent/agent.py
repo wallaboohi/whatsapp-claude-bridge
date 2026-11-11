@@ -1182,8 +1182,9 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
         proc.stdin.close()
     except OSError as e:
         log("claude stdin failed", e)
-    killer = threading.Timer(timeout, _kill_tree, args=(proc,))
-    killer.start()
+    killer = threading.Timer(timeout, _kill_tree, args=(proc,)) if timeout else None  # None = no time cap (owner 11.11)
+    if killer:
+        killer.start()
     stopped = threading.Event()
     if stoppable:
         with _active_lock:
@@ -1230,7 +1231,8 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
                     on_stage(st, det)
         proc.wait()
     finally:
-        killer.cancel()
+        if killer:
+            killer.cancel()
         if stoppable:
             with _active_lock:
                 if _active_runs.get(chat) == t0:
@@ -2189,13 +2191,14 @@ def release_limit_waiters():
 
 
 def run_timeout_minutes(chat):
-    """Time limit for one owner command: groups.json "timeout_minutes" for this conversation, else config
-    "claude_timeout_minutes" (default 15). Long development work gets more (owner request 08.11)."""
-    g = load_groups().get(chat) or {}
+    """Time limit for one owner command, or None = no limit. Owner 11.11: no time cap — a command may run an hour, two or
+    five if the work needs it (stop it with the dashboard stop button). Only an explicit config "claude_timeout_minutes" > 0 brings a cap back;
+    the old per-group "timeout_minutes" is ignored."""
     try:
-        return max(1, int(g.get("timeout_minutes") or CFG.get("claude_timeout_minutes") or 15))
+        n = int(CFG.get("claude_timeout_minutes") or 0)
     except (TypeError, ValueError):
-        return 15
+        n = 0
+    return n if n > 0 else None
 
 
 def run_command(row):
@@ -2274,7 +2277,7 @@ def run_command(row):
         limit_min = run_timeout_minutes(chat)
         try:
             answer = claude(prompt, model=model, session=not CFG.get("fresh_sessions"), on_stage=status.set_stage, chat=chat,
-                            raw=raw_text(text.lstrip("!")), timeout=limit_min * 60)
+                            raw=raw_text(text.lstrip("!")), timeout=limit_min * 60 if limit_min else None)
         except LimitHit as e:
             parked = True
             wait_for_limit(cid, chat, mid, src, e.until)
@@ -2288,7 +2291,7 @@ def run_command(row):
         rec = None if stopped else recommend(text, model, streak)
         kv_set(K("last_recommend", chat), json.dumps({"model": rec[0], "why": rec[1], "at": dt.datetime.now().isoformat(timespec="seconds")}, ensure_ascii=False) if rec else "")
         out = answer or T["failed"]
-        if not answer and time.time() - started >= limit_min * 60 - 10:  # killed by the time limit, not a crash
+        if not answer and limit_min and time.time() - started >= limit_min * 60 - 10:  # killed by the time limit, not a crash
             out = (f"⏱ נעצרתי אחרי {limit_min} דקות (תקרת הזמן של השיחה הזו — אפשר לשנות בלוח). מה שכבר בוצע נשמר; "
                    "כתוב \"המשך\" ואמשיך מאותה נקודה.")
         if rm and rm.group(2).strip():  # owner 09.11: every rule answer says how many rules there are now

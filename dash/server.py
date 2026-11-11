@@ -282,7 +282,7 @@ SETTINGS = {
     "transcribe": ("bool", True, None), "transcribe_all_chats": ("bool", True, None), "fresh_sessions": ("bool", False, None),
     "reply_italic": ("bool", True, None), "quote_replies": ("bool", True, None), "strict_mcp": ("bool", True, None),
     "daily_budget_usd": ("num", 20, (0, 1000)), "total_daily_budget_usd": ("num", None, (0, 5000)),
-    "session_max_runs": ("int", 60, (1, 1000)), "claude_timeout_minutes": ("int", 15, (1, 240)), "disconnect_alert_minutes": ("int", 10, (1, 1440)),
+    "session_max_runs": ("int", 60, (1, 1000)), "claude_timeout_minutes": ("int", 0, (0, 1440)), "disconnect_alert_minutes": ("int", 10, (1, 1440)),
     "backup_keep_days": ("int", 14, (1, 365)), "backup_media_days": ("int", 90, (0, 3650)), "reconnect_settle_seconds": ("int", 45, (0, 600)),
     "light_model": ("model", "haiku", None), "claude_model": ("model", "sonnet", None), "deep_model": ("model", "opus", None),
     "permission_mode": ("choice", "auto", PERM_MODES), "voice_name": ("voice", "pt-BR-ThalitaMultilingualNeural", VOICES), "voice_style": ("vstyle", "normal", VOICE_STYLES), "group_name_model": ("bool", True, None),

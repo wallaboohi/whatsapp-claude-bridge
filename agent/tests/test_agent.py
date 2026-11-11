@@ -1498,3 +1498,13 @@ def test_guest_group_isolation(guest, monkeypatch):
     with pytest.raises(RuntimeError):
         mod._run_claude("hi", "haiku", None, 10, chat=DEV)
     assert seen["cwd"] == mod.HOME and "--restricted" not in seen["cmd"] and "--chrome" in seen["cmd"]
+
+
+def test_no_time_cap_by_default(agent, monkeypatch):
+    """Owner 11.11: no time cap on a command unless config claude_timeout_minutes > 0; per-group values are ignored."""
+    agent, _ = agent
+    monkeypatch.setattr(agent, "load_groups", lambda: {"g": {"timeout_minutes": 60}})
+    monkeypatch.setitem(agent.CFG, "claude_timeout_minutes", 0)
+    assert agent.run_timeout_minutes("g") is None
+    monkeypatch.setitem(agent.CFG, "claude_timeout_minutes", 30)
+    assert agent.run_timeout_minutes("g") == 30
