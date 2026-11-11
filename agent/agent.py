@@ -4327,7 +4327,26 @@ def reminders_check():
 
 
 def signin_check():
-    """Once a day: warn the owner when Claude Code's sign-in on this PC ends within 3 days (claude auth login)."""
+    """Once a day: warn the owner when Claude Code's sign-in on this PC ends within 3 days (claude auth login).
+    Owner 11.11: the exact end comes from `claude auth status` (loginExpiresAt), warned 5 days ahead; the old estimate
+    from the run output is only the fallback."""
+    try:
+        p = subprocess.run([shutil.which("claude") or "claude", "auth", "status"], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=60, creationflags=NO_WINDOW)
+        exp = (json.loads(p.stdout or "{}") or {}).get("loginExpiresAt")
+    except Exception:
+        exp = None
+    if exp:
+        end = dt.datetime.fromisoformat(exp.replace("Z", "+00:00")).astimezone()
+        kv_set("signin_expires", end.isoformat(timespec="minutes"))
+        if (end.date() - dt.date.today()).days <= 5:
+            push("⚠️ צריך להתחבר מחדש ל-Claude במחשב (claude auth login)", PRIMARY, "fault")
+            _ctx.chat = PRIMARY
+            try:
+                reply(f"⚠️ ההתחברות של Claude במחשב הזה נגמרת ב-{end:%d.%m %H:%M}. הרץ במחשב: claude auth login")
+            finally:
+                _ctx.chat = None
+        return
     v = kv_get("signin_ends") or ""
     if "|" not in v:
         return
