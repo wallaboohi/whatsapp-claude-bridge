@@ -136,10 +136,11 @@ func sendCore(client *whatsmeow.Client, recipient string, message string, mediaP
 			mediaType = whatsmeow.MediaVideo
 			mimeType = "video/quicktime"
 
-		// Document types (for any other file type)
+		// Document types (for any other file type). Owner 11.11: a PDF went out as application/octet-stream with no file
+		// name, and the site manager's phone could not open it — the real MIME type and the file name are set.
 		default:
 			mediaType = whatsmeow.MediaDocument
-			mimeType = "application/octet-stream"
+			mimeType = docMime(fileExt)
 		}
 
 		// Upload media to WhatsApp servers
@@ -207,7 +208,8 @@ func sendCore(client *whatsmeow.Client, recipient string, message string, mediaP
 			}
 		case whatsmeow.MediaDocument:
 			msg.DocumentMessage = &waProto.DocumentMessage{
-				Title:         proto.String(mediaPath[strings.LastIndex(mediaPath, "/")+1:]),
+				Title:         proto.String(filepath.Base(mediaPath)),
+				FileName:      proto.String(filepath.Base(mediaPath)),
 				Caption:       proto.String(message),
 				Mimetype:      proto.String(mimeType),
 				URL:           &resp.URL,
@@ -404,4 +406,31 @@ func placeholderWaveform(duration uint32) []byte {
 	}
 
 	return waveform
+}
+
+// docMime: the MIME type of a document by extension (phones open a PDF only when it is labelled application/pdf).
+func docMime(ext string) string {
+	switch ext {
+	case "pdf":
+		return "application/pdf"
+	case "xlsx":
+		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+	case "xls":
+		return "application/vnd.ms-excel"
+	case "docx":
+		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	case "doc":
+		return "application/msword"
+	case "pptx":
+		return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+	case "csv":
+		return "text/csv"
+	case "txt", "md":
+		return "text/plain"
+	case "zip":
+		return "application/zip"
+	case "html", "htm":
+		return "text/html"
+	}
+	return "application/octet-stream"
 }

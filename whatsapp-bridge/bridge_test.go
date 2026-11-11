@@ -114,3 +114,9 @@ func TestGroupName(t *testing.T) {
 		t.Fatal("101 chars should be rejected (WhatsApp limit is 100)")
 	}
 }
+
+func TestDocMime(t *testing.T) {
+	if docMime("pdf") != "application/pdf" || docMime("xlsx") == "application/octet-stream" || docMime("bin") != "application/octet-stream" {
+		t.Fatal("document MIME types (owner 11.11: a PDF must be application/pdf so phones open it)")
+	}
+}
