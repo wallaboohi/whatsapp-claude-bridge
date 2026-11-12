@@ -1588,3 +1588,13 @@ def test_edit_pairs_learns_word_swaps(agent):
     assert mod.edit_pairs("חמה של נדב תוקן", "המה של נדב תוקן") == [("חמה", "המה")]
     assert mod.edit_pairs("שלח ב 9:15", "שלח ב 9:20") == []          # numbers are not vocabulary
     assert mod.edit_pairs("אותו דבר", "אותו דבר") == []
+
+
+def test_bridge_rules_in_every_conversation(agent, monkeypatch):
+    """Owner 11.11: the bridge-wide rules (home/bridge_rules.md) reach every conversation's prompt."""
+    agent, _ = agent
+    with open(os.path.join(agent.HOME, agent.BRIDGE_RULES), "w", encoding="utf-8") as f:
+        f.write("- כלל לדוגמה")
+    assert "כלל לדוגמה" in agent.group_prompt(agent.PRIMARY)
+    monkeypatch.setattr(agent, "load_groups", lambda: {"x@g.us": {"name": "x", "purpose": "dev"}})
+    assert "כלל לדוגמה" in agent.group_prompt("x@g.us")

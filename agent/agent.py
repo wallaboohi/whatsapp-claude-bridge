@@ -785,17 +785,31 @@ def rules_text(chat):
         return ""
 
 
+BRIDGE_RULES = "bridge_rules.md"  # owner 11.11: the rules for the whole bridge live here (home_sync shares it), not in Claude's memory
+
+
+def bridge_rules_prompt():
+    try:
+        txt = open(os.path.join(HOME, BRIDGE_RULES), encoding="utf-8").read().strip()
+    except OSError:
+        return ""
+    return f"כללי הגשר (לכל השיחות; כלל חדש לכל הגשר נכתב ב-{BRIDGE_RULES}, לא בזיכרון הפרטי):\n{txt}" if txt else ""
+
+
 def group_prompt(chat):
-    """Extra system prompt: the conversation's base-rules file (rules_rel) for every conversation; non-primary ones also get
-    their name/purpose and hand-off file name. None when there is nothing to add."""
+    """Extra system prompt: the bridge-wide rules (bridge_rules.md; not for guests) and the conversation's base-rules file
+    (rules_rel) for every conversation; non-primary ones also get their name/purpose and hand-off file name. None when
+    there is nothing to add."""
+    common = "" if guest_cfg(chat) else bridge_rules_prompt()
     if not chat or chat == PRIMARY:
         try:
             own = open(os.path.join(HOME, rules_rel(PRIMARY)), encoding="utf-8").read().strip()
         except OSError:
             own = ""
-        return f"כללי בסיס לשיחה הזו ({rules_rel(PRIMARY)}):\n{own}" if own else None
+        out = "\n\n".join(x for x in (common, f"כללי בסיס לשיחה הזו ({rules_rel(PRIMARY)}):\n{own}" if own else "") if x)
+        return out or None
     g = load_groups().get(chat) or {}
-    parts = [f"שיחה: {g.get('name', chat)} (מטרה: {g.get('purpose', '')}). זו שיחה נפרדת — לכל שיחה סשן, הוראות ומודל משלה."]
+    parts = ([common] if common else []) + [f"שיחה: {g.get('name', chat)} (מטרה: {g.get('purpose', '')}). זו שיחה נפרדת — לכל שיחה סשן, הוראות ומודל משלה."]
     try:
         parts.append(open(os.path.join(HOME, rules_rel(chat, g)), encoding="utf-8").read().strip())
     except OSError:
