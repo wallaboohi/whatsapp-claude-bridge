@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 import sys
+import time
 
 import pytest
 
@@ -1614,3 +1615,20 @@ def test_weekly_limit_uses_meter_reset_and_bridge_text(agent, monkeypatch):
     assert "המגבלה השבועית" in txt and "שבועית 100%" in txt and "5 שעות 0%" in txt and "הודעה מהגשר" in txt
     monkeypatch.setattr(mod, "claude_usage", lambda max_age=120: None)
     assert mod.meter_reset("hit your limit") is None
+
+
+def test_own_voice_echo_is_not_a_command(agent):
+    """Owner 13.11: the 🛞 reading we sent came back as the owner's audio message and was answered as if he had spoken."""
+    mod, db = agent
+    db.execute("ALTER TABLE messages ADD COLUMN file_length INTEGER")
+    db.execute("INSERT INTO messages (id, chat_jid, sender, content, timestamp, is_from_me, media_type, file_length) "
+               "VALUES ('E1', 'g@g.us', 'x', '', '2026-11-13 10:12:53', 1, 'audio', 715227)")
+    db.commit()
+    assert not mod.is_own_voice_echo("g@g.us", "E1", 1), "nothing sent yet"
+    mod.kv_set("own_voice", json.dumps({"t": time.time(), "size": 724114}))
+    assert mod.is_own_voice_echo("g@g.us", "E1", 1)
+    assert not mod.is_own_voice_echo("g@g.us", "E1", 0), "someone else's audio is never the echo"
+    mod.kv_set("own_voice", json.dumps({"t": time.time(), "size": 120000}))
+    assert not mod.is_own_voice_echo("g@g.us", "E1", 1), "a different size = the owner's own voice note"
+    mod.kv_set("own_voice", json.dumps({"t": time.time() - 600, "size": 724114}))
+    assert not mod.is_own_voice_echo("g@g.us", "E1", 1), "too old"

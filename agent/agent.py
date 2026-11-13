@@ -234,6 +234,11 @@ def send(recipient, text, media=None, quoted=None, read_aloud_of=None):
     """Send through the bridge (send policy + pacing apply there). Never retried: a retry could double-send.
     read_aloud_of = the message the owner reacted 🛞 on: the bridge lets that one voice note skip the draft."""
     body = {"recipient": recipient, "message": text}
+    if media:
+        try:  # remember our own voice note: its echo comes back as an "owner voice message" under another id (owner 13.11)
+            kv_set("own_voice", json.dumps({"t": time.time(), "size": os.path.getsize(media)}))
+        except (OSError, TypeError):
+            pass
     if read_aloud_of:
         body["read_aloud_of"] = read_aloud_of
     if media:
@@ -3915,6 +3920,24 @@ def sent_special(mid):
         return False
 
 
+def is_own_voice_echo(cj, mid, me):
+    """Owner 13.11: the voice note this agent just sent (🛞 reading, voice reply) comes back as the owner's own audio message under
+    another id and was transcribed and answered as if he had spoken it. True when it is that echo: sent by us within the last
+    3 minutes, about the same size as the file we uploaded."""
+    if not me:
+        return False
+    try:
+        o = json.loads(kv_get("own_voice") or "{}")
+        if time.time() - float(o.get("t", 0)) > 180 or not o.get("size"):
+            return False
+        with mdb() as db:
+            r = db.execute("SELECT file_length FROM messages WHERE id = ? AND chat_jid = ?", (mid, cj)).fetchone()
+        n = int((r or [0])[0] or 0)
+        return bool(n) and abs(n - o["size"]) <= 0.08 * o["size"]
+    except (ValueError, sqlite3.Error, TypeError):
+        return False
+
+
 def is_draft_copy(content):
     """The bridge posts a long draft's exact text right under its card (WhatsApp cuts long wa.me links on the phone);
     that message has no prefix, so recognise it by being the text of a draft created in the last 10 minutes."""
@@ -3953,6 +3976,8 @@ def handle(row):
             kv_set(K("last_owner_msg", cj), json.dumps({"ts": ts[:19], "text": content[:300] or f"[{mtype}]"}, ensure_ascii=False))
         except Exception as e:
             log("last_owner_msg failed", e)
+        if mtype == "audio" and is_own_voice_echo(cj, mid, me):
+            return  # our own read-aloud / voice reply coming back, not the owner speaking
         if mtype == "audio" and voice_enabled():
             def voice_cmd():
                 try:
