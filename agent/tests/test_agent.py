@@ -29,7 +29,8 @@ def agent(tmp_path, monkeypatch):
     mod.LOG = str(tmp_path / "agent.log")
     # never touch the real installation's files from a test (model choice, groups, restart / stop requests)
     for name, fname in (("MODEL_FILE", "model_override.json"), ("GROUPS_FILE", "groups.json"),
-                        ("RESTART_FILE", "restart.request"), ("STOP_FILE", "stop.request")):
+                        ("RESTART_FILE", "restart.request"), ("STOP_FILE", "stop.request"),
+                        ("PROVIDER_FILE", "provider.json")):
         monkeypatch.setattr(mod, name, str(tmp_path / fname))
     mod.adb().close()
     return mod, db
@@ -1691,3 +1692,23 @@ def test_stop_and_switch_model_continues(agent, monkeypatch, tmp_path):
     with mod.adb() as db:
         texts = [r[0] for r in db.execute("SELECT text FROM commands WHERE status = 'pending'")]
     assert len(texts) == 1 and "המשך" in texts[0]
+
+
+def test_provider_layer(agent, monkeypatch):
+    """Owner 13.11: the bridge's provider (not a group's) — another model server behind the same engine; the subscription
+    limit binds only while the subscription is the provider."""
+    mod, _ = agent
+    assert mod.active_provider() == ("claude", None) and mod.provider_env() == (None, None)
+    env, m = mod.provider_env("ollama")
+    assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:11434" and env["ANTHROPIC_API_KEY"] == "" and m == "bridge-qwen3-4b"
+    assert env["ANTHROPIC_CUSTOM_MODEL_OPTION"] == "bridge-qwen3-4b"
+    mod.kv_set("limit_until", (mod.dt.datetime.now() + mod.dt.timedelta(hours=5)).isoformat(timespec="seconds"))
+    assert mod.limit_until()
+    monkeypatch.setattr(mod, "provider_check", lambda n: {"ok": n != "openrouter", "detail": "x", "models": ["bridge-qwen3-4b", "qwen3:4b-instruct"]})
+    assert "לא הוחלף" in mod.owner_command("/ספק openrouter", mod.PRIMARY)
+    assert "לא נמצא" in mod.owner_command("/ספק ollama nosuch", mod.PRIMARY)
+    assert "✅" in mod.owner_command("/ספק אולמה qwen3:4b-instruct", mod.PRIMARY)
+    assert mod.active_provider() == ("ollama", "qwen3:4b-instruct") and mod.limit_until() is None, "no subscription limit on Ollama"
+    assert mod.provider_env()[1] == "qwen3:4b-instruct"
+    mod.owner_command("/ספק claude", mod.PRIMARY)
+    assert mod.active_provider()[0] == "claude" and mod.limit_until()

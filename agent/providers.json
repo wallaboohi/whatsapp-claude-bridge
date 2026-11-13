@@ -1,0 +1,29 @@
+{
+ "claude": {
+  "label": "Claude · המנוי",
+  "kind": "claude",
+  "how": "החשבון שמחובר במחשב (claude auth login). מגבלות 5 שעות ושבועית לפי המנוי."
+ },
+ "ollama": {
+  "label": "Ollama · מקומי במחשב",
+  "kind": "anthropic",
+  "base_url": "http://127.0.0.1:11434",
+  "token": "ollama",
+  "model": "bridge-qwen3-4b",
+  "how": "מותקן בנייח. בלי עלות, והמידע לא יוצא מהמחשב. רץ על המעבד, ולכן איטי וחלש מ-Claude. מודל עם הקשר מספיק לגשר: ollama create bridge-qwen3-4b (num_ctx 40960)."
+ },
+ "openrouter": {
+  "label": "OpenRouter · ענן, הרבה מודלים",
+  "kind": "anthropic",
+  "base_url": "https://openrouter.ai/api",
+  "key_file": "openrouter.key",
+  "model": "anthropic/claude-sonnet-4.5",
+  "how": "מפתח מ-openrouter.ai/keys נשמר בקובץ secrets/openrouter.key (לא בקוד). תשלום לפי שימוש; המידע יוצא לשרתי OpenRouter ולספק המודל."
+ },
+ "anthropic_api": {
+  "label": "Claude API · תשלום לפי שימוש",
+  "kind": "anthropic-key",
+  "key_file": "anthropic.key",
+  "how": "מפתח מ-console.anthropic.com נשמר ב-secrets/anthropic.key. אותם מודלים של Claude, בלי מגבלות המנוי."
+ }
+}

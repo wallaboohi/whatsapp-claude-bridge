@@ -25,6 +25,7 @@ agent/update_check.json
 agent/update.log
 agent/actions.log
 agent/model_override.json
+agent/provider.json
 agent/assets/
 agent/groups.json
 agent/agent.db.bak-*

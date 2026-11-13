@@ -731,6 +731,104 @@ def budget_for(chat):
     return float((load_groups().get(chat or PRIMARY) or {}).get("budget_usd") or CFG.get("daily_budget_usd", 5))
 
 
+# ---------- AI provider of the bridge (owner 13.11) ----------
+# The provider drives the whole bridge (not a group): every conversation follows it. The engine stays Claude Code (`claude -p`,
+# same tools, permissions, rules and sessions); another provider only swaps the model server behind it through Claude Code's
+# own settings (ANTHROPIC_BASE_URL / token). Defaults below; config.json "providers" may override or add. Map: AI_HOSTING.md.
+PROVIDER_FILE = os.path.join(HERE, "provider.json")
+SECRETS_DIR = os.path.join(ROOT, "secrets")
+PROVIDERS_DEFAULT = json.load(open(os.path.join(HERE, "providers.json"), encoding="utf-8"))  # shared with the dashboard
+PROVIDER_WORDS = {"קלוד": "claude", "claude": "claude", "מנוי": "claude", "אולמה": "ollama", "אולאמה": "ollama", "ollama": "ollama",
+                  "אופנראוטר": "openrouter", "openrouter": "openrouter", "api": "anthropic_api", "anthropic_api": "anthropic_api"}
+
+
+def providers():
+    out = json.loads(json.dumps(PROVIDERS_DEFAULT))
+    for k, v in (CFG.get("providers") or {}).items():
+        out.setdefault(k, {}).update(v)
+    return out
+
+
+def active_provider():
+    """(name, model) of the bridge's provider now; ('claude', None) by default."""
+    try:
+        o = json.load(open(PROVIDER_FILE, encoding="utf-8"))
+    except (OSError, ValueError):
+        o = {}
+    name = o.get("provider") if o.get("provider") in providers() else "claude"
+    return name, o.get("model") or None
+
+
+def set_provider(name, model=None):
+    write_json(PROVIDER_FILE, {"provider": name, "model": model or "", "at": dt.datetime.now().isoformat(timespec="seconds")})
+
+
+def provider_key(p):
+    if not p.get("key_file"):
+        return ""
+    try:
+        return open(os.path.join(SECRETS_DIR, p["key_file"]), encoding="utf-8").read().strip()
+    except OSError:
+        return ""
+
+
+def provider_env(name=None, model=None):
+    """(env for the claude process or None = the normal sign-in, model to pass or None = the bridge's own choice)."""
+    if name is None:
+        name, model = active_provider()
+    p = providers().get(name) or {}
+    if p.get("kind") == "anthropic-key":
+        return dict(os.environ, ANTHROPIC_API_KEY=provider_key(p)), model
+    if p.get("kind") == "anthropic":
+        m = model or p.get("model") or ""
+        env = dict(os.environ, ANTHROPIC_BASE_URL=p["base_url"], ANTHROPIC_AUTH_TOKEN=p.get("token") or provider_key(p),
+                   ANTHROPIC_API_KEY="", ANTHROPIC_CUSTOM_MODEL_OPTION=m, ANTHROPIC_CUSTOM_MODEL_OPTION_NAME=m,
+                   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1")
+        return env, m or None
+    return None, None
+
+
+def provider_check(name):
+    """{"ok", "detail", "models"}: is this provider reachable now, and which models it offers (no secrets in the result)."""
+    p = providers().get(name)
+    if not p:
+        return {"ok": False, "detail": "ספק לא מוכר", "models": []}
+    if p["kind"] == "claude":
+        u = claude_usage()
+        return {"ok": bool(u), "detail": claude_account() if u else "לא הצלחתי לקרוא את מד השימוש",
+                "models": [k for k in MODELS if k != "auto"]}
+    if p["kind"] == "anthropic-key":
+        k = provider_key(p)
+        return {"ok": bool(k), "detail": "מפתח שמור" if k else f"חסר מפתח: secrets/{p.get('key_file')}", "models": ["opus", "sonnet", "haiku"]}
+    tok = p.get("token") or provider_key(p)
+    if not tok:
+        return {"ok": False, "detail": f"חסר מפתח: secrets/{p.get('key_file')}", "models": []}
+    try:
+        if "11434" in p["base_url"]:  # Ollama: its own list (names as `ollama list` shows them)
+            d = json.loads(urllib.request.urlopen(p["base_url"] + "/api/tags", timeout=8).read().decode())
+            models = [m["name"] for m in d.get("models", [])]
+        else:
+            req = urllib.request.Request(p["base_url"].rstrip("/") + "/v1/models", headers={"Authorization": "Bearer " + tok})
+            d = json.loads(urllib.request.urlopen(req, timeout=12).read().decode())
+            models = [m.get("id") for m in d.get("data", []) if m.get("id")]
+        return {"ok": True, "detail": f"מחובר · {len(models)} מודלים", "models": models}
+    except Exception as e:
+        return {"ok": False, "detail": f"לא מגיב: {str(e)[:80]}", "models": []}
+
+
+def providers_text():
+    cur, cm = active_provider()
+    lines = ["*🔌 ספק הבינה של הגשר* (כל השיחות עוברות דרכו)", ""]
+    for k, p in providers().items():
+        c = provider_check(k)
+        lines.append(f"{'👉 ' if k == cur else ''}*{p['label']}* ({k}) {'✅' if c['ok'] else '⚪'} {c['detail']}")
+        if k == cur and p["kind"] != "claude":
+            lines.append(f"   מודל: {cm or p.get('model') or '—'}")
+        lines.append(f"   _{p.get('how', '')}_")
+    lines += ["", "החלפה: /ספק ollama (או /ספק ollama <מודל>) · חזרה: /ספק claude · מקרא גרפי בלוח: legend.html"]
+    return "\n".join(lines)
+
+
 GUEST_TOOLS = "Read,Write,Edit,Glob,Grep,WebSearch,WebFetch"
 GUEST_CMDS = re.compile(r"^/\s*(🛞|מודלים|מודל|models|model|סשן|session)(\s|$)")
 
@@ -1200,7 +1298,10 @@ def limit_status_text(until):
 
 
 def limit_until():
-    """While the usage limit is on: when the agent tries again (datetime); None otherwise."""
+    """While the usage limit is on: when the agent tries again (datetime); None otherwise. Owner 13.11: only the subscription
+    has this limit — with another provider active the bridge works (and parked messages are released)."""
+    if active_provider()[0] != "claude":
+        return None
     v = kv_get("limit_until") or ""
     try:
         t = dt.datetime.fromisoformat(v) if v else None
@@ -1265,6 +1366,9 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
     guest = guest_cfg(chat)
     if guest:  # isolated guest group: never the owner's tools, connectors or browser; owner 13.11: no permission prompt may block its allowed tools (web search was refused headless)
         mode = guest.get("permission_mode") or "bypassPermissions"
+    penv, pmodel = provider_env()  # owner 13.11: another provider behind the same engine (same tools and permissions)
+    if penv is not None and pmodel:
+        model = pmodel
     cmd = [shutil.which("claude") or "claude", "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", mode]
     if model:
         cmd += ["--model", model]
@@ -1278,7 +1382,7 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
         cmd += ["--strict-mcp-config"]  # skip the heavy connector tool lists (Gmail, Shopify...) to cut tokens
     if max_budget:
         cmd += ["--max-budget-usd", f"{float(max_budget):.2f}"]
-    if CFG.get("chrome") and tools is None and not guest:
+    if CFG.get("chrome") and tools is None and not guest and penv is None:
         cmd += ["--chrome"]  # owner 09.11: Claude in Chrome (needs the extension signed in with this PC's Claude account)
     if resume:
         cmd += ["--resume", resume]
@@ -1287,7 +1391,7 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
         stoppable = on_stage is not None  # only the owner's interactive runs; plugin / hand-off runs never eat a stop request
     t0 = time.time()
     proc = subprocess.Popen(cmd, cwd=guest_home(guest) if guest else HOME, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, encoding="utf-8", errors="replace")
+                            text=True, encoding="utf-8", errors="replace", env=penv)
     errbuf = []
 
     def read_err():  # stderr carries the sign-in expiry warning and limit / login errors
@@ -2109,6 +2213,22 @@ def owner_command(text, chat=None):
         return usage_report(chat or PRIMARY)
     if re.match(r"^/\s*(כרום|chrome)\s*$", text.strip()):   # owner 10.11: bring the Chrome extension back remotely
         return chrome_start()
+    m = re.match(r"^/\s*(ספק|provider)(?:\s+(\S+))?(?:\s+(\S+))?\s*$", text.strip())
+    if m:  # owner 13.11: the bridge's AI provider (the same as the provider node of the legend in the dashboard)
+        if not m.group(2):
+            return providers_text()
+        name = PROVIDER_WORDS.get(m.group(2).lower(), m.group(2).lower())
+        if name not in providers():
+            return "לא מכיר את הספק הזה.\n\n" + providers_text()
+        c = provider_check(name)
+        if not c["ok"]:
+            return f"⚪ {providers()[name]['label']} לא מחובר: {c['detail']}. לא הוחלף."
+        if m.group(3) and c["models"] and m.group(3) not in c["models"]:
+            return f"המודל {m.group(3)} לא נמצא אצל {providers()[name]['label']}. יש: " + ", ".join(c["models"][:15])
+        set_provider(name, m.group(3))
+        _, cm = active_provider()
+        return (f"✅ ספק הגשר: *{providers()[name]['label']}*" + (f" · מודל {cm or providers()[name].get('model')}" if name != "claude" else "")
+                + ". כל השיחות עוברות דרכו מההודעה הבאה. חזרה: /ספק claude")
     if re.match(r"^/(הפעל מחדש|אתחל|restart)\s*$", text.strip()):
         RESTART_REQ.set()
         return "🔄 מפעיל את הסוכן מחדש. אכתוב כאן כשאעלה (בערך 20 שניות)."
@@ -2799,7 +2919,8 @@ def command_worker():
     """Dispatcher: one worker thread per conversation with pending commands (serial within a conversation, parallel
     across conversations). A requested restart waits until every running answer has been sent. Conversations the owner
     paused in the dashboard are skipped (their commands wait in the queue)."""
-    while True:
+    mine = AGENT_DB  # tests reload this module with a new database: an older dispatcher must stop, not serve the new one
+    while AGENT_DB == mine:
         try:
             reason = restart_wanted()
             with _workers_lock:
