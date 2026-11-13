@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.0 — 2026-11-13
+- Bridge AI providers (owner 13.11): add a provider from the dashboard legend (name, URL, model(s), API key kept in secrets/ only), one-click quick switch between providers, DeepSeek preset with a real key check; a provider added from the dashboard works without restarting the agent
+- Ollama on both PCs: hosts in order (laptop default, desktop fallback) through the existing ssh tunnel; the check shows which host serves
+- Nightly sync no longer waits for the Claude subscription quota: merge conflicts are resolved by another provider when the limit is on (config fallback_order)
+- Claude sign-out ("OAuth session expired") is recognised; the Hebrew message carries a sign-in link and the "קוד <code>" reply completes the login
+- AI_HOSTING.md: roadmap for hosted providers to reach every file type (plan, not built)
+- Version 1.1.0: above the dashboard build 1.0.15 so installed dashboards update, never step back
+
 ## 1.0.12 — 2026-11-10
 - Fix flaky agent tests (no such table): adb() read AGENT_DB twice, so a module reload mid-call marked a new empty db as schema-done
 - release.py: fix newline literal
