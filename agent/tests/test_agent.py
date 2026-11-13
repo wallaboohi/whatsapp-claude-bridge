@@ -1646,3 +1646,28 @@ def test_wheel_busy_flips_hourglass_and_restores_wheel(agent, monkeypatch):
     emojis = [e for _, e in calls]
     assert "⏳" in emojis and "⌛" in emojis and emojis[-1] == "🛞" and all(p == "/react" for p, _ in calls)
     assert mod.wheel_is_ours("g@g.us", "M1") and not mod.wheel_is_ours("g@g.us", "OTHER")
+
+
+def test_live_control_stop_and_queue(agent, monkeypatch):
+    """Owner 13.11: /עצור (Esc), /עצור <instruction>, /עצור הכל (Ctrl+C), /תור — answered at once, never queued behind the work."""
+    mod, _ = agent
+    sent = []
+    monkeypatch.setattr(mod, "send", lambda chat, text, media=None, quoted=None, **k: sent.append(text) or True)
+    monkeypatch.setattr(mod, "react", lambda *a: None)
+    monkeypatch.setattr(mod, "STOP_FILE", str(mod.os.path.join(mod.os.path.dirname(mod.AGENT_DB), "stop.request")))
+    chat = mod.PRIMARY
+    for i in (1, 2):
+        mod.enqueue_command(f"Q{i}", f"משימה {i}", "2026-11-13 10:00", chat)
+    assert not mod.live_control(chat, "X0", "שלום") and not mod.live_control(chat, "X0", "/מודל אופוס")
+    assert mod.live_control(chat, "X1", "/תור") and "בתור" in sent[-1] and "משימה 2" in sent[-1]
+    mod._active_runs[chat] = 1.0
+    try:
+        assert mod.live_control(chat, "X2", "/עצור") and "עוצר" in sent[-1] and "2 הודעות" in sent[-1]
+        assert open(mod.STOP_FILE, encoding="utf-8").read() == chat
+        assert mod.live_control(chat, "X3", "/עצור תעשה רק את הראשון") and "אחרי 2 הודעות" in sent[-1]
+        assert mod.live_control(chat, "X4", "/עצור הכל") and "בוטלו 3" in sent[-1]
+    finally:
+        mod._active_runs.pop(chat, None)
+    with mod.adb() as db:
+        assert [r[0] for r in db.execute("SELECT status FROM commands ORDER BY id")] == ["cancelled"] * 3
+    assert mod.live_control(chat, "X5", "/stop") and "אין פעולה שרצה" in sent[-1]

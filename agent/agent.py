@@ -4009,6 +4009,57 @@ def is_draft_copy(content):
         return False
 
 
+LIVE_CTL = re.compile(r"^\s*/\s*(עצור|stop|esc|תור|queue)(?:\s+(.*))?$", re.S | re.I)
+
+
+def live_control(cj, mid, content):
+    """Owner 13.11: the terminal's controls while Claude works, from WhatsApp — handled the moment the message arrives, never queued
+    behind the running work:  /עצור = Esc (stop the current action, keep the session, back to listening; queued messages go on)
+    · /עצור <instruction> = Esc + type (stop, then this instruction runs in the same session) · /עצור הכל = Ctrl+C (stop and cancel
+    everything queued in this conversation) · /תור = what is running and waiting here. True when the message was one of these."""
+    m = LIVE_CTL.match(content or "")
+    if not m:
+        return False
+    word, rest = m.group(1).lower(), (m.group(2) or "").strip()
+    with _active_lock:
+        running = cj in _active_runs
+    q = ("SELECT id, at, status, text FROM commands WHERE coalesce(chat_jid, ?) = ? AND status IN ('running','pending','waiting_limit','interrupted') "
+         "AND msg_id != ? ORDER BY id")
+    with adb() as db:
+        rows = db.execute(q, (PRIMARY, cj, mid)).fetchall()
+    out = []
+    if word in ("תור", "queue"):
+        names = {"running": "▶️ רץ", "pending": "⏳ בתור", "waiting_limit": "⏸️ ממתין למכסה", "interrupted": "⚠️ נקטע"}
+        out = [f"{names.get(st, st)} {str(at)[11:16]} · {(tx or '').strip()[:60]}" for _, at, st, tx in rows] or ["אין עבודה פעילה ואין הודעות בתור."]
+    else:
+        if running:
+            with open(STOP_FILE, "w", encoding="utf-8") as f:
+                f.write(cj)
+            out.append("⛔ עוצר את הפעולה הנוכחית. הסשן נשמר: ההודעה הבאה ממשיכה מאותה נקודה.")
+        else:
+            out.append("אין פעולה שרצה עכשיו בשיחה הזו.")
+        if rest in ("הכל", "הכול", "all"):
+            with adb() as db:
+                n = db.execute("UPDATE commands SET status = 'cancelled', answered = ? WHERE coalesce(chat_jid, ?) = ? "
+                               "AND status IN ('pending','waiting_limit','interrupted') AND msg_id != ?",
+                               (dt.datetime.now().isoformat(timespec="seconds"), PRIMARY, cj, mid)).rowcount
+            out.append(f"🗑️ בוטלו {n} הודעות שחיכו בתור." if n else "לא היו הודעות בתור.")
+        elif rest:
+            enqueue_command(mid, rest, dt.datetime.now().strftime("%Y-%m-%d %H:%M"), cj)
+            waiting = sum(1 for r in rows if r[2] != "running")
+            out.append("➡️ ההוראה החדשה נכנסה לתור" + (f" אחרי {waiting} הודעות שכבר חיכו." if waiting else " ותרוץ מיד."))
+        else:
+            waiting = sum(1 for r in rows if r[2] != "running")
+            if waiting:
+                out.append(f"בתור עוד {waiting} הודעות; הן ימשיכו. לביטול כולן: /עצור הכל")
+    _ctx.chat = cj
+    try:
+        reply("\n".join(out), quoted=mid)
+    finally:
+        _ctx.chat = None
+    return True
+
+
 def handle(row):
     mid, cj, sender, ts, content, me, mtype = row
     content = (content or "").strip()
@@ -4027,6 +4078,8 @@ def handle(row):
         if content == READ_ALOUD:  # 🛞 = read my last answer aloud (no Claude run)
             work.put(lambda: read_aloud(cj))
             return
+        if me and not mtype and live_control(cj, mid, content):
+            return  # /עצור, /תור: answered at once, not queued behind the running work
         try:
             kv_set(K("last_owner_msg", cj), json.dumps({"ts": ts[:19], "text": content[:300] or f"[{mtype}]"}, ensure_ascii=False))
         except Exception as e:
