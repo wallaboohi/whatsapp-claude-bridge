@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.1.1 — 2026-11-13
+- Fix the release build: test_bridge_rules_in_every_conversation wrote into agent/home, which does not exist in a clean checkout (v1.1.0's GitHub build failed on it); the test now creates the folder. Same code as 1.1.0 otherwise: dashboard provider add / quick switch / DeepSeek preset, provider fallback for the nightly merge, Claude sign-out link, Ollama on both PCs
+
 ## 1.1.0 — 2026-11-13
 - Bridge AI providers (owner 13.11): add a provider from the dashboard legend (name, URL, model(s), API key kept in secrets/ only), one-click quick switch between providers, DeepSeek preset with a real key check; a provider added from the dashboard works without restarting the agent
 - Ollama on both PCs: hosts in order (laptop default, desktop fallback) through the existing ssh tunnel; the check shows which host serves
