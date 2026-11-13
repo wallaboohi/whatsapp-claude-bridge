@@ -1246,7 +1246,7 @@ AUTOMATIONS = [
          _ap("sheet_watch.editors", "שמות העורכים", "map", {}, help="שורה לכל עורך: שם בגוגל = שם שיוצג לך"),
          _ap("sheet_watch.local_dir", "תיקיית גיבוי במחשב הזה", "text", os.path.expanduser("~/WhatsApp-Backup/google-sheet-segment-d")),
          _ap("sheet_watch.peer_host", "המחשב השני (ssh) לעותק", "text", "ybhw"),
-         _ap("sheet_watch.peer_dir", "תיקיית העותק במחשב השני", "text", "C:/Users/walla/WhatsApp-Backup/google-sheet-segment-d"),
+         _ap("sheet_watch.peer_dir", "תיקיית העותק במחשב השני", "text", os.path.expanduser("~/WhatsApp-Backup/google-sheet-segment-d").replace("\\", "/")),
      ],
      "tree": [
          "כל X דקות: קורא את זמן העריכה האחרון של הקובץ (קריאה בלבד, לעולם לא כותב).",
