@@ -78,6 +78,14 @@ def proxy(tmp_path, monkeypatch):
         def log_message(self, *a):
             pass
 
+        def do_GET(self):
+            seen["auth"] = self.headers.get("Authorization")
+            raw = json.dumps({"data": [{"id": "models/real-1"}, {"id": "real-2"}]} if not seen.get("fail") else {"error": "x"}).encode()
+            self.send_response(401 if seen.get("fail") else 200)
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
         def do_POST(self):
             seen["auth"] = self.headers.get("Authorization")
             req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -133,3 +141,21 @@ def test_http_non_stream_stream_and_errors(proxy):
     assert st == 401 and json.loads(raw)["error"] == {"type": "authentication_error", "message": "bad key"}
     assert _post(base + "/p/nope/v1/messages", {})[0] == 404
     assert json.loads(_post(base + "/p/t/v1/messages/count_tokens", {"messages": [{"role": "user", "content": "x" * 400}]})[1])["input_tokens"] >= 100
+
+
+def test_models_come_from_the_provider_and_prove_the_key(proxy):
+    base, seen = proxy
+    got = json.loads(urllib.request.urlopen(base + "/p/t/v1/models", timeout=10).read())
+    assert [m["id"] for m in got["data"]] == ["real-1", "real-2"] and seen["auth"] == "Bearer SECRET-KEY"
+    seen["fail"] = True
+    try:
+        urllib.request.urlopen(base + "/p/t/v1/models", timeout=10)
+        assert False, "a rejected key must not look connected"
+    except urllib.error.HTTPError as e:
+        assert e.code == 401
+
+
+def test_upstream_error_shapes():
+    assert px.upstream_message('{"error": {"message": "bad key"}}') == "bad key"
+    assert px.upstream_message('[{"error": {"code": 404, "message": "model not found"}}]') == "model not found"  # Gemini sends a list
+    assert px.upstream_message('{"error": "plain"}') == "plain" and px.upstream_message("not json", "x") == "not json"

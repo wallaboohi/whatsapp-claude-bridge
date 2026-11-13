@@ -27,6 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORT = 8799
+UA = "oai-proxy/1.0 (whatsapp-claude-bridge)"  # Cloudflare-fronted providers (Groq) answer 403 "error 1010" to the default Python-urllib agent
 STOP = {"stop": "end_turn", "length": "max_tokens", "tool_calls": "tool_use", "function_call": "tool_use", "content_filter": "end_turn"}
 
 
@@ -224,6 +225,22 @@ def stream_events(lines, model):
     yield "message_stop", {"type": "message_stop"}
 
 
+def upstream_message(raw, fallback=""):
+    """The human message of an upstream error body: a dict, a one-item list (Gemini) or plain text."""
+    try:
+        v = json.loads(raw)
+    except ValueError:
+        return (raw or str(fallback))[:300]
+    if isinstance(v, list) and v:
+        v = v[0]
+    if isinstance(v, dict):
+        e = v.get("error", v)
+        if isinstance(e, dict):
+            return str(e.get("message") or json.dumps(e, ensure_ascii=False))[:300]
+        return str(e or v.get("message") or fallback)[:300]
+    return str(v or fallback)[:300]
+
+
 def error_body(status, msg):
     kind = {400: "invalid_request_error", 401: "authentication_error", 402: "billing_error", 403: "permission_error", 404: "not_found_error",
             429: "rate_limit_error"}.get(status, "api_error")
@@ -260,11 +277,33 @@ class Handler(BaseHTTPRequestHandler):
         p = load_providers().get(name or "")
         if not p or not p.get("upstream"):
             return self._json(404, error_body(404, "unknown provider"))
-        if rest == "v1/models":
+        if rest == "v1/models":  # the provider's real list (this also proves the key); the static list from providers.json when it cannot be read
+            try:
+                r = urllib.request.urlopen(urllib.request.Request(p["upstream"]["base"].rstrip("/") + "/models",
+                                                                  headers={"Authorization": "Bearer " + read_key(p), "User-Agent": UA}), timeout=15)
+                ids = [str(m.get("id", "")).replace("models/", "") for m in (json.loads(r.read().decode("utf-8", "replace")).get("data") or []) if m.get("id")]
+                if ids:
+                    return self._json(200, {"data": [{"id": m, "type": "model"} for m in ids]})
+            except urllib.error.HTTPError as e:
+                if e.code in (401, 403):
+                    return self._json(e.code, error_body(e.code, "the provider rejected the key"))
+            except Exception:
+                pass
             return self._json(200, {"data": [{"id": m, "type": "model"} for m in p.get("models") or [p.get("model")]]})
         self._json(404, error_body(404, "not found"))
 
     def do_POST(self):
+        try:
+            self._post()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception as e:  # never drop the connection without an answer: Claude Code would retry blindly
+            try:
+                self._json(502, error_body(502, f"translator error: {e}"))
+            except Exception:
+                pass
+
+    def _post(self):
         name, rest = self._route()
         p = load_providers().get(name or "")
         if not p or not p.get("upstream"):
@@ -282,16 +321,11 @@ class Handler(BaseHTTPRequestHandler):
             print("   <-", [(m["role"], (m.get("content") or "")[:60] if m["role"] == "tool" else len(str(m.get("content") or ""))) for m in req["messages"]][-4:], flush=True)
         key = read_key(p)
         url = p["upstream"]["base"].rstrip("/") + "/chat/completions"
-        hdr = {"Content-Type": "application/json", "Authorization": "Bearer " + key}
+        hdr = {"Content-Type": "application/json", "Authorization": "Bearer " + key, "User-Agent": UA}
         try:
             r = urllib.request.urlopen(urllib.request.Request(url, data=json.dumps(req).encode(), headers=hdr, method="POST"), timeout=600)
         except urllib.error.HTTPError as e:
-            try:
-                msg = (json.loads(e.read().decode("utf-8", "replace")) or {})
-                msg = (msg.get("error") or {}).get("message") if isinstance(msg.get("error"), dict) else (msg.get("message") or msg.get("error"))
-            except ValueError:
-                msg = e.reason
-            return self._json(e.code, error_body(e.code, msg or e.reason))
+            return self._json(e.code, error_body(e.code, upstream_message(e.read().decode("utf-8", "replace"), e.reason)))
         except Exception as e:
             return self._json(502, error_body(502, f"upstream unreachable: {e}"))
         model = body.get("model") or req["model"]

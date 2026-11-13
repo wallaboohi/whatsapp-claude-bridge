@@ -626,6 +626,10 @@ def provider_check(name):
     p = _providers().get(name)
     if not p:
         return {"ok": False, "detail": "ספק לא מוכר", "models": []}
+    if p.get("kind") == "auto":  # the ladder, cheapest first (live readiness is shown by /ספק in WhatsApp)
+        allp = _providers()
+        rows = [f"{allp[n].get('short') or n} ({allp[n].get('cost') or ''})" for n in (p.get("ladder") or []) if n in allp and n != "auto"]
+        return {"ok": True, "detail": "מהזול ליקר: " + " ← ".join(rows), "models": []}
     if p.get("kind") == "claude":
         acc = cfg().get("claude_account") or ""
         return {"ok": True, "detail": "המנוי של המחשב" + (f" · {acc}" if acc else ""),

@@ -842,10 +842,99 @@ def provider_host(p, model=None, max_age=20):
     return pick
 
 
+AUTO_LADDER = ("claude", "gemini", "groq", "openrouter_free", "deepseek", "openai")
+BILLING_RE = re.compile(r"(?i)(insufficient (balance|funds|credit)|no credits|credit balance|billing|payment required|\b402\b)")
+RATE_RE = re.compile(r"(?i)(\b429\b|rate.?limit|quota|too many requests|overloaded|\b50[234]\b|resource.?exhausted)")
+DENIED_RE = re.compile(r"(?i)(\b40[13]\b|unauthori[sz]ed|invalid api key|authentication)")
+DOWN_RE = re.compile(r"(?i)(connection refused|econnrefused|enotfound|fetch failed|timed out|unreachable|socket hang up)")
+
+
+class ProviderDown(Exception):
+    """A provider answered with a limit / billing / key / connection error: auto skips it for a while."""
+    def __init__(self, name, why, minutes):
+        super().__init__(f"{name}: {why}")
+        self.name, self.why, self.minutes = name, why, minutes
+
+
+def classify_down(text):
+    """(reason, minutes to skip the provider) for an error text of a provider run; None when it is not a provider problem."""
+    if BILLING_RE.search(text):
+        return "billing", 180
+    if RATE_RE.search(text):
+        return "rate", 15
+    if DENIED_RE.search(text):
+        return "key", 120
+    if DOWN_RE.search(text):
+        return "unreachable", 5
+    return None
+
+
+def auto_ladder():
+    return [n for n in (CFG.get("auto_ladder") or (providers().get("auto") or {}).get("ladder") or AUTO_LADDER)
+            if n in providers() and n != "auto"]
+
+
+def provider_cooled(name):
+    v = kv_get("cool:" + name) or ""
+    try:
+        return bool(v) and dt.datetime.fromisoformat(v) > dt.datetime.now()
+    except ValueError:
+        return False
+
+
+def auto_cool(name, minutes, why=""):
+    kv_set("cool:" + name, (dt.datetime.now() + dt.timedelta(minutes=minutes)).isoformat(timespec="seconds"))
+    log("auto: skipping", name, f"for {minutes} min", why)
+
+
+def provider_ready(name):
+    """Cheap readiness (no network): not cooling down, a key is saved where one is needed, the subscription's limit is not on."""
+    p = providers().get(name) or {}
+    if not p or provider_cooled(name):
+        return False
+    if p.get("kind") == "claude":
+        return limit_raw() is None
+    return bool(provider_key(p)) if p.get("key_file") else True
+
+
+def auto_pick(skip=()):
+    """The first provider of the cost ladder that is ready (None when none is)."""
+    for n in auto_ladder():
+        if n not in skip and provider_ready(n):
+            return n
+    return None
+
+
+def _run_auto(*a, **k):
+    """_run_claude; with provider "auto", a limit / billing / key / connection error moves on to the next provider of the ladder."""
+    tried = []
+    while True:
+        try:
+            return _run_claude(*a, **k)
+        except (ProviderDown, LimitHit, AuthError) as e:
+            name = getattr(_ctx, "provider_used", None)
+            if active_provider()[0] != "auto" or not name or name in tried:
+                raise
+            tried.append(name)
+            if isinstance(e, ProviderDown):
+                auto_cool(name, e.minutes, e.why)
+            elif isinstance(e, AuthError):
+                auto_cool(name, 120, "sign-in")
+            elif name != "claude":
+                auto_cool(name, 15, "limit")
+            nxt = auto_pick(tried)
+            if not nxt:
+                raise
+            log("auto:", name, "->", nxt)
+
+
 def provider_env(name=None, model=None):
     """(env for the claude process or None = the normal sign-in, model to pass or None = the bridge's own choice)."""
     if name is None:
         name, model = active_provider()
+    if name == "auto":  # owner 13.11: the cheapest provider that is ready now (the ladder in providers.json "auto")
+        name, model = auto_pick(), None
+    _ctx.provider_used = name
     p = providers().get(name) or {}
     if p.get("kind") == "anthropic-key":
         return dict(os.environ, ANTHROPIC_API_KEY=provider_key(p)), model
@@ -884,6 +973,10 @@ def provider_check(name):
     p = providers().get(name)
     if not p:
         return {"ok": False, "detail": "ספק לא מוכר", "models": []}
+    if p["kind"] == "auto":  # no network: which rungs of the ladder are ready now
+        cost = {"claude": "מנוי", "ollama": "מקומי"}
+        rows = [f"{'✅' if provider_ready(n) else '⚪'} {providers()[n].get('short') or n} ({providers()[n].get('cost') or cost.get(n, '')})" for n in auto_ladder()]
+        return {"ok": auto_pick() is not None, "detail": "מהזול ליקר: " + " ← ".join(rows), "models": []}
     if p["kind"] == "claude":
         u = claude_usage()
         return {"ok": bool(u), "detail": claude_account() if u else "לא הצלחתי לקרוא את מד השימוש",
@@ -951,6 +1044,8 @@ def switch_provider(name, model=None):
 def effective_model(model):
     """The model that really answers: the provider's own when the bridge is not on Claude (the picked Claude model is not used then)."""
     name, pm = active_provider()
+    if name == "auto":
+        name, pm = getattr(_ctx, "provider_used", None) or auto_pick() or "claude", None
     if name == "claude":
         return model
     return pm or (providers().get(name) or {}).get("model") or model
@@ -961,6 +1056,8 @@ def ai_tag(model=None):
     if not CFG.get("show_ai_tag", True):
         return ""
     name, _ = active_provider()
+    if name == "auto":
+        name = getattr(_ctx, "provider_used", None) or auto_pick() or "claude"
     p = providers().get(name) or {}
     short = p.get("short") or (p.get("label") or name).split("·")[0].strip()
     m = effective_model(model)
@@ -1525,7 +1622,12 @@ def limit_until():
     """While the usage limit is on: when the agent tries again (datetime); None otherwise. Owner 13.11: only the subscription
     has this limit — with another provider active the bridge works (and parked messages are released)."""
     if active_provider()[0] != "claude":
-        return None
+        return None  # (auto handles the subscription's limit itself)
+    return limit_raw()
+
+
+def limit_raw():
+    """The subscription's limit whatever provider is active: when it ends (datetime) or None."""
     v = kv_get("limit_until") or ""
     try:
         t = dt.datetime.fromisoformat(v) if v else None
@@ -1699,6 +1801,10 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
             raise LimitHit(set_limit(reset))
     if (not res or res.get("is_error")) and AUTH_RE.search(result + "\n" + errtext):
         raise AuthError((result or errtext).strip()[:200])
+    if (not res or res.get("is_error")) and active_provider()[0] == "auto" and getattr(_ctx, "provider_used", None):
+        bad = classify_down(result + "\n" + errtext)
+        if bad:
+            raise ProviderDown(_ctx.provider_used, bad[0], bad[1])
     if not res:
         raise RuntimeError("claude returned no result" + (f": {errtext.strip()[-200:]}" if errtext.strip() else ""))
     usage = res.get("usage", {})
@@ -1812,7 +1918,7 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
         write_handoff(sid, chat)
         sid = None
     try:
-        res = _run_claude(prompt, model, sid, timeout, on_stage, append=group_prompt(chat), chat=chat, tools=tools, max_budget=max_budget)
+        res = _run_auto(prompt, model, sid, timeout, on_stage, append=group_prompt(chat), chat=chat, tools=tools, max_budget=max_budget)
     except Stopped:
         return "⛔ עצרתי את העבודה לבקשתך."
     except LimitHit:

@@ -88,3 +88,16 @@
 | Mistral (מצב חינמי) | מוזכר במקורות | לא נבדק | לא מחובר; אפשר מהלוח כשמוסיפים מפתח |
 
 מקורות: [OpenRouter, השוואת API חינמיים](https://openrouter.ai/blog/tutorials/free-llm-apis-compared/) · [OpenRouter, מגבלות](https://openrouter.ai/docs/api/reference/limits.md) · [Groq, מגבלות](https://console.groq.com/docs/rate-limits.md) · [KDnuggets](https://www.kdnuggets.com/5-free-llm-api-providers-you-can-use-in-2026) · [Gemini, תמחור ומכסות](https://agentdeals.dev/gemini-api-pricing-2026). המספרים של Gemini ו-Groq מגיעים מאתרי השוואה ולא מהספק עצמו.
+
+## 8. החלפה אוטומטית לפי עלות (`/אוטו`), בינות חינמיות נוספות, וחוקי הגרסאות (13.11.2026)
+- **`/אוטו`** (ספק `auto`): הגשר בוחר לבד את הספק הזול ביותר שזמין, לפי סולם ב-`providers.json` תחת `auto.ladder` (או `auto_ladder` ב-`config.json`). ברירת המחדל: המנוי של Claude ← Gemini ← Groq ← OpenRouter חינמי ← DeepSeek ← OpenAI. ספק נדלג כשאין לו מפתח, כשמכסת המנוי פעילה, או בזמן המתנה אחרי כשל.
+- **כשל ← מעבר:** שגיאת חיוב/יתרה (402 וכד'): 180 דקות המתנה; מכסה/עומס (429, 503): 15; מפתח נדחה: 120; אין חיבור: 5. אחרי ההמתנה הספק חוזר לסולם. אם אף ספק לא נשאר, ההתנהגות הקודמת (הודעות ממתינות למכסה). **התיוג** בראש התשובה מציג את הספק שבאמת ענה. מצב הסולם נראה ב-`/ספק`.
+- **נבדק:** בדיקות יחידה לסולם, לסיווג השגיאות ולמעבר (`agent/tests/test_agent.py`). **לא נבדק** בגשר חי עד שהסוכן יופעל מחדש. החלפה בין ספקים באמצע שיחה: הסשן הוא קובץ מקומי של Claude Code, והמודל החדש מקבל אותו; איכות ההמשך תלויה במודל.
+- **שרת התרגום ובדיקה חיה (13.11, מפתחות אמיתיים):** Groq עונה וקורא לכלים; Gemini עונה (`gemini-flash-lite-latest`, `gemini-3-flash-preview`; `gemini-2.5-flash` כבר לא זמין למשתמשים חדשים; `gemini-flash-latest` נתן 503 זמני); OpenRouter `:free` עונה אבל לא יציב (429 במודל אחד, 33 שניות באחר). תוקנו שתי תקלות: Groq חסם את זיהוי הדפדפן של Python (שגיאה 1010), ולכן השרת שולח `User-Agent` משלו; ו-Gemini מחזיר שגיאות כרשימה, ולכן השרת קורא גם אותן.
+- **בינות חינמיות נוספות (נבדקו במקורות; מפתח לא קיים עדיין, מוכנים כספקים):** Cerebras (cloud.cerebras.ai: כמיליון טוקנים ליום, 5 בקשות לדקה), Mistral (console.mistral.ai, תוכנית Experiment: דורשת אימות טלפון והסכמה לשימוש בנתונים לאימון), NVIDIA NIM (build.nvidia.com, כ-40 בקשות לדקה). **GitHub Models נסגר ב-30.7.2026** ולכן לא נוסף. מקורות: [Cerebras](https://apidog.com/blog/cerebras-api-free-tier/) · [Mistral](https://help.mistral.ai/en/articles/225174-what-are-the-limits-of-the-free-tier) · [NVIDIA](https://forums.developer.nvidia.com/t/is-nim-free/369368).
+
+### חוקי חלוקת הגרסאות (כפי שהתחלנו; נשמר גם בזיכרון)
+- מספר אחד לכל שחרור, בסדר עולה של **תיקון (patch)**: 1.0.1 … 1.0.12 ואחריהם 1.1.0, 1.1.1, 1.1.2 וכן הלאה. **לא מדלגים ולא מקפיצים מספר ראשי או משני בלי אישור יקיר.**
+- השחרור נעשה רק דרך `tools/release.py X.Y.Z "..."`: הוא מעלה יחד `VERSION`, `dash/VERSION`, `plugin.json`, `pyproject.toml` ו-`uv.lock`, מריץ בדיקות, ויוצר קומיט `Release vX.Y.Z` ותג. תג שפורסם לא מזיזים ולא משתמשים בו שוב: שחרור שנכשל בבנייה מתוקן בשחרור הבא.
+- בנייה של לוח בלבד (`tools/release_dash.py`) מקדמת רק את `dash/VERSION`, ולכן יצרה את הפער 1.0.13 עד 1.0.15 מול `VERSION`. מעכשיו אין בנייה כזו נפרדת: כל שינוי בלוח יוצא בשחרור רגיל.
+- אפליקציית הלוח (`WhatsAppDash.exe`) היא קובץ מוקפא שלא מתעדכן בהפעלת המחשב: מעדכנים אותה מתוכה ("בדוק עדכונים") או בהתקנה מחדש.

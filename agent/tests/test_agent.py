@@ -1801,3 +1801,75 @@ def test_switch_words_and_the_answer_tag(agent, monkeypatch, tmp_path):
     monkeypatch.setitem(mod.CFG, "show_ai_tag", False)
     assert mod.ai_tag("opus") == ""
 
+
+
+def _keys(mod, monkeypatch, *names):
+    have = set(names)
+    monkeypatch.setattr(mod, "provider_key", lambda p: "k" if p.get("key_file", "").removesuffix(".key") in have else "")
+
+
+def test_auto_ladder_goes_up_in_cost_and_skips_what_is_down(agent, monkeypatch):
+    mod, _ = agent
+    _keys(mod, monkeypatch, "gemini", "groq", "deepseek")
+    assert mod.auto_pick() == "claude"  # the subscription first (already paid)
+    mod.kv_set("limit_until", (mod.dt.datetime.now() + mod.dt.timedelta(hours=1)).isoformat(timespec="seconds"))
+    assert mod.auto_pick() == "gemini"  # its limit is on: the first free provider
+    mod.auto_cool("gemini", 10, "rate")
+    assert mod.auto_pick() == "groq" and mod.provider_cooled("gemini")
+    mod.kv_set("cool:gemini", (mod.dt.datetime.now() - mod.dt.timedelta(minutes=1)).isoformat(timespec="seconds"))
+    assert mod.auto_pick() == "gemini"  # the wait is over
+    assert mod.auto_pick(skip=("gemini", "groq")) == "deepseek"  # openrouter_free / openai have no key
+    assert mod.auto_pick(skip=("gemini", "groq", "deepseek")) is None
+    mod.CFG["auto_ladder"] = ["deepseek", "claude"]
+    try:
+        assert mod.auto_ladder() == ["deepseek", "claude"] and mod.auto_pick() == "deepseek"
+    finally:
+        mod.CFG.pop("auto_ladder")
+
+
+def test_classify_down_texts(agent):
+    mod, _ = agent
+    c = mod.classify_down
+    assert c("API Error: 402 Insufficient Balance")[0] == "billing" and c("You have no credits remaining")[0] == "billing"
+    assert c("API Error: 429 rate limit")[0] == "rate" and c("503 overloaded")[0] == "rate"
+    assert c("401 invalid api key")[0] == "key" and c("fetch failed: ECONNREFUSED")[0] == "unreachable"
+    assert c("the file was not found") is None
+
+
+def test_auto_run_moves_to_the_next_provider(agent, monkeypatch):
+    mod, _ = agent
+    _keys(mod, monkeypatch, "gemini", "groq")
+    monkeypatch.setattr(mod, "active_provider", lambda: ("auto", None))
+    used = []
+
+    def fake(*a, **k):
+        name = mod.auto_pick()
+        mod.provider_env()  # records which provider this run uses
+        used.append(mod._ctx.provider_used)
+        if len(used) == 1:
+            raise mod.ProviderDown(mod._ctx.provider_used, "rate", 15)
+        return {"result": "ok"}
+    monkeypatch.setattr(mod, "_run_claude", fake)
+    mod.kv_set("limit_until", (mod.dt.datetime.now() + mod.dt.timedelta(hours=1)).isoformat(timespec="seconds"))
+    assert mod._run_auto("p", None, None, 5) == {"result": "ok"}
+    assert used == ["gemini", "groq"] and mod.provider_cooled("gemini") and not mod.provider_cooled("groq")
+    # nobody is left: the failure goes up as before
+    mod.kv_set("cool:groq", "")
+    monkeypatch.setattr(mod, "_run_claude", lambda *a, **k: (_ for _ in ()).throw(mod.ProviderDown(mod._ctx.provider_used or "groq", "billing", 180)))
+    mod.provider_env()
+    monkeypatch.setattr(mod, "auto_pick", lambda skip=(): None)
+    with pytest.raises(mod.ProviderDown):
+        mod._run_auto("p", None, None, 5)
+
+
+def test_auto_provider_env_and_check(agent, monkeypatch):
+    mod, _ = agent
+    _keys(mod, monkeypatch, "deepseek")
+    monkeypatch.setattr(mod, "auto_pick", lambda skip=(): "deepseek")
+    env, model = mod.provider_env("auto")
+    assert env["ANTHROPIC_BASE_URL"] == "https://api.deepseek.com/anthropic" and model == "deepseek-chat" and mod._ctx.provider_used == "deepseek"
+    monkeypatch.setattr(mod, "active_provider", lambda: ("auto", None))
+    assert mod.ai_tag("opus").startswith("🧠 DeepSeek")  # the tag names the provider that really ran
+    monkeypatch.undo()
+    c = mod.provider_check("auto")
+    assert "מהזול ליקר" in c["detail"]

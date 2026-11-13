@@ -8,7 +8,8 @@
    "קלוד",
    "claude",
    "מנוי"
-  ]
+  ],
+  "cost": "מנוי"
  },
  "ollama": {
   "label": "Ollama · מקומי במחשב",
@@ -51,7 +52,8 @@
   "aliases": [
    "אופנראוטר",
    "openrouter"
-  ]
+  ],
+  "cost": "בתשלום"
  },
  "anthropic_api": {
   "label": "Claude API · תשלום לפי שימוש",
@@ -62,7 +64,8 @@
   "aliases": [
    "api",
    "anthropic_api"
-  ]
+  ],
+  "cost": "בתשלום"
  },
  "deepseek": {
   "label": "DeepSeek · ענן, זול",
@@ -79,7 +82,8 @@
   "aliases": [
    "דיפסיק",
    "deepseek"
-  ]
+  ],
+  "cost": "זול"
  },
  "openai": {
   "label": "OpenAI · ענן (דרך שרת התרגום)",
@@ -110,7 +114,8 @@
    "gpt",
    "chatgpt"
   ],
-  "how": "מפתח מ-platform.openai.com/api-keys, נשמר ב-secrets/openai.key. OpenAI מדבר בפורמט אחר, ולכן הגשר מתרגם דרך השרת המקומי (tools/oai_proxy.py, פורט 8799). בתשלום לפי שימוש."
+  "how": "מפתח מ-platform.openai.com/api-keys, נשמר ב-secrets/openai.key. OpenAI מדבר בפורמט אחר, ולכן הגשר מתרגם דרך השרת המקומי (tools/oai_proxy.py, פורט 8799). בתשלום לפי שימוש.",
+  "cost": "בתשלום"
  },
  "gemini": {
   "label": "Gemini · חינמי (דרך שרת התרגום)",
@@ -119,10 +124,12 @@
   "base_url": "http://127.0.0.1:8799/p/gemini",
   "token": "local-proxy",
   "key_file": "gemini.key",
-  "model": "gemini-2.5-flash",
+  "model": "gemini-flash-latest",
   "models": [
-   "gemini-2.5-flash",
-   "gemini-2.5-flash-lite"
+   "gemini-flash-latest",
+   "gemini-flash-lite-latest",
+   "gemini-pro-latest",
+   "gemini-3-flash-preview"
   ],
   "upstream": {
    "base": "https://generativelanguage.googleapis.com/v1beta/openai"
@@ -132,7 +139,8 @@
    "גמיני",
    "gemini"
   ],
-  "how": "שכבה חינמית בלי כרטיס אשראי: מפתח מ-aistudio.google.com/apikey, נשמר ב-secrets/gemini.key. המכסות היומיות נמוכות ומשתנות (בודקים ב-AI Studio)."
+  "how": "שכבה חינמית בלי כרטיס אשראי: מפתח מ-aistudio.google.com/apikey, נשמר ב-secrets/gemini.key. המכסות היומיות נמוכות ומשתנות (בודקים ב-AI Studio).",
+  "cost": "חינם"
  },
  "groq": {
   "label": "Groq · חינמי (דרך שרת התרגום)",
@@ -144,7 +152,8 @@
   "model": "openai/gpt-oss-120b",
   "models": [
    "openai/gpt-oss-120b",
-   "openai/gpt-oss-20b"
+   "openai/gpt-oss-20b",
+   "qwen/qwen3.8-27b"
   ],
   "upstream": {
    "base": "https://api.groq.com/openai/v1"
@@ -152,7 +161,8 @@
   "aliases": [
    "groq"
   ],
-  "how": "שכבה חינמית בלי כרטיס אשראי: מפתח מ-console.groq.com, נשמר ב-secrets/groq.key. המכסות לכל מודל (console.groq.com/settings/limits)."
+  "how": "שכבה חינמית בלי כרטיס אשראי: מפתח מ-console.groq.com, נשמר ב-secrets/groq.key. המכסות לכל מודל (console.groq.com/settings/limits).",
+  "cost": "חינם"
  },
  "openrouter_free": {
   "label": "OpenRouter · מודלים חינמיים",
@@ -160,7 +170,7 @@
   "kind": "anthropic",
   "base_url": "https://openrouter.ai/api",
   "key_file": "openrouter.key",
-  "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+  "model": "inclusionai/ling-3.2-flash:free",
   "models": [
    "nvidia/nemotron-3-ultra-550b-a55b:free",
    "nvidia/nemotron-3.5-super-vl:free",
@@ -176,6 +186,80 @@
    "openrouter-free",
    "free"
   ],
-  "how": "אותו מפתח של OpenRouter (secrets/openrouter.key). רק מודלים עם סיומת :free, 20 בקשות לדקה, ו-50 ליום (1,000 ליום אחרי רכישת קרדיט של 10 דולר). רשימת המודלים החינמיים משתנה: נבדקה 13.11.2026."
+  "how": "אותו מפתח של OpenRouter (secrets/openrouter.key). רק מודלים עם סיומת :free, 20 בקשות לדקה, ו-50 ליום (1,000 ליום אחרי רכישת קרדיט של 10 דולר). רשימת המודלים החינמיים משתנה: נבדקה 13.11.2026.",
+  "cost": "חינם"
+ },
+ "auto": {
+  "label": "אוטומטי · לפי עלות",
+  "short": "אוטו",
+  "kind": "auto",
+  "aliases": [
+   "אוטו",
+   "auto",
+   "אוטומטי"
+  ],
+  "ladder": [
+   "claude",
+   "gemini",
+   "groq",
+   "openrouter_free",
+   "deepseek",
+   "openai"
+  ],
+  "how": "הגשר בוחר לבד את הספק הזול ביותר שזמין: קודם המנוי של Claude, אחריו ספקים חינמיים, אחר כך בתשלום קטן ולבסוף בתשלום. כשספק נגמרה לו המכסה, נגמר הקרדיט או שהוא לא מגיב, הגשר עובר לבא בתור ומנסה אותו שוב אחרי זמן המתנה. הסדר ב-providers.json תחת auto.ladder או config auto_ladder."
+ },
+ "cerebras": {
+  "label": "Cerebras · חינמי (דרך שרת התרגום)",
+  "short": "Cerebras",
+  "kind": "anthropic",
+  "base_url": "http://127.0.0.1:8799/p/cerebras",
+  "token": "local-proxy",
+  "key_file": "cerebras.key",
+  "model": "gpt-oss-120b",
+  "cost": "חינם",
+  "upstream": {
+   "base": "https://api.cerebras.ai/v1"
+  },
+  "aliases": [
+   "cerebras",
+   "סרברס"
+  ],
+  "how": "הרשמה חינמית ב-cloud.cerebras.ai, מפתח נשמר ב-secrets/cerebras.key. מכסה שפורסמה: כמיליון טוקנים ליום ו-5 בקשות לדקה. שם המודל המוגדר לא נבדק: בחר מהרשימה אחרי שמדביקים מפתח."
+ },
+ "mistral": {
+  "label": "Mistral · חינמי (דרך שרת התרגום)",
+  "short": "Mistral",
+  "kind": "anthropic",
+  "base_url": "http://127.0.0.1:8799/p/mistral",
+  "token": "local-proxy",
+  "key_file": "mistral.key",
+  "model": "mistral-small-latest",
+  "cost": "חינם",
+  "upstream": {
+   "base": "https://api.mistral.ai/v1"
+  },
+  "aliases": [
+   "mistral-api",
+   "מיסטרל"
+  ],
+  "how": "תוכנית Experiment חינמית ב-console.mistral.ai: דורשת אימות טלפון והסכמה לשימוש בנתונים לאימון. מפתח נשמר ב-secrets/mistral.key."
+ },
+ "nvidia": {
+  "label": "NVIDIA NIM · חינמי (דרך שרת התרגום)",
+  "short": "NVIDIA",
+  "kind": "anthropic",
+  "base_url": "http://127.0.0.1:8799/p/nvidia",
+  "token": "local-proxy",
+  "key_file": "nvidia.key",
+  "model": "meta/llama-3.3-70b-instruct",
+  "cost": "חינם",
+  "upstream": {
+   "base": "https://integrate.api.nvidia.com/v1"
+  },
+  "aliases": [
+   "nvidia",
+   "אנבידיה"
+  ],
+  "how": "חשבון מפתחים חינמי ב-build.nvidia.com, ואז Settings ← API Keys. מכסה שפורסמה: כ-40 בקשות לדקה. מפתח נשמר ב-secrets/nvidia.key."
  }
 }
