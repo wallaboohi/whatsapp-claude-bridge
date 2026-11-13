@@ -1141,6 +1141,57 @@ def parse_signin(text):
     return (m[1], m[2]) if m else None
 
 
+WINDOW_HE = {"five_hour": "חלון 5 השעות", "seven_day": "המגבלה השבועית"}
+WEEKDAY_HE = ["ב׳", "ג׳", "ד׳", "ה׳", "ו׳", "ש׳", "א׳"]
+
+
+def blocking_windows():
+    """[(key, utilization %, reset as local naive datetime)] of Claude's plan windows that are full right now (read fresh from the
+    plan meter); [] when the meter is unavailable. Owner 13.11: a weekly limit was treated as an hourly one and retried 21 times."""
+    out = []
+    u = claude_usage(max_age=0) or {}
+    for key in WINDOW_HE:
+        x = u.get(key) or {}
+        try:
+            if x.get("utilization") is not None and float(x["utilization"]) >= 99.5:
+                t = dt.datetime.fromisoformat(str(x["resets_at"]).replace("Z", "+00:00")).astimezone().replace(tzinfo=None)
+                out.append((key, float(x["utilization"]), t))
+        except (KeyError, ValueError, TypeError):
+            continue
+    return out
+
+
+def meter_reset(text=""):
+    """When the full window(s) really reset: the latest reset among the full ones (all must clear). None when the meter
+    shows nothing full (then the CLI's own text is used)."""
+    b = blocking_windows()
+    if b:
+        kv_set("limit_kind", ",".join(k for k, _, _ in b))
+        return max(t for _, _, t in b)
+    kv_set("limit_kind", "seven_day" if re.search(r"(?i)week", text or "") else "")
+    return None
+
+
+def when_he(t):
+    """'05:02' today, 'מחר 05:02', else 'יום ו׳ 14.11 05:02' — always enough to know the day."""
+    d = (t.date() - dt.date.today()).days
+    if d <= 0:
+        return t.strftime("%H:%M")
+    if d == 1:
+        return t.strftime("מחר %H:%M")
+    return f"יום {WEEKDAY_HE[t.weekday()]} {t:%d.%m %H:%M}"
+
+
+def limit_status_text(until):
+    """The bridge's own message when Claude's limit is on (no Claude needed): which limit, usage of each window, when it returns."""
+    u = claude_usage(max_age=300) or {}
+    pct = lambda k: f"{float((u.get(k) or {}).get('utilization')):.0f}%" if (u.get(k) or {}).get("utilization") is not None else "—"
+    kinds = [k for k in (kv_get("limit_kind") or "").split(",") if k]
+    which = " + ".join(WINDOW_HE[k] for k in kinds if k in WINDOW_HE) or "מכסת Claude"
+    return (f"⏳ *{which} נגמרה.* 5 שעות {pct('five_hour')} · שבועית {pct('seven_day')} · חודשית — (אין נתון)\n"
+            f"החזרה: {when_he(until)}. ההודעה שלך נשמרה ותטופל לבד. (הודעה מהגשר)")
+
+
 def limit_until():
     """While the usage limit is on: when the agent tries again (datetime); None otherwise."""
     v = kv_get("limit_until") or ""
@@ -1309,6 +1360,7 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
     if not res or res.get("is_error") or len(result) < 300:  # a real answer may talk about limits; only short / error results count
         reset = parse_limit(result + "\n" + errtext)
         if reset:
+            reset = meter_reset(result + "\n" + errtext) or reset  # owner 13.11: the real reset (weekly = days), not "+60 minutes"
             raise LimitHit(set_limit(reset))
     if (not res or res.get("is_error")) and AUTH_RE.search(result + "\n" + errtext):
         raise AuthError((result or errtext).strip()[:200])
@@ -2172,10 +2224,10 @@ def wait_for_limit(cid, chat, mid, src, until, mid_run=False):
                               else f"the usage limit ran out midway, {dt.datetime.now():%H:%M}"))
     with adb() as db:
         db.execute("UPDATE commands SET status = 'waiting_limit', retry_at = ? WHERE id = ?", (until.isoformat(timespec="seconds"), cid))
-    key = K("limit_notice", chat)
-    if kv_get(key) != until.isoformat(timespec="seconds"):
+    key = f"limit_ack:{cid}"  # owner 13.11: every message gets its own acknowledgement (once), not one per window
+    if not kv_get(key):
         kv_set(key, until.isoformat(timespec="seconds"))
-        reply((LIMIT_NOTE_HE if LANG == "he" else LIMIT_NOTE_EN).format(at=until.strftime("%H:%M")),
+        reply(limit_status_text(until) if LANG == "he" else LIMIT_NOTE_EN.format(at=until.strftime("%H:%M")),
               quoted=mid if src == "wa" else None)
 
 

@@ -458,6 +458,7 @@ def test_usage_limit_parsing(agent):
 
 def test_usage_limit_parks_and_requeues_commands(agent, monkeypatch):
     mod, _ = agent
+    monkeypatch.setattr(mod, "claude_usage", lambda max_age=120: None)  # the bridge words the limit; no real meter call
     sent = []
     monkeypatch.setattr(mod, "send", lambda chat, text, media=None, quoted=None: sent.append(text) or True)
     monkeypatch.setattr(mod, "react", lambda *a: None)
@@ -472,7 +473,7 @@ def test_usage_limit_parks_and_requeues_commands(agent, monkeypatch):
     with mod.adb() as db:
         st = [r[0] for r in db.execute("SELECT status FROM commands ORDER BY id")]
     assert st == ["waiting_limit", "waiting_limit"] and not called, "no Claude run while the limit is on"
-    assert sum("מכסת השימוש" in t for t in sent) == 1, "one notice per window, not per command"
+    assert sum("הודעה מהגשר" in t for t in sent) == 2, "owner 13.11: each message is acknowledged once, by the bridge"
     assert mod.release_limit_waiters() == 0, "still waiting"
     mod.kv_set("limit_until", (mod.dt.datetime.now() - mod.dt.timedelta(minutes=1)).isoformat(timespec="seconds"))
     assert mod.release_limit_waiters() == 2
@@ -518,6 +519,7 @@ def test_requeue_happens_even_if_the_notice_fails(agent, monkeypatch):
 
 def test_limit_hit_during_a_run_parks_the_command(agent, monkeypatch):
     mod, _ = agent
+    monkeypatch.setattr(mod, "claude_usage", lambda max_age=120: None)  # the bridge words the limit; no real meter call
     sent = []
     monkeypatch.setattr(mod, "send", lambda chat, text, media=None, quoted=None: sent.append(text) or True)
     monkeypatch.setattr(mod, "react", lambda *a: None)
@@ -1598,3 +1600,17 @@ def test_bridge_rules_in_every_conversation(agent, monkeypatch):
     assert "כלל לדוגמה" in agent.group_prompt(agent.PRIMARY)
     monkeypatch.setattr(agent, "load_groups", lambda: {"x@g.us": {"name": "x", "purpose": "dev"}})
     assert "כלל לדוגמה" in agent.group_prompt("x@g.us")
+
+
+def test_weekly_limit_uses_meter_reset_and_bridge_text(agent, monkeypatch):
+    """Owner 13.11: a full weekly window must wait for its real reset (days) and the bridge words the status itself."""
+    mod, _ = agent
+    soon = (mod.dt.datetime.now(mod.dt.timezone.utc) + mod.dt.timedelta(days=1, hours=3)).isoformat()
+    monkeypatch.setattr(mod, "claude_usage", lambda max_age=120: {"five_hour": {"utilization": 0, "resets_at": soon},
+                                                                 "seven_day": {"utilization": 100, "resets_at": soon}})
+    reset = mod.meter_reset("You've hit your weekly limit")
+    assert reset and (reset - mod.dt.datetime.now()).total_seconds() > 24 * 3600
+    txt = mod.limit_status_text(reset)
+    assert "המגבלה השבועית" in txt and "שבועית 100%" in txt and "5 שעות 0%" in txt and "הודעה מהגשר" in txt
+    monkeypatch.setattr(mod, "claude_usage", lambda max_age=120: None)
+    assert mod.meter_reset("hit your limit") is None
