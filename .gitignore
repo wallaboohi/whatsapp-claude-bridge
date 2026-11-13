@@ -36,3 +36,8 @@ agent/*.tmp
 agent/stop.request
 agent/voice_tmp/
 agent/peers.json
+
+# local backups / failover snapshots / stray files (never committed)
+agent/config.json.bak-*
+agent/groups.json.bak-*
+agent/failover/
