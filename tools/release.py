@@ -70,6 +70,10 @@ def main():
     for a in sys.argv[2:]:  # --notes-file=<utf8 file>: notes without passing Hebrew through the command line
         if a.startswith("--notes-file="):
             notes = open(a.split("=", 1)[1], encoding="utf-8").read().strip()
+    import versioning  # owner 14.11: the numbering rules live in tools/versioning.py; a release number that breaks them is refused
+    why = versioning.check(ver)
+    if why:
+        sys.exit("✖ " + why)
     if run(["git", "status", "--porcelain", "--untracked-files=no"]).strip() and not dry:
         sys.exit("✖ יש שינויים שלא נשמרו (commit) — שמור אותם קודם.")
 
@@ -138,6 +142,7 @@ def main():
     branch = run(["git", "rev-parse", "--abbrev-ref", "HEAD"]).strip()
     run(["git", "push", "origin", f"{branch}:main"])
     run(["git", "push", "origin", f"v{ver}"])
+    versioning.consume(ver)
     print(f"✔ v{ver} פורסמה. GitHub בונה את הקבצים: https://github.com/WallaBoohi/whatsapp-claude-bridge/actions")
 
 

@@ -931,7 +931,7 @@ def _run_auto(*a, **k):
 def provider_env(name=None, model=None):
     """(env for the claude process or None = the normal sign-in, model to pass or None = the bridge's own choice)."""
     if name is None:
-        name, model = active_provider()
+        name, model = (getattr(_ctx, "force_provider", None), None) if getattr(_ctx, "force_provider", None) else active_provider()
     if name == "auto":  # owner 13.11: the cheapest provider that is ready now (the ladder in providers.json "auto")
         name, model = auto_pick(), None
     _ctx.provider_used = name
@@ -1071,6 +1071,32 @@ def effective_model(model):
     return pm or (providers().get(name) or {}).get("model") or model
 
 
+def hebrew_share(text):
+    """The share of Hebrew among the letters of a text (code blocks ignored); 1.0 when there are too few letters to judge."""
+    letters = re.findall(r"[A-Za-z\u0590-\u05FF]", re.sub(r"```.*?```", "", text or "", flags=re.S))
+    if len(letters) < 30:
+        return 1.0
+    return sum(1 for c in letters if "\u0590" <= c <= "\u05FF") / len(letters)
+
+
+def ensure_hebrew(text, chat=None):
+    """Owner 14.11: a message that is mostly Latin letters is translated to Hebrew by Claude's cheap model before it is sent; when that is not
+    possible the owner gets a Hebrew warning above the original instead of silent English."""
+    if hebrew_share(text) >= 0.35:
+        return text
+    _ctx.force_provider = "claude"
+    try:
+        tr = claude("תרגם לעברית טבעית וברורה את הטקסט הבא. בלי תוספות ובלי הסברים; קוד, כתובות ושמות נשארים כמות שהם:\n\n" + text,
+                    model=CFG.get("light_model") or "haiku", session=False, timeout=120, chat=chat or PRIMARY, tools="")
+    except Exception:
+        tr = None
+    finally:
+        _ctx.force_provider = None
+    if tr and hebrew_share(tr) >= 0.35:
+        return tr.strip() + "\n\n(תורגם אוטומטית מאנגלית)"
+    return "⚠️ הבינה ענתה באנגלית ולא הצלחתי לתרגם. התשובה המקורית:\n" + text
+
+
 def where_of(name, model=None):
     """('local' | 'remote', place): where the model really runs. Ollama: on one of the owner's computers (the host that serves it now:
     laptop / desktop); everything else: the provider's cloud. Owner 14.11: so the response time can be judged by where the thinking happens."""
@@ -1093,6 +1119,142 @@ def ai_tag(model=None):
     m = effective_model(model)
     kind, place = where_of(name, m)
     return f"🧠 {short}" + (f" · {model_he(m)}" if m else "") + (f" · 🏠 מקומי, {place}" if kind == "local" else " · ☁️ מרוחק (ענן)") + "\n"
+
+
+SPEED_HINT = {"claude": "⚡ שניות עד דקה (מנוי)", "gemini": "⚡ שניות · מכסה יומית נמוכה", "groq": "⚡ שניות · עד 8,000 טוקנים לדקה: לשיחות קצרות",
+              "nvidia": "🐢 10 עד 60 שניות לבקשה", "openrouter_free": "🐢 5 עד 30 שניות · 50 ביום", "cloudflare": "⚡ שניות"}
+REMOTE_PICK = {"gemini": ["gemini-3-flash-preview", "gemini-flash-lite-latest"], "groq": ["openai/gpt-oss-120b", "qwen/qwen3.8-27b"],
+               "nvidia": ["minimaxai/minimax-m3.1-flash", "mistralai/mistral-large-4-1t-a52b", "openai/gpt-oss-20b"]}
+
+
+def local_eta_minutes(rank, size_gb):
+    """Rough minutes for one owner message WITH tools on a local model (measured: a 4B model on the laptop took 10 min for a full message;
+    the desktop has no GPU and 15 GB RAM): the laptop is host 0, anything else is slower."""
+    return round(4 + 1.6 * size_gb) if rank == 0 else round(9 + 3.5 * size_gb)
+
+
+def free_menu():
+    """The numbered list of free models the owner can switch to: [{provider, model, line, ready}]. Local ones (on which computer) first, then remote."""
+    out = []
+    ps = providers()
+    oll = ps.get("ollama") or {}
+    for rank, h in enumerate(provider_hosts(oll)):
+        place = (h.get("label") or "").split("(")[0].strip() or "מחשב"
+        try:
+            tags = json.loads(urllib.request.urlopen(h["url"].rstrip("/") + "/api/tags", timeout=3).read().decode()).get("models", [])
+        except Exception:
+            out.append({"provider": "ollama", "model": None, "ready": False, "line": f"🏠 {place} · לא מגיב"})
+            continue
+        for m in sorted([t for t in tags if t["name"].startswith("bridge-")], key=lambda t: t.get("size", 0))[:5]:
+            gb = round((m.get("size") or 0) / 1e9, 1)
+            out.append({"provider": "ollama", "model": m["name"], "ready": True,
+                        "line": f"🏠 {place} · {m['name'].replace(':latest', '')} — כ-{local_eta_minutes(rank, gb)} דק' להודעה עם כלים (הערכה)"})
+    for name in ("gemini", "groq", "nvidia", "openrouter_free", "cloudflare"):
+        p = ps.get(name)
+        if not p:
+            continue
+        ready = provider_ready(name)
+        models = REMOTE_PICK.get(name) or ([] if name != "openrouter_free" else openrouter_free_models()[:2]) or [p.get("model")]
+        for m in models:
+            out.append({"provider": name, "model": m, "ready": ready,
+                        "line": f"☁️ {p.get('short') or name} · {str(m).split('/')[-1]} — {SPEED_HINT.get(name, '')}" + ("" if ready else " · חסר מפתח או בהמתנה")})
+    out.append({"provider": "claude", "model": None, "ready": provider_ready("claude"), "line": f"☁️ Claude (מנוי) — {SPEED_HINT['claude']}"})
+    return out
+
+
+def free_menu_text(chat):
+    menu = free_menu()
+    kv_set(K("free_menu", chat), json.dumps(menu, ensure_ascii=False))
+    lines = ["*🆓 בינות חינמיות לבחירה*", "🏠 = רצה על המחשבים שלך (זמן לפי החומרה) · ☁️ = אצל הספק (זמן לפי הרשת)", ""]
+    for i, e in enumerate(menu, 1):
+        lines.append(f"{i}. {'✅' if e['ready'] else '⚪'} {e['line']}")
+    lines += ["", "לבחירה: */מודל חינמי <מספר>* · אוטומטי לפי עלות: /אוטו · חזרה ל-Claude: /קלוד"]
+    return "\n".join(lines)
+
+
+def free_menu_pick(chat, n):
+    try:
+        menu = json.loads(kv_get(K("free_menu", chat)) or "[]") or free_menu()
+    except ValueError:
+        menu = free_menu()
+    if not 1 <= n <= len(menu):
+        return f"אין מספר {n} ברשימה (יש {len(menu)}). לרשימה: /מודל חינמי"
+    e = menu[n - 1]
+    if not e["ready"]:
+        return "⚪ הבינה הזו לא זמינה כרגע: " + e["line"]
+    return switch_provider(e["provider"], e["model"])
+
+
+def slow_confirm_seconds():
+    return int(CFG.get("slow_confirm_seconds", 300))
+
+
+def estimate_run_seconds(prompt, model=None):
+    """Owner 14.11: (seconds, provider, model, place) — a rough ETA of one owner message on the provider and model that will run it."""
+    name, pm = active_provider()
+    if name == "auto":
+        name, pm = auto_pick() or "claude", None
+    p = providers().get(name) or {}
+    m = pm or p.get("model") or model
+    kind, place = where_of(name, m)
+    if name == "claude":
+        try:
+            with adb() as db:
+                rows = [r[0] for r in db.execute("SELECT seconds FROM claude_runs WHERE ok = 1 AND seconds > 0 AND model = ? AND at >= date('now', '-30 day')", (model or "",))]
+        except Exception:
+            rows = []
+        base = sorted(rows)[len(rows) // 2] if len(rows) >= 5 else 45
+    elif name == "ollama":
+        gb, rank = 3.0, 0
+        for r, h in enumerate(provider_hosts(p)):
+            try:
+                for t in json.loads(urllib.request.urlopen(h["url"].rstrip("/") + "/api/tags", timeout=3).read().decode()).get("models", []):
+                    if t["name"] == m or t["name"] == (m or "") + ":latest":
+                        gb, rank = round((t.get("size") or 0) / 1e9, 1), r
+                        raise StopIteration
+            except StopIteration:
+                break
+            except Exception:
+                continue
+        base = local_eta_minutes(rank, gb) * 60
+    else:
+        base = {"gemini": 20, "groq": 15, "nvidia": 90, "openrouter_free": 60, "cloudflare": 30}.get(name, 60)
+    return int(base * (1.6 if len(prompt or "") > 1500 else 1.0)), name, m, place
+
+
+def ask_slow_approval(cid, chat, mid, src, eta):
+    """Park the command and ask the owner before a run that is expected to cross the 5-minute line."""
+    secs, name, m, place = eta
+    with adb() as db:
+        db.execute("UPDATE commands SET status = 'waiting_approval' WHERE id = ?", (cid,))
+    kv_set(K("pending_slow", chat), str(cid))
+    where = "🏠 מקומי, " + place if where_of(name, m)[0] == "local" else "☁️ מרוחק (ענן)"
+    reply(f"⏱ *הפעולה הזו צפויה לקחת כ-{max(1, round(secs / 60))} דקות* על {(providers().get(name) or {}).get('short') or name} · {model_he(m)} ({where}).\n"
+          f"להמשיך? ענה *כן* להתחלה, *בטל* לביטול, או /מודל חינמי לבחירת בינה מהירה יותר (ואז שלח שוב).\n_(הערכה לפי הבינה והמודל הפעילים)_",
+          quoted=mid if src == "wa" else None)
+
+
+def slow_reply(chat, word):
+    """"כן" / "בטל" while a slow run waits for approval in this chat; None when nothing waits (the word is then an ordinary message)."""
+    pid = kv_get(K("pending_slow", chat))
+    if not pid:
+        return None
+    kv_set(K("pending_slow", chat), "")
+    with adb() as db:
+        if word.strip("/") in ("כן", "אשר", "אישור"):
+            kv_set(f"approved:{pid}", "1")
+            db.execute("UPDATE commands SET status = 'pending' WHERE id = ?", (int(pid),))
+            return "✅ מאשר, מתחיל לעבוד."
+        db.execute("UPDATE commands SET status = 'done' WHERE id = ?", (int(pid),))
+    return "🛑 בוטל. לא התחלתי."
+
+
+def versioning_mod():
+    import importlib.util as _u
+    spec = _u.spec_from_file_location("versioning", os.path.join(ROOT, "tools", "versioning.py"))
+    mod = _u.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def providers_text():
@@ -1714,7 +1876,7 @@ def stop_applies(target, chat, active):
     return chat == PRIMARY or len(active) <= 1
 
 
-def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat=None, tools=None, max_budget=None, stoppable=None):
+def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat=None, tools=None, max_budget=None, stoppable=None, fork=False):
     """One headless Claude Code run; the prompt goes in on stdin (no command-line length limit, no cmd.exe quoting).
     tools="" = a restricted run: no tools and no MCP servers at all (for classifying other people's text)."""
     # config "permission_mode" (default "auto"; e.g. "bypassPermissions" on a PC where nothing should wait for a click);
@@ -1724,6 +1886,8 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
     if guest:  # isolated guest group: never the owner's tools, connectors or browser; owner 13.11: no permission prompt may block its allowed tools (web search was refused headless)
         mode = guest.get("permission_mode") or "bypassPermissions"
     penv, pmodel = provider_env()  # owner 13.11: another provider behind the same engine (same tools and permissions)
+    if penv is not None:  # owner 14.11: nothing English reaches the owner
+        append = ((append or "") + "\n\nחשוב מאוד: ענה תמיד בעברית בלבד, בעברית ברורה וטבעית (קוד, שמות קבצים וכתובות נשארים כמות שהם). אל תכתוב באנגלית.").strip()
     if penv is not None and pmodel:
         model = pmodel
     cmd = [shutil.which("claude") or "claude", "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", mode]
@@ -1742,7 +1906,7 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
     if CFG.get("chrome") and tools is None and not guest and penv is None:
         cmd += ["--chrome"]  # owner 09.11: Claude in Chrome (needs the extension signed in with this PC's Claude account)
     if resume:
-        cmd += ["--resume", resume]
+        cmd += ["--resume", resume] + (["--fork-session"] if fork else [])  # a side question reads the context but never changes the session
     chat = chat or PRIMARY
     if stoppable is None:
         stoppable = on_stage is not None  # only the owner's interactive runs; plugin / hand-off runs never eat a stop request
@@ -2154,8 +2318,38 @@ def over_budget(chat, text=""):
 _command_signal = threading.Event()
 
 
+SIDE_RE = re.compile(r"^\s*/\s*(?:תוך כדי|btw)\s+(\S[\s\S]*)$", re.I)
+
+
+def side_answer(chat, text, msg_id=None):
+    """Owner 14.11: "/תוך כדי <message>" (like /btw in the terminal): a question or a remark to the AI while it is busy. It is answered at once from
+    a FORK of the conversation (the running work and its session are untouched), read-only, short, and tagged like every answer."""
+    _ctx.chat, _ctx.src, _ctx.sync = chat, "wa", 0
+    try:
+        sid = kv_get(K("session_id", chat))
+        model = CFG.get("light_model") or "haiku"
+        prompt = ("הבעלים שולח לך הודעה תוך כדי עבודה (בלי להפסיק אותה). ענה עליה מיד, בקצרה (עד 5 שורות) ובעברית. אל תשנה קבצים, אל תריץ פעולות "
+                  "ואל תמשיך את העבודה הקודמת; רק תשובה להודעה:\n\n" + text)
+        res = _run_auto(prompt, model, sid, 240, None, append=group_prompt(chat), chat=chat, tools="Read,Glob,Grep", stoppable=False, fork=bool(sid))
+        ans = (res.get("result") or "").strip() or "לא הצלחתי לנסח תשובה."
+        if (getattr(_ctx, "provider_used", None) or active_provider()[0]) != "claude":
+            ans = ensure_hebrew(ans, chat)
+        reply(ai_tag(model) + "💬 *תוך כדי*\n" + ans, quoted=msg_id)
+    except LimitHit:
+        reply("💬 לא אוכל לענות תוך כדי כרגע: מכסת Claude נגמרה. אפשר /מודל חינמי למעבר לבינה אחרת.")
+    except Exception as e:
+        log("side answer failed", e)
+        reply("💬 לא הצלחתי לענות תוך כדי. העבודה הרגילה ממשיכה.")
+    finally:
+        _ctx.chat = None
+
+
 def enqueue_command(msg_id, text, when, chat=None):
     chat = chat or PRIMARY
+    sm = SIDE_RE.match(text or "")
+    if sm:  # not queued behind the running work: answered now, in its own thread
+        threading.Thread(target=side_answer, args=(chat, sm.group(1).strip(), msg_id), daemon=True).start()
+        return
     with adb() as db:
         db.execute("INSERT INTO commands (msg_id, text, at, chat_jid, source, sync) VALUES (?, ?, ?, ?, 'wa', 0)", (msg_id, text, when, chat))
     _ctx.chat, _ctx.src, _ctx.sync = chat, "wa", 0
@@ -2257,7 +2451,9 @@ def name_prefix():
 
 def _name_words(name):
     pre = name_prefix()
-    return [w for w in name.replace("·", " ").split() if w not in _MODEL_WORDS and w != pre]
+    shorts = {str((p or {}).get("short") or "").lower() for k, p in providers().items() if k != "claude"}  # Ollama, Groq, Gemini ... are model words too
+    return [w for w in name.replace("·", " ").split()
+            if w not in _MODEL_WORDS and w != pre and ":" not in w and not w.lower().startswith("bridge-") and w.lower() not in shorts]
 
 
 def name_core(name):
@@ -2272,6 +2468,16 @@ def template_after_first_word(name):
     if not words:
         return ""
     return " ".join([w for w in (name_prefix(), words[0], "{model}", *words[1:]) if w])
+
+
+def group_label(model):
+    """The word for {model} in a group name: Claude's model in Hebrew; for any other provider its short name (never a model id: owner 14.11)."""
+    name, _ = active_provider()
+    if name == "auto":
+        name = getattr(_ctx, "provider_used", None) or auto_pick() or "claude"
+    if name != "claude":
+        return (providers().get(name) or {}).get("short") or name
+    return model_he(model)
 
 
 def sync_group_name(chat, model):
@@ -2295,7 +2501,7 @@ def sync_group_name(chat, model):
                     tpl = new
                     kv_set(K("name_tpl", chat), tpl)
                     kv_set(K("name_set_at", chat), "0")
-            want = tpl.replace("{model}", model_he(model))[:100]
+            want = tpl.replace("{model}", group_label(model))[:100]
             if kv_get(K("name_set", chat)) == want:
                 return
             last = kv_get(K("name_set_at", chat))
@@ -2574,6 +2780,22 @@ def owner_command(text, chat=None):
         return usage_report(chat or PRIMARY)
     if re.match(r"^/\s*(כרום|chrome)\s*$", text.strip()):   # owner 10.11: bring the Chrome extension back remotely
         return chrome_start()
+    m = re.match(r"^\s*/?(כן|אשר|אישור|בטל|לא)\s*$", text.strip())
+    if m:  # owner 14.11: the answer to "this will take N minutes, continue?"
+        sr = slow_reply(chat or PRIMARY, m.group(1))
+        if sr:
+            return sr
+    m = re.match(r"^/\s*(?:מודל|מודלים)\s+(?:חינמי|חינמיים)(?:\s+(\d+))?\s*$", text.strip())
+    if m:  # owner 14.11: the numbered list of free models (local / remote, where it runs, how fast) and the pick by number
+        return free_menu_pick(chat or PRIMARY, int(m.group(1))) if m.group(1) else free_menu_text(chat or PRIMARY)
+    m = re.match(r"^/\s*(גרסה|version)(?:\s+אשר\s+(\d+\.\d+\.\d+))?\s*$", text.strip())
+    if m:  # owner 14.11: the version rules live in tools/versioning.py; an exception needs this approval
+        v = versioning_mod()
+        if m.group(2):
+            return f"✅ אושרה חריגה חד-פעמית: שחרור {m.group(2)}" if v.approve(m.group(2)) else f"⚠️ אי אפשר לאשר {m.group(2)}: לא גבוהה מהנוכחית ({v.current()})"
+        return (f"🔖 גרסה נוכחית: {v.current()} · הבאה לפי החוק: *{v.next_version()}*\n"
+                "החוק: תיקון אחד בכל שחרור, בלי לדלג ובלי להשתמש שוב בתג שפורסם; האפליקציה נושאת את אותו מספר.\n"
+                "חריגה: /גרסה אשר X.Y.Z")
     m = re.match(r"^/\s*(ספק|provider)(?:\s+(\S+))?(?:\s+(\S+))?\s*$", text.strip())
     if m:  # owner 13.11: the bridge's AI provider (the same as the provider node of the legend in the dashboard)
         if not m.group(2):
@@ -2940,6 +3162,11 @@ def run_command(row):
             prompt = RESUME_CUT.get(LANG, RESUME_CUT["en"]).format(why=cut) + prompt
         model, how = pick_model_info(text, chat)
         _ctx.auto_pick = how == "auto"
+        eta = estimate_run_seconds(prompt, model)  # owner 14.11: nothing that will cross the 5-minute line starts without his OK
+        if eta[0] >= slow_confirm_seconds() and not kv_get(f"approved:{cid}") and not guest and not text.lstrip().startswith("!!"):
+            ask_slow_approval(cid, chat, mid, src, eta)
+            parked = True
+            return
         threading.Thread(target=sync_group_name, args=(chat, effective_model(model)), daemon=True).start()  # the name shows who is answering
         started = time.time()
         status = StatusMsg(effective_model(model), chat, wa=not pc_only(), react_to=mid if src == "wa" else None)
@@ -2965,6 +3192,8 @@ def run_command(row):
         if not answer and limit_min and time.time() - started >= limit_min * 60 - 10:  # killed by the time limit, not a crash
             out = (f"⏱ נעצרתי אחרי {limit_min} דקות (תקרת הזמן של השיחה הזו — אפשר לשנות בלוח). מה שכבר בוצע נשמר; "
                    "כתוב \"המשך\" ואמשיך מאותה נקודה.")
+        if answer and not stopped and (getattr(_ctx, "provider_used", None) or active_provider()[0]) != "claude":
+            out = ensure_hebrew(out, chat)
         if rm and rm.group(2).strip():  # owner 09.11: every rule answer says how many rules there are now
             out += f"\n\n📜 יש עכשיו {rules_count(rules_text(chat))} כללים בשיחה הזו (/כלל בסיס להצגה)."
         if rec:

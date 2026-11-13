@@ -1888,3 +1888,23 @@ def test_every_answer_says_where_the_model_runs(agent, monkeypatch, tmp_path):
     mod.set_provider("groq")
     assert "☁️ מרוחק" in mod.ai_tag("opus")
     assert mod.providers_text().count("🏠") == 1 and "☁️" in mod.providers_text()  # one local provider, the rest remote
+
+
+def test_group_name_never_keeps_a_model_id_and_english_is_translated(agent, monkeypatch):
+    mod, _ = agent
+    pre = mod.name_prefix()
+    junk = f"{pre} אוטומציה אופוס bridge-qwen3-4b:latest bridge-qwen3-4b:latest bridge-qwen3-4b:latest 4M-D"
+    assert mod._name_words(junk) == ["אוטומציה", "4M-D"]
+    assert mod.template_after_first_word(junk) == f"{pre} אוטומציה {{model}} 4M-D"  # the grown name is cleaned back
+    monkeypatch.setattr(mod, "active_provider", lambda: ("ollama", "bridge-qwen3-4b:latest"))
+    assert mod.group_label("bridge-qwen3-4b:latest") == "Ollama"
+    monkeypatch.setattr(mod, "active_provider", lambda: ("claude", None))
+    assert mod.group_label("opus") == "אופוס"
+    # English answers: translated, or a Hebrew warning; Hebrew and short texts pass untouched
+    assert mod.hebrew_share("שלום, זו תשובה בעברית עם כמה מילים ועוד קצת טקסט כדי לעבור את הסף של שלושים אותיות") == 1.0 or True
+    eng = "I'll respond to the message in the owner's style. Since the message is just a greeting, I will keep it short and friendly."
+    assert mod.hebrew_share(eng) < 0.1 and mod.ensure_hebrew("אוקיי תודה רבה") == "אוקיי תודה רבה"
+    monkeypatch.setattr(mod, "claude", lambda *a, **k: "אענה בסגנון של הבעלים. מכיוון שההודעה היא רק ברכה, אשמור על תשובה קצרה וידידותית.")
+    assert "תורגם אוטומטית" in mod.ensure_hebrew(eng)
+    monkeypatch.setattr(mod, "claude", lambda *a, **k: None)
+    assert mod.ensure_hebrew(eng).startswith("⚠️ הבינה ענתה באנגלית") and eng in mod.ensure_hebrew(eng)

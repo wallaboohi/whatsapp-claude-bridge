@@ -14,6 +14,12 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ver, notes = sys.argv[1], (sys.argv[2] if len(sys.argv) > 2 else "")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import versioning  # owner 14.11: the dashboard app carries the tool's number, never a number of its own
+
+_why = versioning.check_dash(ver)
+if _why:
+    sys.exit("✖ " + _why)
 open(os.path.join(ROOT, "dash", "VERSION"), "w").write(ver + "\n")
 r = ROOT.replace("\\", "/")
 subprocess.run([shutil.which("uv") or os.path.expanduser("~/.local/bin/uv.exe"), "run", "-q", "--no-project", "--python", "3.14", "--with", "pyinstaller", "--with", "pywebview",
