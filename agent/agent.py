@@ -4012,11 +4012,15 @@ def is_draft_copy(content):
 LIVE_CTL = re.compile(r"^\s*/\s*(עצור|stop|esc|תור|queue)(?:\s+(.*))?$", re.S | re.I)
 
 
+MODEL_WORDS = {"אופוס": "opus", "opus": "opus", "סונט": "sonnet", "sonnet": "sonnet", "הייקו": "haiku", "חייקו": "haiku", "haiku": "haiku",
+               "פייבל": "fable", "fable": "fable", "אוטו": "auto", "auto": "auto"}
+
+
 def live_control(cj, mid, content):
     """Owner 13.11: the terminal's controls while Claude works, from WhatsApp — handled the moment the message arrives, never queued
     behind the running work:  /עצור = Esc (stop the current action, keep the session, back to listening; queued messages go on)
     · /עצור <instruction> = Esc + type (stop, then this instruction runs in the same session) · /עצור הכל = Ctrl+C (stop and cancel
-    everything queued in this conversation) · /תור = what is running and waiting here. True when the message was one of these."""
+    everything queued in this conversation) · /עצור <model> = stop, switch model, continue the same work · /תור = what is running and waiting here. True when the message was one of these."""
     m = LIVE_CTL.match(content or "")
     if not m:
         return False
@@ -4044,6 +4048,15 @@ def live_control(cj, mid, content):
                                "AND status IN ('pending','waiting_limit','interrupted') AND msg_id != ?",
                                (dt.datetime.now().isoformat(timespec="seconds"), PRIMARY, cj, mid)).rowcount
             out.append(f"🗑️ בוטלו {n} הודעות שחיכו בתור." if n else "לא היו הודעות בתור.")
+        elif rest and MODEL_WORDS.get(rest.split()[0].lower()) and len(rest.split()) <= 2:
+            # owner 13.11: "I gave the order on the wrong model" — stop, switch, and the same work goes on (same session) on the new one
+            name = MODEL_WORDS[rest.split()[0].lower()]
+            set_override(name, 1 if rest.split()[1:] in (["שעה"], ["hour"]) else None, cj)
+            out.append(f"🔁 המודל הוחלף ל-*{MODELS[name]['he']}*.")
+            if running:
+                enqueue_command(mid, "המשך את העבודה שנעצרה עכשיו מאותה נקודה בדיוק (הוחלף מודל באמצע); בדוק קודם מה כבר בוצע.",
+                                dt.datetime.now().strftime("%Y-%m-%d %H:%M"), cj)
+                out.append("▶️ העבודה שנעצרה ממשיכה מאותה נקודה, על המודל החדש.")
         elif rest:
             enqueue_command(mid, rest, dt.datetime.now().strftime("%Y-%m-%d %H:%M"), cj)
             waiting = sum(1 for r in rows if r[2] != "running")

@@ -1671,3 +1671,23 @@ def test_live_control_stop_and_queue(agent, monkeypatch):
     with mod.adb() as db:
         assert [r[0] for r in db.execute("SELECT status FROM commands ORDER BY id")] == ["cancelled"] * 3
     assert mod.live_control(chat, "X5", "/stop") and "אין פעולה שרצה" in sent[-1]
+
+
+def test_stop_and_switch_model_continues(agent, monkeypatch, tmp_path):
+    """Owner 13.11: an order given on the wrong model — '/עצור אופוס' stops, switches, and the same work goes on."""
+    mod, _ = agent
+    sent = []
+    monkeypatch.setattr(mod, "send", lambda chat, text, media=None, quoted=None, **k: sent.append(text) or True)
+    monkeypatch.setattr(mod, "react", lambda *a: None)
+    monkeypatch.setattr(mod, "STOP_FILE", str(tmp_path / "stop.request"))
+    monkeypatch.setattr(mod, "sync_group_name", lambda *a: None, raising=False)
+    chat = mod.PRIMARY
+    mod._active_runs[chat] = 1.0
+    try:
+        assert mod.live_control(chat, "S1", "/עצור אופוס")
+    finally:
+        mod._active_runs.pop(chat, None)
+    assert mod.get_override(chat) == "opus" and ("אופוס" in sent[-1] or "Opus" in sent[-1])
+    with mod.adb() as db:
+        texts = [r[0] for r in db.execute("SELECT text FROM commands WHERE status = 'pending'")]
+    assert len(texts) == 1 and "המשך" in texts[0]
