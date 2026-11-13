@@ -2803,8 +2803,17 @@ def read_other(chat, mid, wait=90):
             if not text:
                 log("read_other: no transcript", chat, mid)
                 return
-            res = bridge("/send_transcript", {"jid": chat, "id": mid, "text": f"🤖 תמלול: {text}"[:3900]}, timeout=120)
+            try:
+                res = bridge("/send_transcript", {"jid": chat, "id": mid, "text": f"🤖 תמלול: {text}"[:3900]}, timeout=120)
+            except Exception as e:  # noqa: BLE001
+                res = {"error": str(e)[:160]}
             log("wheel transcript", chat, mid, json.dumps(res, ensure_ascii=False)[:160])
+            if res.get("error") or res.get("success") is False:  # owner 13.11: a failed 🛞 must say so, not stay silent
+                _ctx.chat = PRIMARY
+                try:
+                    reply(f"🛞 התמלול הוכן אבל לא נשלח לשיחה: {res.get('error') or res.get('message') or '?'}"+chr(10)+f"_התמלול:_ {text[:600]}")
+                finally:
+                    _ctx.chat = None
         return
     elif mtype:
         return  # image / video / document / sticker: unchanged (owner 09.11)
