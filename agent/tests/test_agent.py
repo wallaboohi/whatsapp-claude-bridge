@@ -1597,6 +1597,7 @@ def test_edit_pairs_learns_word_swaps(agent):
 def test_bridge_rules_in_every_conversation(agent, monkeypatch):
     """Owner 11.11: the bridge-wide rules (home/bridge_rules.md) reach every conversation's prompt."""
     agent, _ = agent
+    os.makedirs(agent.HOME, exist_ok=True)  # home/ is personal and not in git: a clean checkout (CI) has no such folder
     with open(os.path.join(agent.HOME, agent.BRIDGE_RULES), "w", encoding="utf-8") as f:
         f.write("- כלל לדוגמה")
     assert "כלל לדוגמה" in agent.group_prompt(agent.PRIMARY)
