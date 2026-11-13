@@ -1071,6 +1071,16 @@ def effective_model(model):
     return pm or (providers().get(name) or {}).get("model") or model
 
 
+def where_of(name, model=None):
+    """('local' | 'remote', place): where the model really runs. Ollama: on one of the owner's computers (the host that serves it now:
+    laptop / desktop); everything else: the provider's cloud. Owner 14.11: so the response time can be judged by where the thinking happens."""
+    p = providers().get(name) or {}
+    if p.get("where") == "local" or p.get("hosts"):
+        h = provider_host(p, model) or {}
+        return "local", (h.get("label") or "").split("(")[0].strip() or "מקומי"
+    return "remote", "ענן"
+
+
 def ai_tag(model=None):
     """Owner 13.11: the first line of every answer says who answered: the provider and its model (config show_ai_tag, default on)."""
     if not CFG.get("show_ai_tag", True):
@@ -1081,7 +1091,8 @@ def ai_tag(model=None):
     p = providers().get(name) or {}
     short = p.get("short") or (p.get("label") or name).split("·")[0].strip()
     m = effective_model(model)
-    return f"🧠 {short}" + (f" · {model_he(m)}" if m else "") + "\n"
+    kind, place = where_of(name, m)
+    return f"🧠 {short}" + (f" · {model_he(m)}" if m else "") + (f" · 🏠 מקומי, {place}" if kind == "local" else " · ☁️ מרוחק (ענן)") + "\n"
 
 
 def providers_text():
@@ -1089,7 +1100,7 @@ def providers_text():
     lines = ["*🔌 ספק הבינה של הגשר* (כל השיחות עוברות דרכו)", ""]
     for k, p in providers().items():
         c = provider_check(k)
-        lines.append(f"{'👉 ' if k == cur else ''}*{p['label']}* ({k}) {'✅' if c['ok'] else '⚪'} {c['detail']}")
+        lines.append(f"{'👉 ' if k == cur else ''}{'🏠' if where_of(k)[0] == 'local' else '☁️'} *{p['label']}* ({k}) {'✅' if c['ok'] else '⚪'} {c['detail']}")
         if k == cur and p["kind"] != "claude":
             lines.append(f"   מודל: {cm or p.get('model') or '—'}")
         lines.append(f"   _{p.get('how', '')}_")

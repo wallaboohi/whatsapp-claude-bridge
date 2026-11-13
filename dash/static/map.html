@@ -9,7 +9,7 @@
 <style>
 /* system map (owner 10.11 / 11.11): engine shared by both PCs, project data per conversation, data, connections */
 body { margin: 0; background: var(--bg); color: var(--text); font-family: Heebo, system-ui, sans-serif; }
-.map { position: relative; display: grid; grid-template-columns: 1.15fr 1fr 1fr .9fr; gap: 26px; padding: 18px 20px 24px; }
+.map { position: relative; display: grid; grid-template-columns: 1.15fr 1fr 1fr .9fr 1.05fr; gap: 22px; padding: 18px 20px 24px; }
 .lane h3 { margin: 0 0 8px; font-size: .95rem; color: var(--muted); font-weight: 700; }
 .lane h3 small { font-weight: 400; }
 .node { position: relative; z-index: 1; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 9px 12px;
@@ -75,11 +75,29 @@ async function draw() {
     <div class="lane"><h3>מחשבים ושיחות <small>(המידע של כל פרויקט)</small></h3>${machines}</div>
     <div class="lane"><h3>מנוע <small>(יכולות, שיטות וכלים)</small></h3>${engine}</div>
     <div class="lane"><h3>מידע ומאגרים</h3>${data}</div>
-    <div class="lane"><h3>חיבורים</h3>${links}</div>`);
+    <div class="lane"><h3>חיבורים</h3>${links}</div>
+    <div class="lane"><h3>בינות <small>(מי חושב, ואיפה)</small></h3>${aiLane(m.ai)}</div>`);
   document.querySelectorAll(".conv").forEach(el => el.onclick = e => post({ open: el.dataset.jid, peer: el.dataset.peer, rules: !!e.target.closest("[data-rules]") }));
   document.querySelectorAll("[data-path]").forEach(el => el.onclick = () =>
     fetch("/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ do: "open_path", path: el.dataset.path }) }));
   wires(m);
+}
+
+function aiLane(a) {  // owner 14.11: local (on the owner's own computers) vs remote (cloud): the place decides the response time
+  if (!a) return "";
+  const cur = a.providers.find(p => p.active) || {};
+  const row = p => `<div class="node"><b>${p.where === "local" ? "🏠" : "☁️"} ${esc(p.label)}</b>${dot(p.ready ? "ok" : (p.key === false ? "wait" : "bad"))}
+      <div class="what">${esc(p.cost)}${p.key === false ? " · חסר מפתח" : ""}${p.active ? " · ✅ פעיל" : ""}</div></div>`;
+  return `<div class="node engine"><b>🧠 עונה עכשיו: ${esc(cur.label || a.active)}</b>
+      <div class="what">${esc(a.model)} · ${cur.where === "local" ? "🏠 מקומי, על המחשבים שלך: זמן התגובה לפי החומרה" : "☁️ מרוחק: זמן התגובה לפי הרשת והספק"}</div></div>
+    <h3 style="margin-top:12px">🏠 מקומי <small>(על המחשבים שלך)</small></h3>
+    ${a.local_hosts.map(h => `<div class="node"><b>💻 ${esc(h.label.split("(")[0].trim())}</b>${dot(h.up ? "ok" : "bad")}
+      <div class="what">${h.up ? h.models + " מודלים" : "לא מגיב"} · איטי על מעבד, מהיר יותר עם כרטיס מסך</div></div>`).join("")}
+    ${a.providers.filter(p => p.where === "local").map(row).join("")}
+    <h3 style="margin-top:12px">☁️ מרוחק <small>(אצל הספק)</small></h3>
+    ${a.providers.filter(p => p.where === "remote" && p.id !== "auto").map(row).join("")}
+    <div class="node"><b>🔁 שרת תרגום (פורט 8799)</b>${dot(a.translator ? "ok" : "bad")}<div class="what">מתרגם בין הגשר לספקים שמדברים בפורמט OpenAI</div></div>
+    <div class="node"><b>⚖️ /אוטו, מהזול ליקר</b><div class="what">${a.ladder.map(esc).join(" ← ")}</div></div>`;
 }
 
 function wires(m) {  // machines -> engine -> each part; engine parts -> data and connections

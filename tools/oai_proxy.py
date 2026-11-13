@@ -17,6 +17,7 @@ secrets/<key_file> on every request (never logged, never returned). Listens on 1
 """
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -43,6 +44,18 @@ def load_providers():
     except (OSError, ValueError):
         pass
     return out
+
+
+def upstream_base(p):
+    """The provider's upstream URL; "{account_id}" (Cloudflare Workers AI) is filled from secrets/<upstream.account_file>."""
+    base = p["upstream"]["base"]
+    if "{account_id}" in base:
+        try:
+            acc = open(os.path.join(ROOT, "secrets", p["upstream"].get("account_file") or ""), encoding="utf-8").read().strip()
+        except OSError:
+            acc = ""
+        base = base.replace("{account_id}", acc or "MISSING-ACCOUNT-ID")
+    return base
 
 
 def read_key(p):
@@ -225,6 +238,19 @@ def stream_events(lines, model):
     yield "message_stop", {"type": "message_stop"}
 
 
+CAP_RE = re.compile(r"(?i)(?:less than or equal to|at most|no more than|maximum(?: value)?(?: is| of)?|up to|<=)\s*`?(\d{3,7})")
+
+
+def token_cap(message, req):
+    """When a provider rejects max_tokens as too large (Claude Code asks for 32k+; many free models allow 8k-16k), the limit it names
+    (None when the message names none or it is not below what we sent)."""
+    if not re.search(r"max_(completion_)?tokens", message or ""):
+        return None
+    m = CAP_RE.search(message)
+    sent = req.get("max_completion_tokens") or req.get("max_tokens") or 0
+    return int(m.group(1)) if m and int(m.group(1)) < sent else None
+
+
 def upstream_message(raw, fallback=""):
     """The human message of an upstream error body: a dict, a one-item list (Gemini) or plain text."""
     try:
@@ -279,7 +305,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(404, error_body(404, "unknown provider"))
         if rest == "v1/models":  # the provider's real list (this also proves the key); the static list from providers.json when it cannot be read
             try:
-                r = urllib.request.urlopen(urllib.request.Request(p["upstream"]["base"].rstrip("/") + "/models",
+                r = urllib.request.urlopen(urllib.request.Request(upstream_base(p).rstrip("/") + "/models",
                                                                   headers={"Authorization": "Bearer " + read_key(p), "User-Agent": UA}), timeout=15)
                 ids = [str(m.get("id", "")).replace("models/", "") for m in (json.loads(r.read().decode("utf-8", "replace")).get("data") or []) if m.get("id")]
                 if ids:
@@ -320,14 +346,21 @@ class Handler(BaseHTTPRequestHandler):
         if os.environ.get("OAI_PROXY_DEBUG"):  # shape of the conversation only: roles, and the first characters of a tool result
             print("   <-", [(m["role"], (m.get("content") or "")[:60] if m["role"] == "tool" else len(str(m.get("content") or ""))) for m in req["messages"]][-4:], flush=True)
         key = read_key(p)
-        url = p["upstream"]["base"].rstrip("/") + "/chat/completions"
+        url = upstream_base(p).rstrip("/") + "/chat/completions"
         hdr = {"Content-Type": "application/json", "Authorization": "Bearer " + key, "User-Agent": UA}
-        try:
-            r = urllib.request.urlopen(urllib.request.Request(url, data=json.dumps(req).encode(), headers=hdr, method="POST"), timeout=600)
-        except urllib.error.HTTPError as e:
-            return self._json(e.code, error_body(e.code, upstream_message(e.read().decode("utf-8", "replace"), e.reason)))
-        except Exception as e:
-            return self._json(502, error_body(502, f"upstream unreachable: {e}"))
+        r = None
+        for attempt in (1, 2):  # the second one only after a "max_tokens too large" answer, with the limit the provider named
+            try:
+                r = urllib.request.urlopen(urllib.request.Request(url, data=json.dumps(req).encode(), headers=hdr, method="POST"), timeout=600)
+                break
+            except urllib.error.HTTPError as e:
+                msg = upstream_message(e.read().decode("utf-8", "replace"), e.reason)
+                cap = token_cap(msg, req) if e.code == 400 and attempt == 1 else None
+                if not cap:
+                    return self._json(e.code, error_body(e.code, msg))
+                req["max_completion_tokens" if "max_completion_tokens" in req else "max_tokens"] = cap
+            except Exception as e:
+                return self._json(502, error_body(502, f"upstream unreachable: {e}"))
         model = body.get("model") or req["model"]
         if not body.get("stream"):
             return self._json(200, from_openai(json.loads(r.read().decode("utf-8", "replace")), model))
@@ -350,8 +383,17 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
 
 
+class _Server(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        if isinstance(sys.exc_info()[1], (ConnectionResetError, BrokenPipeError, ConnectionAbortedError)):
+            return  # a client that closed a kept-alive connection: not an error
+        super().handle_error(request, client_address)
+
+
 def make_server(port=PORT):
-    return ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    return _Server(("127.0.0.1", port), Handler)
 
 
 def serve(port=PORT):

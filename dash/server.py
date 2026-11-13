@@ -719,6 +719,7 @@ def legend():
         chk = provider_check_cached(k)
         provs.append({"id": k, "label": p.get("label") or k, "kind": p.get("kind"), "how": p.get("how") or "",
                       "short": p.get("short") or "", "cost": p.get("cost") or "",
+                      "where": "local" if (p.get("where") == "local" or p.get("hosts")) else "remote",
                       "active": k == pname, "ok": chk["ok"], "detail": chk["detail"], "models": chk["models"][:60],
                       "model": (pmodel or p.get("model") or "") if k == pname else (p.get("model") or ""),
                       "key_file": p.get("key_file") or "", "has_key": bool(_provider_key(p)) if p.get("key_file") else None})
@@ -735,6 +736,34 @@ def legend():
             "providers": provs,
             "provider_code": "agent/providers.json · agent/provider.json · secrets/<key>",
             "provider_phone": "/ספק · /ספק <שם> [מודל]"}
+
+
+def ai_map():
+    """Owner 14.11: the map's AI lane: who thinks now, which models run on the owner's own computers (and on which) and which in the cloud,
+    the OpenAI translator and the cost ladder of /אוטו."""
+    allp = _providers()
+    pname, pmodel = active_provider()
+    out = []
+    local_hosts = []
+    for k, p in allp.items():
+        local = p.get("where") == "local" or bool(p.get("hosts"))
+        chk = provider_check_cached(k)
+        out.append({"id": k, "label": p.get("short") or p.get("label") or k, "where": "local" if local else "remote", "cost": p.get("cost") or "",
+                    "ready": bool(chk["ok"]), "active": k == pname, "key": (bool(_provider_key(p)) if p.get("key_file") else None)})
+        for h in (p.get("hosts") or []):
+            try:
+                names = json.loads(urllib.request.urlopen(h["url"].rstrip("/") + "/api/tags", timeout=3).read().decode()).get("models", [])
+                local_hosts.append({"label": h.get("label") or h["url"], "up": True, "models": len(names)})
+            except Exception:
+                local_hosts.append({"label": h.get("label") or h["url"], "up": False, "models": 0})
+    try:
+        urllib.request.urlopen("http://127.0.0.1:8799/health", timeout=1.5).read()
+        proxy_up = True
+    except Exception:
+        proxy_up = False
+    auto = allp.get("auto") or {}
+    return {"active": pname, "model": pmodel or (allp.get(pname) or {}).get("model") or "", "providers": out, "local_hosts": local_hosts,
+            "translator": proxy_up, "ladder": [allp[n].get("short") or n for n in (auto.get("ladder") or []) if n in allp]}
 
 
 def system_map():
@@ -778,7 +807,7 @@ def system_map():
     if len(vers) > 1:
         overlaps.append("גרסאות גשר שונות: " + ", ".join(sorted(vers)))
     return {"at": dt.datetime.now().isoformat(timespec="seconds"), "machines": machines, "tools": tools, "data": data,
-            "links": links, "overlaps": overlaps}
+            "links": links, "overlaps": overlaps, "ai": ai_map()}
 
 
 def peers_status():

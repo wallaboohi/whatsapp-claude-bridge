@@ -9,7 +9,8 @@
    "claude",
    "מנוי"
   ],
-  "cost": "מנוי"
+  "cost": "מנוי",
+  "where": "remote"
  },
  "ollama": {
   "label": "Ollama · מקומי במחשב",
@@ -40,7 +41,8 @@
    "r1": "deepseek-r1:14b",
    "deepseek-coder": "deepseek-coder-v2:16b"
   },
-  "cost": "מקומי"
+  "cost": "מקומי",
+  "where": "local"
  },
  "gemini": {
   "label": "Gemini · חינמי (דרך שרת התרגום)",
@@ -65,7 +67,8 @@
    "gemini"
   ],
   "how": "שכבה חינמית בלי כרטיס אשראי: מפתח מ-aistudio.google.com/apikey, נשמר ב-secrets/gemini.key. המכסות היומיות נמוכות ומשתנות (בודקים ב-AI Studio).",
-  "cost": "חינם"
+  "cost": "חינם",
+  "where": "remote"
  },
  "groq": {
   "label": "Groq · חינמי (דרך שרת התרגום)",
@@ -87,7 +90,8 @@
    "groq"
   ],
   "how": "שכבה חינמית בלי כרטיס אשראי: מפתח מ-console.groq.com, נשמר ב-secrets/groq.key. המכסות לכל מודל (console.groq.com/settings/limits).",
-  "cost": "חינם"
+  "cost": "חינם",
+  "where": "remote"
  },
  "openrouter_free": {
   "label": "OpenRouter · מודלים חינמיים",
@@ -113,7 +117,8 @@
   ],
   "how": "אותו מפתח של OpenRouter (secrets/openrouter.key). רק מודלים עם סיומת :free, עם תמיכה בכלים; הרשימה נמשכת חיה מהקטלוג של OpenRouter ומתעדכנת לבד. מכסה: 20 בקשות לדקה, ו-50 ליום (1,000 ליום אחרי רכישת קרדיט של 10 דולר).",
   "cost": "חינם",
-  "free_list": "openrouter"
+  "free_list": "openrouter",
+  "where": "remote"
  },
  "auto": {
   "label": "אוטומטי · לפי עלות",
@@ -128,48 +133,10 @@
    "claude",
    "gemini",
    "groq",
-   "cerebras",
    "nvidia",
-   "mistral",
    "openrouter_free"
   ],
   "how": "הגשר בוחר לבד את הספק הזול ביותר שזמין: קודם המנוי של Claude, אחריו ספקים חינמיים לפי הסדר. כשספק נגמרה לו המכסה, אין לו מפתח או שהוא לא מגיב, הגשר עובר לבא בתור ומנסה אותו שוב אחרי זמן המתנה. מודלים מקומיים (Ollama) לא בסולם כי הם איטיים מדי לעבודה עם כלים על המעבד: עוברים אליהם ידנית, למשל /qwencode. הסדר ב-providers.json תחת auto.ladder או config auto_ladder."
- },
- "cerebras": {
-  "label": "Cerebras · חינמי (דרך שרת התרגום)",
-  "short": "Cerebras",
-  "kind": "anthropic",
-  "base_url": "http://127.0.0.1:8799/p/cerebras",
-  "token": "local-proxy",
-  "key_file": "cerebras.key",
-  "model": "gpt-oss-120b",
-  "cost": "חינם",
-  "upstream": {
-   "base": "https://api.cerebras.ai/v1"
-  },
-  "aliases": [
-   "cerebras",
-   "סרברס"
-  ],
-  "how": "הרשמה חינמית ב-cloud.cerebras.ai, מפתח נשמר ב-secrets/cerebras.key. מכסה שפורסמה: כמיליון טוקנים ליום ו-5 בקשות לדקה. שם המודל המוגדר לא נבדק: בחר מהרשימה אחרי שמדביקים מפתח."
- },
- "mistral": {
-  "label": "Mistral · חינמי (דרך שרת התרגום)",
-  "short": "Mistral",
-  "kind": "anthropic",
-  "base_url": "http://127.0.0.1:8799/p/mistral",
-  "token": "local-proxy",
-  "key_file": "mistral.key",
-  "model": "mistral-small-latest",
-  "cost": "חינם",
-  "upstream": {
-   "base": "https://api.mistral.ai/v1"
-  },
-  "aliases": [
-   "mistral-api",
-   "מיסטרל"
-  ],
-  "how": "תוכנית Experiment חינמית ב-console.mistral.ai: דורשת אימות טלפון והסכמה לשימוש בנתונים לאימון. מפתח נשמר ב-secrets/mistral.key."
  },
  "nvidia": {
   "label": "NVIDIA NIM · חינמי (דרך שרת התרגום)",
@@ -187,6 +154,32 @@
    "nvidia",
    "אנבידיה"
   ],
-  "how": "חשבון מפתחים חינמי ב-build.nvidia.com, ואז Settings ← API Keys. מכסה שפורסמה: כ-40 בקשות לדקה. מפתח נשמר ב-secrets/nvidia.key."
+  "how": "חשבון מפתחים חינמי ב-build.nvidia.com ← Settings ← API Keys. מכסה שפורסמה: כ-40 בקשות לדקה. מפתח נשמר ב-secrets/nvidia.key. רשימת המודלים נמשכת חיה מ-NVIDIA (כ-80 מודלים).",
+  "where": "remote"
+ },
+ "cloudflare": {
+  "label": "Cloudflare Workers AI · חינמי (דרך שרת התרגום)",
+  "short": "Cloudflare",
+  "kind": "anthropic",
+  "base_url": "http://127.0.0.1:8799/p/cloudflare",
+  "token": "local-proxy",
+  "key_file": "cloudflare.key",
+  "where": "remote",
+  "cost": "חינם",
+  "upstream": {
+   "base": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
+   "account_file": "cloudflare.account"
+  },
+  "model": "@cf/openai/gpt-oss-120b",
+  "models": [
+   "@cf/openai/gpt-oss-120b",
+   "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+   "@cf/qwen/qwen2.5-coder-32b-instruct"
+  ],
+  "aliases": [
+   "cloudflare",
+   "קלאודפלייר"
+  ],
+  "how": "חשבון Cloudflare חינמי: dash.cloudflare.com ← AI ← Workers AI. צריך שני דברים: מזהה חשבון (Account ID) שנשמר ב-secrets/cloudflare.account, וטוקן API עם הרשאת Workers AI שנשמר ב-secrets/cloudflare.key. כתובת ה-API מתיעוד Cloudflare; המכסה החינמית (כ-10,000 נוירונים ליום) ממקור משני; שמות המודלים ברשימה לא נבדקו ללא חשבון."
  }
 }

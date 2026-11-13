@@ -1811,7 +1811,7 @@ def _keys(mod, monkeypatch, *names):
 
 def test_auto_ladder_goes_up_in_cost_and_skips_what_is_down(agent, monkeypatch):
     mod, _ = agent
-    _keys(mod, monkeypatch, "gemini", "groq", "cerebras")
+    _keys(mod, monkeypatch, "gemini", "groq", "nvidia")
     assert mod.auto_pick() == "claude"  # the subscription first (already paid)
     mod.kv_set("limit_until", (mod.dt.datetime.now() + mod.dt.timedelta(hours=1)).isoformat(timespec="seconds"))
     assert mod.auto_pick() == "gemini"  # its limit is on: the first free provider
@@ -1819,12 +1819,12 @@ def test_auto_ladder_goes_up_in_cost_and_skips_what_is_down(agent, monkeypatch):
     assert mod.auto_pick() == "groq" and mod.provider_cooled("gemini")
     mod.kv_set("cool:gemini", (mod.dt.datetime.now() - mod.dt.timedelta(minutes=1)).isoformat(timespec="seconds"))
     assert mod.auto_pick() == "gemini"  # the wait is over
-    assert mod.auto_pick(skip=("gemini", "groq")) == "cerebras"  # nvidia / mistral / openrouter_free have no key
-    assert mod.auto_pick(skip=("gemini", "groq", "cerebras")) is None
+    assert mod.auto_pick(skip=("gemini", "groq")) == "nvidia"  # openrouter_free has no key
+    assert mod.auto_pick(skip=("gemini", "groq", "nvidia")) is None
     assert "openai" not in mod.auto_ladder() and "deepseek" not in mod.auto_ladder()  # free providers only
-    mod.CFG["auto_ladder"] = ["cerebras", "claude"]
+    mod.CFG["auto_ladder"] = ["nvidia", "claude"]
     try:
-        assert mod.auto_ladder() == ["cerebras", "claude"] and mod.auto_pick() == "cerebras"
+        assert mod.auto_ladder() == ["nvidia", "claude"] and mod.auto_pick() == "nvidia"
     finally:
         mod.CFG.pop("auto_ladder")
 
@@ -1875,3 +1875,16 @@ def test_auto_provider_env_and_check(agent, monkeypatch):
     monkeypatch.undo()
     c = mod.provider_check("auto")
     assert "מהזול ליקר" in c["detail"]
+
+
+def test_every_answer_says_where_the_model_runs(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    monkeypatch.setattr(mod, "PROVIDER_FILE", str(tmp_path / "provider.json"))
+    assert mod.where_of("groq")[0] == "remote" and mod.where_of("claude")[0] == "remote" and mod.where_of("ollama")[0] == "local"
+    monkeypatch.setattr(mod, "provider_host", lambda p, m=None, max_age=20: {"url": "http://127.0.0.1:11435", "label": "לפטופ (ברירת מחדל)"})
+    assert mod.where_of("ollama", "qwen3:8b") == ("local", "לפטופ")  # the host that serves it, without the parenthesis
+    mod.set_provider("ollama", "qwen3:8b")
+    assert "🏠 מקומי, לפטופ" in mod.ai_tag("opus")
+    mod.set_provider("groq")
+    assert "☁️ מרוחק" in mod.ai_tag("opus")
+    assert mod.providers_text().count("🏠") == 1 and "☁️" in mod.providers_text()  # one local provider, the rest remote

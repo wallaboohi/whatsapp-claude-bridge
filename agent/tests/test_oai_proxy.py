@@ -155,7 +155,25 @@ def test_models_come_from_the_provider_and_prove_the_key(proxy):
         assert e.code == 401
 
 
+def test_account_id_placeholder_is_filled_from_secrets(tmp_path, monkeypatch):
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "secrets" / "cf.account").write_text("abc123\n", encoding="utf-8")
+    monkeypatch.setattr(px, "ROOT", str(tmp_path))
+    p = {"upstream": {"base": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1", "account_file": "cf.account"}}
+    assert px.upstream_base(p) == "https://api.cloudflare.com/client/v4/accounts/abc123/ai/v1"
+    (tmp_path / "secrets" / "cf.account").unlink()
+    assert "MISSING-ACCOUNT-ID" in px.upstream_base(p)  # an honest error from Cloudflare, not a silent wrong address
+
+
 def test_upstream_error_shapes():
     assert px.upstream_message('{"error": {"message": "bad key"}}') == "bad key"
     assert px.upstream_message('[{"error": {"code": 404, "message": "model not found"}}]') == "model not found"  # Gemini sends a list
     assert px.upstream_message('{"error": "plain"}') == "plain" and px.upstream_message("not json", "x") == "not json"
+
+
+def test_token_cap_is_learned_from_the_providers_message():
+    req = {"max_tokens": 32000}
+    assert px.token_cap("`max_tokens` must be less than or equal to `16384`, the maximum value for this model", req) == 16384
+    assert px.token_cap("max_completion_tokens is too large: 128000. This model supports at most 8192 completion tokens", {"max_completion_tokens": 128000}) == 8192
+    assert px.token_cap("max_tokens must be at most 64000", req) is None  # not below what was sent: no retry
+    assert px.token_cap("rate limit exceeded", req) is None

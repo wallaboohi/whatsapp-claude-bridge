@@ -16,7 +16,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ver, notes = sys.argv[1], (sys.argv[2] if len(sys.argv) > 2 else "")
 open(os.path.join(ROOT, "dash", "VERSION"), "w").write(ver + "\n")
 r = ROOT.replace("\\", "/")
-subprocess.run([shutil.which("uv") or os.path.expanduser("~/.local/bin/uv.exe"), "run", "-q", "--no-project", "--with", "pyinstaller", "--with", "pywebview",
+subprocess.run([shutil.which("uv") or os.path.expanduser("~/.local/bin/uv.exe"), "run", "-q", "--no-project", "--python", "3.14", "--with", "pyinstaller", "--with", "pywebview",
                 "--with", "pystray", "--with", "pillow", "pyinstaller", "--noconfirm", "--onefile", "--windowed", "--name", "WhatsAppDash",
                 "--icon", f"{r}/dash/icon.ico", "--add-data", f"{r}/dash/static;dash/static", "--add-data", f"{r}/dash/VERSION;dash",
                 "--add-data", f"{r}/dash/__init__.py;dash", "--add-data", f"{r}/dash/server.py;dash", "--add-data", f"{r}/dash/updater.py;dash",

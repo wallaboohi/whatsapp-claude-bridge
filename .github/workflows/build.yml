@@ -44,14 +44,14 @@ jobs:
 
       - name: Agent — unit tests
         working-directory: agent
-        run: uv run --group dev pytest -q tests
+        run: uv run --python 3.14 --group dev pytest -q tests   # owner 14.11: Python 3.14 (3.12 and 3.13 are security-only now)
 
       - name: MCP server — import check
         working-directory: whatsapp-mcp-server
-        run: uv run python -c "import main, extras"
+        run: uv run python -c "import main, extras"   # stays on the default Python: its locked pydantic-core 2.33.0 has no Python 3.14 wheel (checked 14.11)
 
       - name: Dashboard app
-        run: uv run --no-project python tools/release_dash.py "$(cat dash/VERSION)" "$(git log -1 --pretty=%s)"
+        run: uv run --no-project --python 3.14 python tools/release_dash.py "$(cat dash/VERSION)" "$(git log -1 --pretty=%s)"
 
       - uses: actions/upload-artifact@v7
         with:

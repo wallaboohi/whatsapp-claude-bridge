@@ -86,10 +86,10 @@ async function draw() {
       <div class="node active" data-k="model" data-wire="model"><b>🧠 ${esc(L.model.current)}</b>
         <div class="what">${L.model.provider === "claude" ? "מודל של Claude (לכל שיחה אפשר מודל משלה)" : "מודל של הספק " + esc(prov.label || "")}</div></div></div>
     <div class="lane"><h3>הספק <small>(מי מריץ את המודל)</small></h3>
-      ${L.providers.map((p, i) => `<div class="node ${p.active ? "active" : "off"}" data-k="p${i}" data-wire="p${i}"><b>🔌 ${esc(p.label)}</b>${dot(p.ok)}
+      ${L.providers.map((p, i) => `<div class="node ${p.active ? "active" : "off"}" data-k="p${i}" data-wire="p${i}"><b>${p.where === "local" ? "🏠" : "☁️"} ${esc(p.label)}</b>${dot(p.ok)}
         <div class="what">${p.active ? "✅ פעיל · " : ""}${esc(p.detail)}</div></div>`).join("")}
       <div class="node off" data-k="padd"><b>➕ ספק חדש</b><div class="what">הדבקת מפתח API של בינה אחרת</div></div></div>`;
-  $("quick").innerHTML = `<span>החלפה מהירה:</span>` + L.providers.map((p, i) => `<button class="${p.active ? "on" : ""}" data-q="${i}" ${p.ok || p.active ? "" : "disabled"} title="${esc(p.detail)}">${esc(p.label)}</button>`).join("");
+  $("quick").innerHTML = `<span>החלפה מהירה:</span>` + L.providers.map((p, i) => `<button class="${p.active ? "on" : ""}" data-q="${i}" ${p.ok || p.active ? "" : "disabled"} title="${esc(p.detail)}">${p.where === "local" ? "🏠" : "☁️"} ${esc(p.short || p.label)}</button>`).join("");
   document.querySelectorAll("#quick button[data-q]").forEach(b => b.onclick = async () => { const p = L.providers[+b.dataset.q]; if (p.active) return;
     const r = await act({ do: "provider_set", provider: p.id, model: p.model || "" }); if (r.error) alert(r.error); else draw(); });
   document.querySelectorAll(".node[data-k]").forEach(el => el.onclick = () => open(el.dataset.k));

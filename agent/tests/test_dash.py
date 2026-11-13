@@ -258,3 +258,18 @@ def test_provider_add_openai_format_goes_through_the_translator(dash, monkeypatc
     assert e["base_url"] == "http://127.0.0.1:8799/p/oa" and e["token"] == "local-proxy"
     assert e["upstream"] == {"base": "https://api.openai.com/v1", "max_tokens_field": "max_completion_tokens"}
     assert "sk-test-1" not in json.dumps(e) and (root / "secrets" / "oa.key").read_text(encoding="utf-8") == "sk-test-1"
+
+
+def test_system_map_has_the_ai_lane_with_local_and_remote(dash, monkeypatch):
+    srv, root = dash
+    (root / "agent" / "providers.json").write_text(json.dumps({
+        "claude": {"label": "Claude", "short": "Claude", "kind": "claude", "where": "remote", "cost": "מנוי"},
+        "ollama": {"label": "Ollama", "short": "Ollama", "kind": "anthropic", "where": "local", "token": "x", "probe": "ollama", "hosts": [{"url": "http://127.0.0.1:9", "label": "לפטופ (ברירת מחדל)"}]},
+        "groq": {"label": "Groq", "short": "Groq", "kind": "anthropic", "where": "remote", "key_file": "groq.key", "cost": "חינם"},
+        "auto": {"label": "אוטו", "short": "אוטו", "kind": "auto", "ladder": ["claude", "groq"]}}), encoding="utf-8")
+    monkeypatch.setattr(srv, "provider_check_cached", lambda n, ttl=120: {"ok": n != "ollama", "detail": "x", "models": []})
+    a = srv.ai_map()
+    by = {p["id"]: p for p in a["providers"]}
+    assert by["ollama"]["where"] == "local" and by["groq"]["where"] == "remote" and by["claude"]["where"] == "remote"
+    assert a["local_hosts"] == [{"label": "לפטופ (ברירת מחדל)", "up": False, "models": 0}]  # nothing listens on port 9
+    assert a["ladder"] == ["Claude", "Groq"] and by["groq"]["key"] is False and a["active"] == "claude"
