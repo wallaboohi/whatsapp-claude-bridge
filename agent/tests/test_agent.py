@@ -830,7 +830,7 @@ def test_status_hourglass_flips(agent):
     rep = mod.owner_command("/תקרה")
     ru = mod.restart_usage()
     assert "me@example.com" in rep and "me@example.com" in ru and "5 שעות 27%" in ru and "שבועית 70%" in ru and "מגבלת הגשר" in ru
-    assert "27%" in rep and "70%" in rep and "כל הגשר" in rep and "השיחה הזו" in rep and "חודשי" in rep
+    assert "27%" in rep and "70%" in rep and "כל הגשר" in rep and "השיחה הזו" in rep and "חודשי" not in rep
 
 
 def test_downtime_notice_lists_messages_sent_while_down(agent, monkeypatch):
@@ -1613,6 +1613,7 @@ def test_weekly_limit_uses_meter_reset_and_bridge_text(agent, monkeypatch):
     assert reset and (reset - mod.dt.datetime.now()).total_seconds() > 24 * 3600
     txt = mod.limit_status_text(reset)
     assert "המגבלה השבועית" in txt and "שבועית 100%" in txt and "5 שעות 0%" in txt and "הודעה מהגשר" in txt
+    assert "חודשית" not in txt and "ממתינות לטיפול: *0*" in txt, "no data from Claude = not mentioned; waiting count shown"
     monkeypatch.setattr(mod, "claude_usage", lambda max_age=120: None)
     assert mod.meter_reset("hit your limit") is None
 

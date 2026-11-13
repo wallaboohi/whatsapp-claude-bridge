@@ -1188,13 +1188,17 @@ def when_he(t):
 
 
 def limit_status_text(until):
-    """The bridge's own message when Claude's limit is on (no Claude needed): which limit, usage of each window, when it returns."""
+    """The bridge's own message when Claude's limit is on (no Claude needed): which limit, only the windows Claude reports (owner
+    13.11: no data = not mentioned), when it returns, and how many messages (all conversations) now wait for treatment."""
     u = claude_usage(max_age=300) or {}
-    pct = lambda k: f"{float((u.get(k) or {}).get('utilization')):.0f}%" if (u.get(k) or {}).get("utilization") is not None else "—"
+    parts = [f"{name} {float(x['utilization']):.0f}%" for key, name in (("five_hour", "5 שעות"), ("seven_day", "שבועית"))
+             for x in [u.get(key) or {}] if x.get("utilization") is not None]
     kinds = [k for k in (kv_get("limit_kind") or "").split(",") if k]
     which = " + ".join(WINDOW_HE[k] for k in kinds if k in WINDOW_HE) or "מכסת Claude"
-    return (f"⏳ *{which} נגמרה.* 5 שעות {pct('five_hour')} · שבועית {pct('seven_day')} · חודשית — (אין נתון)\n"
-            f"החזרה: {when_he(until)}. ההודעה שלך נשמרה ותטופל לבד. (הודעה מהגשר)")
+    with adb() as db:
+        n = db.execute("SELECT count(*) FROM commands WHERE status = 'waiting_limit'").fetchone()[0]
+    return (f"⏳ *{which} נגמרה.*" + (f" ({' · '.join(parts)})" if parts else "") + "\n"
+            f"החזרה: {when_he(until)}. ממתינות לטיפול: *{n}* הודעות (כולל זו). (הודעה מהגשר)")
 
 
 def limit_until():
@@ -1586,7 +1590,8 @@ def restart_usage():
         line = (f"💰 שימוש הגשר היום: {money(tot)} · ללא תקרה (ייחוס: התקרה הקודמת {money(tcap, 0)}, {_pct(tot, tcap)})"
                 if CFG.get("unlimited_all") else f"💰 מגבלת הגשר: {money(tot)} מתוך {money(tcap, 0)} ({_pct(tot, tcap)})")
         return (line + "\n"
-                f"☁️ מגבלת Claude · {claude_account()}: 5 שעות {pct('five_hour')} · שבועית {pct('seven_day')} · חודשית —")
+                f"☁️ מגבלת Claude · {claude_account()}: " + " · ".join(f"{n} {pct(k)}" for k, n in (("five_hour", "5 שעות"), ("seven_day", "שבועית"))
+                                                       if (u.get(k) or {}).get("utilization") is not None))
     except Exception as e:
         log("restart usage failed", e)
         return ""
@@ -1619,7 +1624,6 @@ def usage_report(chat):
             x = u.get(key) or {}
             if x.get("utilization") is not None:
                 out.append(f"• {name}: {x['utilization']:.0f}% (מתאפס {_reset_at(x.get('resets_at') or '')})")
-        out.append("• חודשי: Claude לא מספק נתון כזה.")
     lu = limit_until()
     if lu:
         out.append(f"• 🔒 המגבלה הגיעה — ההודעות נשמרות ויטופלו ב-{lu:%H:%M}.")
