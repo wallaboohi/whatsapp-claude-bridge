@@ -245,3 +245,16 @@ def test_anthropic_probe_explains_a_rejected_key(dash, monkeypatch):
     monkeypatch.setattr(srv.urllib.request, "urlopen", refuse)
     r = srv.anthropic_probe({"base_url": "https://x.y/anthropic", "models": ["m1"]}, "tok")
     assert not r["ok"] and "המפתח נדחה" in r["detail"] and r["models"] == ["m1"]
+
+
+def test_provider_add_openai_format_goes_through_the_translator(dash, monkeypatch):
+    srv, root = dash
+    (root / "agent" / "providers.json").write_text(json.dumps({"claude": {"label": "Claude", "kind": "claude"}}), encoding="utf-8")
+    monkeypatch.setattr(srv, "anthropic_probe", lambda p, tok: {"ok": True, "detail": "ok", "models": list(p["models"])})
+    r = srv.action({"do": "provider_add", "id": "oa", "label": "OA", "base_url": "https://api.openai.com/v1", "model": "gpt-4.1-mini",
+                    "models": "gpt-4.1-mini", "key": "sk-test-1", "openai_format": True})
+    assert r["ok"]
+    e = json.loads((root / "agent" / "providers.json").read_text(encoding="utf-8"))["oa"]
+    assert e["base_url"] == "http://127.0.0.1:8799/p/oa" and e["token"] == "local-proxy"
+    assert e["upstream"] == {"base": "https://api.openai.com/v1", "max_tokens_field": "max_completion_tokens"}
+    assert "sk-test-1" not in json.dumps(e) and (root / "secrets" / "oa.key").read_text(encoding="utf-8") == "sk-test-1"

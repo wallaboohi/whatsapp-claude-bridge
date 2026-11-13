@@ -921,6 +921,52 @@ def provider_check(name):
         return {"ok": False, "detail": f"לא מגיב: {str(e)[:80]}", "models": []}
 
 
+def resolve_ai_word(word):
+    """Owner 13.11: (provider, model or None) for a switch word such as /דיפסיק /openai /qwencode: a provider's "aliases" or "model_aliases"
+    in providers.json (or its own name); None when the word is not one."""
+    w = (word or "").lower().strip()
+    for name, p in providers().items():
+        if w == name.lower() or w in [str(a).lower() for a in p.get("aliases") or []]:
+            return name, None
+        for k, v in (p.get("model_aliases") or {}).items():
+            if w == str(k).lower():
+                return name, v
+    return (PROVIDER_WORDS[w], None) if w in PROVIDER_WORDS else None
+
+
+def switch_provider(name, model=None):
+    """Make `name` (and `model`) the bridge's provider if it answers now; the reply text for WhatsApp."""
+    ps = providers()
+    c = provider_check(name)
+    if not c["ok"]:
+        return f"⚪ {ps[name]['label']} לא מחובר: {c['detail']}. לא הוחלף."
+    if model and c["models"] and model not in c["models"]:
+        return f"המודל {model} לא נמצא אצל {ps[name]['label']}. יש: " + ", ".join(c["models"][:15])
+    set_provider(name, model)
+    _, cm = active_provider()
+    return (f"✅ ספק הגשר: *{ps[name]['label']}*" + (f" · מודל {cm or ps[name].get('model')}" if name != "claude" else "")
+            + ". כל השיחות עוברות דרכו מההודעה הבאה. חזרה: /קלוד")
+
+
+def effective_model(model):
+    """The model that really answers: the provider's own when the bridge is not on Claude (the picked Claude model is not used then)."""
+    name, pm = active_provider()
+    if name == "claude":
+        return model
+    return pm or (providers().get(name) or {}).get("model") or model
+
+
+def ai_tag(model=None):
+    """Owner 13.11: the first line of every answer says who answered: the provider and its model (config show_ai_tag, default on)."""
+    if not CFG.get("show_ai_tag", True):
+        return ""
+    name, _ = active_provider()
+    p = providers().get(name) or {}
+    short = p.get("short") or (p.get("label") or name).split("·")[0].strip()
+    m = effective_model(model)
+    return f"🧠 {short}" + (f" · {model_he(m)}" if m else "") + "\n"
+
+
 def providers_text():
     cur, cm = active_provider()
     lines = ["*🔌 ספק הבינה של הגשר* (כל השיחות עוברות דרכו)", ""]
@@ -930,7 +976,8 @@ def providers_text():
         if k == cur and p["kind"] != "claude":
             lines.append(f"   מודל: {cm or p.get('model') or '—'}")
         lines.append(f"   _{p.get('how', '')}_")
-    lines += ["", "החלפה: /ספק ollama (או /ספק ollama <מודל>) · חזרה: /ספק claude · מקרא גרפי בלוח: legend.html"]
+    words = [f"/{(p.get('aliases') or [k])[0]}" for k, p in providers().items()]
+    lines += ["", "החלפה מהירה: " + " ".join(words) + " · עם מודל: /ספק ollama <מודל> · מקרא גרפי בלוח: legend.html"]
     return "\n".join(lines)
 
 
@@ -2394,21 +2441,17 @@ def owner_command(text, chat=None):
     if m:  # owner 13.11: the bridge's AI provider (the same as the provider node of the legend in the dashboard)
         if not m.group(2):
             return providers_text()
-        name = PROVIDER_WORDS.get(m.group(2).lower(), m.group(2).lower())
-        if name not in providers():
+        hit = resolve_ai_word(m.group(2))
+        if not hit:
             return "לא מכיר את הספק הזה.\n\n" + providers_text()
-        c = provider_check(name)
-        if not c["ok"]:
-            return f"⚪ {providers()[name]['label']} לא מחובר: {c['detail']}. לא הוחלף."
-        if m.group(3) and c["models"] and m.group(3) not in c["models"]:
-            return f"המודל {m.group(3)} לא נמצא אצל {providers()[name]['label']}. יש: " + ", ".join(c["models"][:15])
-        set_provider(name, m.group(3))
-        _, cm = active_provider()
-        return (f"✅ ספק הגשר: *{providers()[name]['label']}*" + (f" · מודל {cm or providers()[name].get('model')}" if name != "claude" else "")
-                + ". כל השיחות עוברות דרכו מההודעה הבאה. חזרה: /ספק claude")
+        return switch_provider(hit[0], m.group(3) or hit[1])
     if re.match(r"^/(הפעל מחדש|אתחל|restart)\s*$", text.strip()):
         RESTART_REQ.set()
         return "🔄 מפעיל את הסוכן מחדש. אכתוב כאן כשאעלה (בערך 20 שניות)."
+    m = re.match(r"^/\s*([^\s/]+)\s*$", text.strip())
+    hit = resolve_ai_word(m.group(1)) if m else None
+    if hit:  # owner 13.11: /דיפסיק /openai /qwencode ... switch the bridge's provider (and model) in one word
+        return switch_provider(*hit)
     m = re.match(r"^/\s*(מודלים|מודל|models|model|סשן|session)\s*(.*)$", text.strip(), re.S)
     if not m:
         return None
@@ -2760,9 +2803,9 @@ def run_command(row):
             prompt = RESUME_CUT.get(LANG, RESUME_CUT["en"]).format(why=cut) + prompt
         model, how = pick_model_info(text, chat)
         _ctx.auto_pick = how == "auto"
-        threading.Thread(target=sync_group_name, args=(chat, model), daemon=True).start()  # the name shows who is answering
+        threading.Thread(target=sync_group_name, args=(chat, effective_model(model)), daemon=True).start()  # the name shows who is answering
         started = time.time()
-        status = StatusMsg(model, chat, wa=not pc_only(), react_to=mid if src == "wa" else None)
+        status = StatusMsg(effective_model(model), chat, wa=not pc_only(), react_to=mid if src == "wa" else None)
         limit_min = run_timeout_minutes(chat)
         try:
             answer = claude(prompt, model=model, session=not CFG.get("fresh_sessions"), on_stage=status.set_stage, chat=chat,
@@ -2792,7 +2835,7 @@ def run_command(row):
         elif how == "sticky_deep" and not stopped:
             out += ("\n\n💡 לניתוח לעומק: התחל את ההודעה ב-!! (המודל החזק להודעה אחת; הסשן נשאר על המודל הנוכחי כדי לא לשלם שוב על כל ההקשר)."
                     if LANG == "he" else "\n\n💡 For deep analysis start the message with !! (strongest model for one message).")
-        reply(out, quoted=mid if (CFG.get("quote_replies", True) and src == "wa") else None)
+        reply((ai_tag(model) if answer and not stopped else "") + out, quoted=mid if (CFG.get("quote_replies", True) and src == "wa") else None)
         send_outbox(started)
         if answer and not stopped and not guest and time.time() - started >= float(CFG.get("push_long_minutes", 5)) * 60:
             with adb() as db:  # Claude may already have queued its own push (a question waiting for the owner)
@@ -5628,4 +5671,12 @@ if __name__ == "__main__":
     sys.path.insert(0, ROOT)
     from dash import server as dash_server  # control panel, also on http://127.0.0.1:8770
     threading.Thread(target=dash_server.serve, args=(8770,), daemon=True).start()
+    try:  # owner 13.11: Anthropic -> OpenAI translator for providers that speak only the OpenAI protocol (tools/oai_proxy.py, 127.0.0.1:8799)
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location("oai_proxy", os.path.join(ROOT, "tools", "oai_proxy.py"))
+        _px = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_px)
+        log("oai proxy", "started" if _px.start_in_thread() else "port taken (another copy serves)")
+    except Exception as e:
+        log("oai proxy not started", e)
     sweep_loop(_down_since)

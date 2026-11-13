@@ -1862,6 +1862,12 @@ def action(a):
             return {"error": "מפתח לא תקין"}
         entry = {"label": ((a.get("label") or "").strip()[:60] or name), "kind": "anthropic", "base_url": base, "key_file": name + ".key",
                  "model": model, "how": f"ספק שהוספת מהלוח. כתובת: {base}. המפתח נשמר רק במחשב הזה."}
+        if a.get("openai_format"):  # a provider that speaks only the OpenAI protocol: Claude Code talks to the local translator (tools/oai_proxy.py)
+            entry["upstream"] = {"base": base}
+            if "api.openai.com" in base:
+                entry["upstream"]["max_tokens_field"] = "max_completion_tokens"
+            entry.update(base_url=f"http://127.0.0.1:8799/p/{name}", token="local-proxy",
+                         how=f"ספק בפורמט OpenAI שהוספת מהלוח ({base}), דרך שרת התרגום המקומי (פורט 8799). המפתח נשמר רק במחשב הזה.")
         models = [m.strip() for m in (a.get("models") or "").replace("\n", ",").split(",") if m.strip()][:40]
         if models:
             entry["models"] = models

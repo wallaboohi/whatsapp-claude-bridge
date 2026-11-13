@@ -201,7 +201,7 @@ def test_pc_message_is_answered_in_the_dashboard_only(multi, monkeypatch):
     assert not [x for x in sent if "התשובה" in x[1]], "a PC-only answer must not be posted to WhatsApp"
     with mod.adb() as db:
         rows = db.execute("SELECT chat, role, text FROM local_messages").fetchall()
-    assert (DEV, "tool", "התשובה") in rows
+    assert any(r[0] == DEV and r[1] == "tool" and r[2].startswith("🧠 ") and r[2].endswith("התשובה") for r in rows)  # owner 13.11: the answer opens with who answered
     assert calls[0][0] == DEV and "מהמחשב" in calls[0][2]
 
 
@@ -1780,3 +1780,24 @@ def test_conflict_merge_goes_to_another_provider_when_claude_is_limited(agent, m
     # nothing else answers: the failure is reported, the merge is aborted by the caller
     monkeypatch.setattr(mod, "fallback_providers", lambda skip=None: [])
     assert mod._resolve_conflicts(["a.py"]) == "usage limit"
+
+
+def test_switch_words_and_the_answer_tag(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    monkeypatch.setattr(mod, "PROVIDER_FILE", str(tmp_path / "provider.json"))
+    assert mod.resolve_ai_word("דיפסיק") == ("deepseek", None) and mod.resolve_ai_word("OpenAI") == ("openai", None)
+    assert mod.resolve_ai_word("qwencode") == ("ollama", "qwen2.5-coder:3b") and mod.resolve_ai_word("קלוד") == ("claude", None)
+    assert mod.resolve_ai_word("nope") is None and mod.resolve_ai_word("סשן") is None  # a real command is never a switch word
+    monkeypatch.setattr(mod, "provider_check", lambda n: {"ok": False, "detail": "אין מפתח", "models": []})
+    assert "לא מחובר" in mod.owner_command("/דיפסיק") and mod.active_provider()[0] == "claude"  # not connected: nothing switches
+    monkeypatch.setattr(mod, "provider_check", lambda n: {"ok": True, "detail": "", "models": ["qwen2.5-coder:3b", "qwen3:8b"]})
+    assert "ספק הגשר" in mod.owner_command("/qwencode") and mod.active_provider() == ("ollama", "qwen2.5-coder:3b")
+    tag = mod.ai_tag("opus")
+    assert tag.startswith("🧠 Ollama") and "qwen2.5-coder:3b" in tag and tag.endswith("\n")
+    assert "ספק הגשר" in mod.owner_command("/ספק ollama qwen3:8b") and mod.active_provider() == ("ollama", "qwen3:8b")
+    assert "לא נמצא" in mod.owner_command("/ספק ollama no-such-model")
+    mod.owner_command("/קלוד")
+    assert mod.ai_tag("opus").startswith("🧠 Claude")
+    monkeypatch.setitem(mod.CFG, "show_ai_tag", False)
+    assert mod.ai_tag("opus") == ""
+

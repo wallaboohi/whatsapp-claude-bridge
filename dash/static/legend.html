@@ -155,9 +155,10 @@ function open(k) {
       <div class="row"><input id="am" placeholder="מודל ברירת מחדל" dir="ltr"></div>
       <div class="row"><input id="ams" placeholder="עוד מודלים, מופרדים בפסיק (לא חובה)" dir="ltr"></div>
       <div class="row"><input id="ak" type="password" placeholder="מפתח API" autocomplete="off" dir="ltr"></div>
+      <div class="row"><label><input id="aoa" type="checkbox"> השירות מדבר בפורמט OpenAI (דרך שרת התרגום המקומי)</label></div>
       <div class="row"><button id="adeep">מלא ל-DeepSeek</button><button class="primary" id="asave">הוסף</button></div><div class="msg" id="msg"></div>`;
     $("adeep").onclick = () => { $("an").value = "deepseek"; $("al").value = "DeepSeek · ענן, זול"; $("au").value = "https://api.deepseek.com/anthropic"; $("am").value = "deepseek-chat"; $("ams").value = "deepseek-chat, deepseek-reasoner"; };
-    $("asave").onclick = async () => { const r = await act({ do: "provider_add", id: $("an").value, label: $("al").value, base_url: $("au").value, model: $("am").value, models: $("ams").value, key: $("ak").value });
+    $("asave").onclick = async () => { const r = await act({ do: "provider_add", id: $("an").value, label: $("al").value, base_url: $("au").value, model: $("am").value, models: $("ams").value, key: $("ak").value, openai_format: $("aoa").checked });
       $("ak").value = ""; $("msg").textContent = r.error ? "⚠️ " + r.error : (r.check && r.check.ok ? "✅ נוסף ומחובר" : "נוסף · " + ((r.check || {}).detail || "")); if (!r.error) { sel = ""; draw(); } };
   } else if (k[0] === "p") {
     const p = L.providers[+k.slice(1)];

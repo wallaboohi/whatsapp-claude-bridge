@@ -2,7 +2,13 @@
  "claude": {
   "label": "Claude · המנוי",
   "kind": "claude",
-  "how": "החשבון שמחובר במחשב (claude auth login). מגבלות 5 שעות ושבועית לפי המנוי."
+  "how": "החשבון שמחובר במחשב (claude auth login). מגבלות 5 שעות ושבועית לפי המנוי.",
+  "short": "Claude",
+  "aliases": [
+   "קלוד",
+   "claude",
+   "מנוי"
+  ]
  },
  "ollama": {
   "label": "Ollama · מקומי במחשב",
@@ -16,7 +22,23 @@
     "url": "http://127.0.0.1:11434",
     "label": "המחשב הזה"
    }
-  ]
+  ],
+  "short": "Ollama",
+  "aliases": [
+   "אולמה",
+   "אולאמה",
+   "ollama"
+  ],
+  "model_aliases": {
+   "qwencode": "qwen2.5-coder:3b",
+   "qwen": "qwen3:8b",
+   "gemma": "gemma3:12b",
+   "llama": "llama3.1:8b",
+   "mistral": "mistral:7b",
+   "phi": "phi4-mini",
+   "r1": "deepseek-r1:14b",
+   "deepseek-coder": "deepseek-coder-v2:16b"
+  }
  },
  "openrouter": {
   "label": "OpenRouter · ענן, הרבה מודלים",
@@ -24,13 +46,23 @@
   "base_url": "https://openrouter.ai/api",
   "key_file": "openrouter.key",
   "model": "anthropic/claude-sonnet-4.5",
-  "how": "מפתח מ-openrouter.ai/keys נשמר בקובץ secrets/openrouter.key (לא בקוד). תשלום לפי שימוש; המידע יוצא לשרתי OpenRouter ולספק המודל."
+  "how": "מפתח מ-openrouter.ai/keys נשמר בקובץ secrets/openrouter.key (לא בקוד). תשלום לפי שימוש; המידע יוצא לשרתי OpenRouter ולספק המודל.",
+  "short": "OpenRouter",
+  "aliases": [
+   "אופנראוטר",
+   "openrouter"
+  ]
  },
  "anthropic_api": {
   "label": "Claude API · תשלום לפי שימוש",
   "kind": "anthropic-key",
   "key_file": "anthropic.key",
-  "how": "מפתח מ-console.anthropic.com נשמר ב-secrets/anthropic.key. אותם מודלים של Claude, בלי מגבלות המנוי."
+  "how": "מפתח מ-console.anthropic.com נשמר ב-secrets/anthropic.key. אותם מודלים של Claude, בלי מגבלות המנוי.",
+  "short": "Claude API",
+  "aliases": [
+   "api",
+   "anthropic_api"
+  ]
  },
  "deepseek": {
   "label": "DeepSeek · ענן, זול",
@@ -42,6 +74,108 @@
    "deepseek-chat",
    "deepseek-reasoner"
   ],
-  "how": "מפתח מ-platform.deepseek.com (API keys → Create). המפתח נראה פעם אחת בלבד בזמן היצירה, ומתחיל ב-sk-. הדבק אותו כאן."
+  "how": "מפתח מ-platform.deepseek.com (API keys → Create). המפתח נראה פעם אחת בלבד בזמן היצירה, ומתחיל ב-sk-. הדבק אותו כאן.",
+  "short": "DeepSeek",
+  "aliases": [
+   "דיפסיק",
+   "deepseek"
+  ]
+ },
+ "openai": {
+  "label": "OpenAI · ענן (דרך שרת התרגום)",
+  "short": "OpenAI",
+  "kind": "anthropic",
+  "base_url": "http://127.0.0.1:8799/p/openai",
+  "token": "local-proxy",
+  "key_file": "openai.key",
+  "model": "gpt-4.1-mini",
+  "models": [
+   "gpt-4.1-mini",
+   "gpt-4.1",
+   "gpt-4o-mini",
+   "gpt-4o",
+   "gpt-5.4-mini",
+   "gpt-5.4",
+   "gpt-5.2"
+  ],
+  "upstream": {
+   "base": "https://api.openai.com/v1",
+   "max_tokens_field": "max_completion_tokens"
+  },
+  "aliases": [
+   "אופןאיאיי",
+   "אופנאיי",
+   "אופןאיי",
+   "openai",
+   "gpt",
+   "chatgpt"
+  ],
+  "how": "מפתח מ-platform.openai.com/api-keys, נשמר ב-secrets/openai.key. OpenAI מדבר בפורמט אחר, ולכן הגשר מתרגם דרך השרת המקומי (tools/oai_proxy.py, פורט 8799). בתשלום לפי שימוש."
+ },
+ "gemini": {
+  "label": "Gemini · חינמי (דרך שרת התרגום)",
+  "short": "Gemini",
+  "kind": "anthropic",
+  "base_url": "http://127.0.0.1:8799/p/gemini",
+  "token": "local-proxy",
+  "key_file": "gemini.key",
+  "model": "gemini-2.5-flash",
+  "models": [
+   "gemini-2.5-flash",
+   "gemini-2.5-flash-lite"
+  ],
+  "upstream": {
+   "base": "https://generativelanguage.googleapis.com/v1beta/openai"
+  },
+  "aliases": [
+   "ג'מיני",
+   "גמיני",
+   "gemini"
+  ],
+  "how": "שכבה חינמית בלי כרטיס אשראי: מפתח מ-aistudio.google.com/apikey, נשמר ב-secrets/gemini.key. המכסות היומיות נמוכות ומשתנות (בודקים ב-AI Studio)."
+ },
+ "groq": {
+  "label": "Groq · חינמי (דרך שרת התרגום)",
+  "short": "Groq",
+  "kind": "anthropic",
+  "base_url": "http://127.0.0.1:8799/p/groq",
+  "token": "local-proxy",
+  "key_file": "groq.key",
+  "model": "openai/gpt-oss-120b",
+  "models": [
+   "openai/gpt-oss-120b",
+   "openai/gpt-oss-20b"
+  ],
+  "upstream": {
+   "base": "https://api.groq.com/openai/v1"
+  },
+  "aliases": [
+   "groq"
+  ],
+  "how": "שכבה חינמית בלי כרטיס אשראי: מפתח מ-console.groq.com, נשמר ב-secrets/groq.key. המכסות לכל מודל (console.groq.com/settings/limits)."
+ },
+ "openrouter_free": {
+  "label": "OpenRouter · מודלים חינמיים",
+  "short": "OpenRouter חינמי",
+  "kind": "anthropic",
+  "base_url": "https://openrouter.ai/api",
+  "key_file": "openrouter.key",
+  "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+  "models": [
+   "nvidia/nemotron-3-ultra-550b-a55b:free",
+   "nvidia/nemotron-3.5-super-vl:free",
+   "nvidia/nemotron-3.5-lightning:free",
+   "google/gemma-4-31b-it:free",
+   "google/gemma-4-26b-a4b-it:free",
+   "baidu/ernie-5.5-flash-preview:free",
+   "inclusionai/ling-3.2-flash:free",
+   "thinkingmachines/inkling-2-small:free"
+  ],
+  "aliases": [
+   "חינמי",
+   "openrouter-free",
+   "free"
+  ],
+  "how": "אותו מפתח של OpenRouter (secrets/openrouter.key). רק מודלים עם סיומת :free, 20 בקשות לדקה, ו-50 ליום (1,000 ליום אחרי רכישת קרדיט של 10 דולר). רשימת המודלים החינמיים משתנה: נבדקה 13.11.2026."
  }
 }
