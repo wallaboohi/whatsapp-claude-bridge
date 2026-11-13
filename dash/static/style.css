@@ -504,3 +504,9 @@ p.help { margin: 4px 0 0; }
 .map-overlay[hidden] { display: none; }
 .map-overlay iframe { width: 100%; height: 100%; border: 0; }
 .map-overlay #mapClose { position: absolute; top: 10px; inset-inline-end: 14px; z-index: 2; }
+
+/* the AI host chip in the front (owner 13.11) */
+.ai-chip { cursor: pointer; font: inherit; font-size: .78rem; font-weight: 700; color: var(--brand); background: color-mix(in srgb, var(--brand) 12%, transparent); border-color: transparent; }
+.ai-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; max-width: 340px; }
+.ai-opt.on { background: var(--brand); color: #fff; border-color: var(--brand); }
+.ai-opt:disabled { opacity: .45; }

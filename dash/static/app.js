@@ -70,7 +70,24 @@ translateStatic();
 
 // ---- header popover (sending to others) ----
 $("modeBtn").onclick = e => { e.stopPropagation(); const o = $("modePop").hidden; $("modePop").hidden = !o; $("modeBtn").setAttribute("aria-expanded", o); };
-document.addEventListener("click", e => { if (!e.target.closest(".pop-wrap")) { $("modePop").hidden = true; $("modeBtn").setAttribute("aria-expanded", false); } });
+document.addEventListener("click", e => { if (!e.target.closest(".pop-wrap")) { $("modePop").hidden = true; $("modeBtn").setAttribute("aria-expanded", false); $("aiPop").hidden = true; $("aiBtn").setAttribute("aria-expanded", false); } });
+
+// ---- the bridge's AI host in the front (owner 13.11): who answers now, one click to switch (the same data as the legend)
+async function loadAi() {
+  try {
+    const lg = await (await fetch(base() + "/legend")).json();
+    const cur = lg.providers.find(p => p.active) || {};
+    $("aiBadge").textContent = "🧠 " + (cur.short || cur.label || "—") + (cur.id && cur.id !== "claude" && lg.model.current ? " · " + lg.model.current : "");
+    $("aiList").innerHTML = lg.providers.map((p, i) => `<button class="btn small ai-opt${p.active ? " on" : ""}" data-i="${i}" ${p.ok || p.active ? "" : "disabled"} title="${esc(p.detail)}">${p.active ? "✅ " : ""}${esc(p.short || p.label)}${p.cost ? " · " + esc(p.cost) : ""}</button>`).join("");
+    document.querySelectorAll("#aiList .ai-opt").forEach(b => b.onclick = async () => {
+      const p = lg.providers[+b.dataset.i]; if (p.active) return;
+      await act({ do: "provider_set", provider: p.id, model: p.model || "" }, L("הבינה הוחלפה ל-", "AI switched to ") + (p.short || p.label)); loadAi();
+    });
+  } catch (e) { $("aiBadge").textContent = "🧠 —"; }
+}
+$("aiBtn").onclick = e => { e.stopPropagation(); const o = $("aiPop").hidden; if (o) loadAi(); $("aiPop").hidden = !o; $("aiBtn").setAttribute("aria-expanded", o); };
+$("aiLegendBtn").onclick = () => { $("aiPop").hidden = true; $("legendBtn").click(); };
+loadAi(); setInterval(loadAi, 60000);
 
 // ---- controls ----
 $("pauseBtn").onclick = () => act({ do: "pause", hours: 6 }, L("השליחה לאחרים הושהתה ל-6 שעות", "Sending to others paused for 6 hours"));

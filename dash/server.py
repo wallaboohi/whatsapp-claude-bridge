@@ -602,6 +602,23 @@ def _provider_key(p):
         return ""
 
 
+_or_free = {"at": 0.0, "ids": []}
+
+
+def openrouter_free_models():
+    """The :free models of OpenRouter that support tools, from its public catalog (cached 10 minutes); the last list (or []) when it cannot be read."""
+    if time.time() - _or_free["at"] < 600 and _or_free["ids"]:
+        return _or_free["ids"]
+    try:
+        data = json.loads(urllib.request.urlopen("https://openrouter.ai/api/v1/models", timeout=15).read().decode())["data"]
+    except Exception:
+        return _or_free["ids"]
+    free = [m for m in data if str(m.get("id", "")).endswith(":free") and "tools" in (m.get("supported_parameters") or [])
+            and str((m.get("pricing") or {}).get("prompt")) == "0" and str((m.get("pricing") or {}).get("completion")) == "0"]
+    _or_free.update(at=time.time(), ids=[m["id"] for m in sorted(free, key=lambda m: -(m.get("context_length") or 0))])
+    return _or_free["ids"]
+
+
 def anthropic_probe(p, tok):
     """{"ok", "detail", "models"} for an Anthropic-compatible cloud API with a fixed model list (providers.json "models"): one 1-token call
     proves the key (owner 13.11: the DeepSeek key must be the key itself, not its id)."""
@@ -640,6 +657,9 @@ def provider_check(name):
     tok = p.get("token") or _provider_key(p)
     if not tok:
         return {"ok": False, "detail": "חסר מפתח", "models": []}
+    if p.get("free_list") == "openrouter":  # no call that spends quota: the live catalog is the list
+        ids = openrouter_free_models() or list(p.get("models") or [])
+        return {"ok": bool(ids), "detail": f"מפתח שמור · {len(ids)} מודלים חינמיים עם כלים", "models": ids}
     if p.get("probe") == "ollama":  # every host in order (laptop = default, desktop = fallback): which serves now, which are down
         rows, pick = [], None
         for h in p.get("hosts") or []:
@@ -666,6 +686,20 @@ def provider_check(name):
         return {"ok": False, "detail": "לא מגיב: " + str(e)[:70], "models": []}
 
 
+_CHK = {}
+
+
+def provider_check_cached(name, ttl=120):
+    """provider_check for the legend and the front-page chip: they refresh every minute, and a check can be a real 1-token call to a
+    free API (quota): at most one per provider per `ttl` seconds. Saving a key or switching forgets the cache."""
+    hit = _CHK.get(name)
+    if hit and time.time() - hit[0] < ttl:
+        return hit[1]
+    res = provider_check(name)
+    _CHK[name] = (time.time(), res)
+    return res
+
+
 def legend():
     """Everything the legend page draws, from the live state."""
     c = cfg()
@@ -682,8 +716,9 @@ def legend():
     pname, pmodel = active_provider()
     provs = []
     for k, p in _providers().items():
-        chk = provider_check(k)
+        chk = provider_check_cached(k)
         provs.append({"id": k, "label": p.get("label") or k, "kind": p.get("kind"), "how": p.get("how") or "",
+                      "short": p.get("short") or "", "cost": p.get("cost") or "",
                       "active": k == pname, "ok": chk["ok"], "detail": chk["detail"], "models": chk["models"][:60],
                       "model": (pmodel or p.get("model") or "") if k == pname else (p.get("model") or ""),
                       "key_file": p.get("key_file") or "", "has_key": bool(_provider_key(p)) if p.get("key_file") else None})
@@ -1836,6 +1871,7 @@ def action(a):
         if mdl and chk["models"] and mdl not in chk["models"]:
             return {"error": "המודל לא נמצא אצל הספק"}
         dump_json({"provider": name, "model": mdl, "at": dt.datetime.now().isoformat(timespec="seconds")}, _provider_file())
+        _CHK[name] = (time.time(), chk)
         return {"ok": True}
     if kind == "provider_key":  # legend: save a provider's key into secrets/ (never shown back; empty = remove)
         p = _providers().get(a.get("provider") or "")
@@ -1850,6 +1886,7 @@ def action(a):
             open(f, "w", encoding="utf-8").write(key)
         elif os.path.exists(f):
             os.replace(f, f + f".removed-{dt.datetime.now():%Y%m%d%H%M%S}")  # kept aside, not deleted
+        _CHK.pop(a.get("provider"), None)
         return {"ok": True, "check": provider_check(a.get("provider"))}
     if kind == "provider_add":  # legend: a new Anthropic-compatible provider (DeepSeek, ...); the key goes into secrets/ only
         name = re.sub(r"[^a-z0-9_-]", "", (a.get("id") or "").strip().lower())[:30]

@@ -39,83 +39,8 @@
    "phi": "phi4-mini",
    "r1": "deepseek-r1:14b",
    "deepseek-coder": "deepseek-coder-v2:16b"
-  }
- },
- "openrouter": {
-  "label": "OpenRouter · ענן, הרבה מודלים",
-  "kind": "anthropic",
-  "base_url": "https://openrouter.ai/api",
-  "key_file": "openrouter.key",
-  "model": "anthropic/claude-sonnet-4.5",
-  "how": "מפתח מ-openrouter.ai/keys נשמר בקובץ secrets/openrouter.key (לא בקוד). תשלום לפי שימוש; המידע יוצא לשרתי OpenRouter ולספק המודל.",
-  "short": "OpenRouter",
-  "aliases": [
-   "אופנראוטר",
-   "openrouter"
-  ],
-  "cost": "בתשלום"
- },
- "anthropic_api": {
-  "label": "Claude API · תשלום לפי שימוש",
-  "kind": "anthropic-key",
-  "key_file": "anthropic.key",
-  "how": "מפתח מ-console.anthropic.com נשמר ב-secrets/anthropic.key. אותם מודלים של Claude, בלי מגבלות המנוי.",
-  "short": "Claude API",
-  "aliases": [
-   "api",
-   "anthropic_api"
-  ],
-  "cost": "בתשלום"
- },
- "deepseek": {
-  "label": "DeepSeek · ענן, זול",
-  "kind": "anthropic",
-  "base_url": "https://api.deepseek.com/anthropic",
-  "key_file": "deepseek.key",
-  "model": "deepseek-chat",
-  "models": [
-   "deepseek-chat",
-   "deepseek-reasoner"
-  ],
-  "how": "מפתח מ-platform.deepseek.com (API keys → Create). המפתח נראה פעם אחת בלבד בזמן היצירה, ומתחיל ב-sk-. הדבק אותו כאן.",
-  "short": "DeepSeek",
-  "aliases": [
-   "דיפסיק",
-   "deepseek"
-  ],
-  "cost": "זול"
- },
- "openai": {
-  "label": "OpenAI · ענן (דרך שרת התרגום)",
-  "short": "OpenAI",
-  "kind": "anthropic",
-  "base_url": "http://127.0.0.1:8799/p/openai",
-  "token": "local-proxy",
-  "key_file": "openai.key",
-  "model": "gpt-4.1-mini",
-  "models": [
-   "gpt-4.1-mini",
-   "gpt-4.1",
-   "gpt-4o-mini",
-   "gpt-4o",
-   "gpt-5.4-mini",
-   "gpt-5.4",
-   "gpt-5.2"
-  ],
-  "upstream": {
-   "base": "https://api.openai.com/v1",
-   "max_tokens_field": "max_completion_tokens"
   },
-  "aliases": [
-   "אופןאיאיי",
-   "אופנאיי",
-   "אופןאיי",
-   "openai",
-   "gpt",
-   "chatgpt"
-  ],
-  "how": "מפתח מ-platform.openai.com/api-keys, נשמר ב-secrets/openai.key. OpenAI מדבר בפורמט אחר, ולכן הגשר מתרגם דרך השרת המקומי (tools/oai_proxy.py, פורט 8799). בתשלום לפי שימוש.",
-  "cost": "בתשלום"
+  "cost": "מקומי"
  },
  "gemini": {
   "label": "Gemini · חינמי (דרך שרת התרגום)",
@@ -186,8 +111,9 @@
    "openrouter-free",
    "free"
   ],
-  "how": "אותו מפתח של OpenRouter (secrets/openrouter.key). רק מודלים עם סיומת :free, 20 בקשות לדקה, ו-50 ליום (1,000 ליום אחרי רכישת קרדיט של 10 דולר). רשימת המודלים החינמיים משתנה: נבדקה 13.11.2026.",
-  "cost": "חינם"
+  "how": "אותו מפתח של OpenRouter (secrets/openrouter.key). רק מודלים עם סיומת :free, עם תמיכה בכלים; הרשימה נמשכת חיה מהקטלוג של OpenRouter ומתעדכנת לבד. מכסה: 20 בקשות לדקה, ו-50 ליום (1,000 ליום אחרי רכישת קרדיט של 10 דולר).",
+  "cost": "חינם",
+  "free_list": "openrouter"
  },
  "auto": {
   "label": "אוטומטי · לפי עלות",
@@ -202,11 +128,12 @@
    "claude",
    "gemini",
    "groq",
-   "openrouter_free",
-   "deepseek",
-   "openai"
+   "cerebras",
+   "nvidia",
+   "mistral",
+   "openrouter_free"
   ],
-  "how": "הגשר בוחר לבד את הספק הזול ביותר שזמין: קודם המנוי של Claude, אחריו ספקים חינמיים, אחר כך בתשלום קטן ולבסוף בתשלום. כשספק נגמרה לו המכסה, נגמר הקרדיט או שהוא לא מגיב, הגשר עובר לבא בתור ומנסה אותו שוב אחרי זמן המתנה. הסדר ב-providers.json תחת auto.ladder או config auto_ladder."
+  "how": "הגשר בוחר לבד את הספק הזול ביותר שזמין: קודם המנוי של Claude, אחריו ספקים חינמיים לפי הסדר. כשספק נגמרה לו המכסה, אין לו מפתח או שהוא לא מגיב, הגשר עובר לבא בתור ומנסה אותו שוב אחרי זמן המתנה. מודלים מקומיים (Ollama) לא בסולם כי הם איטיים מדי לעבודה עם כלים על המעבד: עוברים אליהם ידנית, למשל /qwencode. הסדר ב-providers.json תחת auto.ladder או config auto_ladder."
  },
  "cerebras": {
   "label": "Cerebras · חינמי (דרך שרת התרגום)",

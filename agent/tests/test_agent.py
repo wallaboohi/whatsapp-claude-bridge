@@ -1705,8 +1705,8 @@ def test_provider_layer(agent, monkeypatch):
     assert env["ANTHROPIC_CUSTOM_MODEL_OPTION"] == "bridge-qwen3-4b:latest"
     mod.kv_set("limit_until", (mod.dt.datetime.now() + mod.dt.timedelta(hours=5)).isoformat(timespec="seconds"))
     assert mod.limit_until()
-    monkeypatch.setattr(mod, "provider_check", lambda n: {"ok": n != "openrouter", "detail": "x", "models": ["bridge-qwen3-4b", "qwen3:4b-instruct"]})
-    assert "לא הוחלף" in mod.owner_command("/ספק openrouter", mod.PRIMARY)
+    monkeypatch.setattr(mod, "provider_check", lambda n: {"ok": n != "groq", "detail": "x", "models": ["bridge-qwen3-4b", "qwen3:4b-instruct"]})
+    assert "לא הוחלף" in mod.owner_command("/ספק groq", mod.PRIMARY)
     assert "לא נמצא" in mod.owner_command("/ספק ollama nosuch", mod.PRIMARY)
     assert "✅" in mod.owner_command("/ספק אולמה qwen3:4b-instruct", mod.PRIMARY)
     assert mod.active_provider() == ("ollama", "qwen3:4b-instruct") and mod.limit_until() is None, "no subscription limit on Ollama"
@@ -1785,11 +1785,12 @@ def test_conflict_merge_goes_to_another_provider_when_claude_is_limited(agent, m
 def test_switch_words_and_the_answer_tag(agent, monkeypatch, tmp_path):
     mod, _ = agent
     monkeypatch.setattr(mod, "PROVIDER_FILE", str(tmp_path / "provider.json"))
-    assert mod.resolve_ai_word("דיפסיק") == ("deepseek", None) and mod.resolve_ai_word("OpenAI") == ("openai", None)
+    assert mod.resolve_ai_word("גמיני") == ("gemini", None) and mod.resolve_ai_word("GROQ") == ("groq", None)
+    assert mod.resolve_ai_word("דיפסיק") is None and mod.resolve_ai_word("api") is None  # the paid providers were removed
     assert mod.resolve_ai_word("qwencode") == ("ollama", "qwen2.5-coder:3b") and mod.resolve_ai_word("קלוד") == ("claude", None)
     assert mod.resolve_ai_word("nope") is None and mod.resolve_ai_word("סשן") is None  # a real command is never a switch word
     monkeypatch.setattr(mod, "provider_check", lambda n: {"ok": False, "detail": "אין מפתח", "models": []})
-    assert "לא מחובר" in mod.owner_command("/דיפסיק") and mod.active_provider()[0] == "claude"  # not connected: nothing switches
+    assert "לא מחובר" in mod.owner_command("/גמיני") and mod.active_provider()[0] == "claude"  # not connected: nothing switches
     monkeypatch.setattr(mod, "provider_check", lambda n: {"ok": True, "detail": "", "models": ["qwen2.5-coder:3b", "qwen3:8b"]})
     assert "ספק הגשר" in mod.owner_command("/qwencode") and mod.active_provider() == ("ollama", "qwen2.5-coder:3b")
     tag = mod.ai_tag("opus")
@@ -1810,7 +1811,7 @@ def _keys(mod, monkeypatch, *names):
 
 def test_auto_ladder_goes_up_in_cost_and_skips_what_is_down(agent, monkeypatch):
     mod, _ = agent
-    _keys(mod, monkeypatch, "gemini", "groq", "deepseek")
+    _keys(mod, monkeypatch, "gemini", "groq", "cerebras")
     assert mod.auto_pick() == "claude"  # the subscription first (already paid)
     mod.kv_set("limit_until", (mod.dt.datetime.now() + mod.dt.timedelta(hours=1)).isoformat(timespec="seconds"))
     assert mod.auto_pick() == "gemini"  # its limit is on: the first free provider
@@ -1818,11 +1819,12 @@ def test_auto_ladder_goes_up_in_cost_and_skips_what_is_down(agent, monkeypatch):
     assert mod.auto_pick() == "groq" and mod.provider_cooled("gemini")
     mod.kv_set("cool:gemini", (mod.dt.datetime.now() - mod.dt.timedelta(minutes=1)).isoformat(timespec="seconds"))
     assert mod.auto_pick() == "gemini"  # the wait is over
-    assert mod.auto_pick(skip=("gemini", "groq")) == "deepseek"  # openrouter_free / openai have no key
-    assert mod.auto_pick(skip=("gemini", "groq", "deepseek")) is None
-    mod.CFG["auto_ladder"] = ["deepseek", "claude"]
+    assert mod.auto_pick(skip=("gemini", "groq")) == "cerebras"  # nvidia / mistral / openrouter_free have no key
+    assert mod.auto_pick(skip=("gemini", "groq", "cerebras")) is None
+    assert "openai" not in mod.auto_ladder() and "deepseek" not in mod.auto_ladder()  # free providers only
+    mod.CFG["auto_ladder"] = ["cerebras", "claude"]
     try:
-        assert mod.auto_ladder() == ["deepseek", "claude"] and mod.auto_pick() == "deepseek"
+        assert mod.auto_ladder() == ["cerebras", "claude"] and mod.auto_pick() == "cerebras"
     finally:
         mod.CFG.pop("auto_ladder")
 
@@ -1864,12 +1866,12 @@ def test_auto_run_moves_to_the_next_provider(agent, monkeypatch):
 
 def test_auto_provider_env_and_check(agent, monkeypatch):
     mod, _ = agent
-    _keys(mod, monkeypatch, "deepseek")
-    monkeypatch.setattr(mod, "auto_pick", lambda skip=(): "deepseek")
+    _keys(mod, monkeypatch, "groq")
+    monkeypatch.setattr(mod, "auto_pick", lambda skip=(): "groq")
     env, model = mod.provider_env("auto")
-    assert env["ANTHROPIC_BASE_URL"] == "https://api.deepseek.com/anthropic" and model == "deepseek-chat" and mod._ctx.provider_used == "deepseek"
+    assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8799/p/groq" and model == "openai/gpt-oss-120b" and mod._ctx.provider_used == "groq"
     monkeypatch.setattr(mod, "active_provider", lambda: ("auto", None))
-    assert mod.ai_tag("opus").startswith("🧠 DeepSeek")  # the tag names the provider that really ran
+    assert mod.ai_tag("opus").startswith("🧠 Groq")  # the tag names the provider that really ran
     monkeypatch.undo()
     c = mod.provider_check("auto")
     assert "מהזול ליקר" in c["detail"]

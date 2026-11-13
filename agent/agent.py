@@ -949,6 +949,23 @@ def provider_env(name=None, model=None):
     return None, None
 
 
+_or_free = {"at": 0.0, "ids": []}
+
+
+def openrouter_free_models():
+    """The :free models of OpenRouter that support tools, from its public catalog (cached 10 minutes); the last list (or []) when it cannot be read."""
+    if time.time() - _or_free["at"] < 600 and _or_free["ids"]:
+        return _or_free["ids"]
+    try:
+        data = json.loads(urllib.request.urlopen("https://openrouter.ai/api/v1/models", timeout=15).read().decode())["data"]
+    except Exception:
+        return _or_free["ids"]
+    free = [m for m in data if str(m.get("id", "")).endswith(":free") and "tools" in (m.get("supported_parameters") or [])
+            and str((m.get("pricing") or {}).get("prompt")) == "0" and str((m.get("pricing") or {}).get("completion")) == "0"]
+    _or_free.update(at=time.time(), ids=[m["id"] for m in sorted(free, key=lambda m: -(m.get("context_length") or 0))])
+    return _or_free["ids"]
+
+
 def anthropic_probe(p, tok):
     """{"ok", "detail", "models"} for an Anthropic-compatible cloud API with a fixed model list (providers.json "models"): one 1-token call
     proves the key (owner 13.11: the DeepSeek key must be the key itself, not its id)."""
@@ -987,6 +1004,9 @@ def provider_check(name):
     tok = p.get("token") or provider_key(p)
     if not tok:
         return {"ok": False, "detail": f"חסר מפתח: secrets/{p.get('key_file')}", "models": []}
+    if p.get("free_list") == "openrouter":  # no call that spends quota: the live catalog is the list
+        ids = openrouter_free_models() or list(p.get("models") or [])
+        return {"ok": bool(ids), "detail": f"מפתח שמור · {len(ids)} מודלים חינמיים עם כלים", "models": ids}
     if p.get("probe") == "ollama":  # every host, in order: which one is serving now and which are down
         rows, pick = [], None
         for h in provider_hosts(p):
@@ -1024,7 +1044,7 @@ def resolve_ai_word(word):
         for k, v in (p.get("model_aliases") or {}).items():
             if w == str(k).lower():
                 return name, v
-    return (PROVIDER_WORDS[w], None) if w in PROVIDER_WORDS else None
+    return (PROVIDER_WORDS[w], None) if PROVIDER_WORDS.get(w) in providers() else None
 
 
 def switch_provider(name, model=None):
