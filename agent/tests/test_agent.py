@@ -107,7 +107,7 @@ def test_old_cumulative_rows_are_converted(agent, tmp_path):
         db.execute("UPDATE claude_runs SET cum = NULL")
         for at, cost in (("2026-11-07T10:00", 5.0), ("2026-11-07T10:05", 5.5), ("2026-11-07T10:10", 6.0)):
             db.execute("INSERT INTO claude_runs (at, session, cost, cum) VALUES (?, 's1', ?, NULL)", (at, cost))
-    mod._runs_migrated = False
+    mod._migrated.clear()
     with mod.adb() as db:
         costs = [round(r[0], 2) for r in db.execute("SELECT cost FROM claude_runs WHERE session = 's1' ORDER BY at")]
     assert costs == [5.0, 0.5, 0.5]
@@ -1183,7 +1183,7 @@ def test_auto_transcript_posts_in_same_chat_once(agent, monkeypatch):
     now = mod.dt.datetime.now().astimezone().isoformat(sep=" ", timespec="seconds")
     mod.auto_transcript("972500000001@s.whatsapp.net", "V1", "972500000001", now)
     mod.auto_transcript("972500000001@s.whatsapp.net", "V1", "972500000001", now)  # once per recording
-    assert calls == [("/send_transcript", {"jid": "972500000001@s.whatsapp.net", "id": "V1", "text": "🤖 תמלול: שלום יקיר"})]
+    assert [c for c in calls if c[0] != "/react"] == [("/send_transcript", {"jid": "972500000001@s.whatsapp.net", "id": "V1", "text": "🤖 תמלול: שלום יקיר"})]
     old = (mod.dt.datetime.now().astimezone() - mod.dt.timedelta(hours=2)).isoformat(sep=" ", timespec="seconds")
     mod.auto_transcript("972500000001@s.whatsapp.net", "V2", "972500000001", old)  # an old recording from a sync: no
     assert len(calls) == 1
@@ -1231,7 +1231,7 @@ def test_wheel_on_a_voice_note_posts_its_transcript(agent, monkeypatch):
     db.execute("INSERT INTO messages VALUES ('A1', '972500000009@s.whatsapp.net', 'x', '', '2026-11-09 17:30:00+02:00', 0, 'audio', '')")
     db.commit()
     mod.read_other("972500000009@s.whatsapp.net", "A1")
-    assert calls == [("/send_transcript", {"jid": "972500000009@s.whatsapp.net", "id": "A1", "text": "🤖 תמלול: אני בדרך"})]
+    assert [c for c in calls if c[0] != "/react"] == [("/send_transcript", {"jid": "972500000009@s.whatsapp.net", "id": "A1", "text": "🤖 תמלול: אני בדרך"})]
 
 
 def test_restart_reason_only_hebrew(agent):
@@ -1633,3 +1633,16 @@ def test_own_voice_echo_is_not_a_command(agent):
     assert not mod.is_own_voice_echo("g@g.us", "E1", 1), "a different size = the owner's own voice note"
     mod.kv_set("own_voice", json.dumps({"t": time.time() - 600, "size": 724114}))
     assert not mod.is_own_voice_echo("g@g.us", "E1", 1), "too old"
+
+
+def test_wheel_busy_flips_hourglass_and_restores_wheel(agent, monkeypatch):
+    """Owner 13.11: ⏳/⌛ flip while the 🛞 work runs, then the 🛞 is put back; that restored 🛞 must not restart the work."""
+    mod, db = agent
+    calls = []
+    monkeypatch.setattr(mod, "bridge", lambda path, body=None, timeout=30, **k: calls.append((path, body["emoji"])) or {})
+    monkeypatch.setattr(mod, "pc_only", lambda: False)
+    with mod.WheelBusy("g@g.us", "M1", every=0.05):
+        time.sleep(0.3)
+    emojis = [e for _, e in calls]
+    assert "⏳" in emojis and "⌛" in emojis and emojis[-1] == "🛞" and all(p == "/react" for p, _ in calls)
+    assert mod.wheel_is_ours("g@g.us", "M1") and not mod.wheel_is_ours("g@g.us", "OTHER")

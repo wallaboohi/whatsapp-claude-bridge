@@ -120,11 +120,11 @@ def adb():
         if path not in _schema_done:
             _create_schema(db)
             _schema_done.add(path)
-    global _runs_migrated
-    if not _runs_migrated:
+    if path not in _migrated:  # per database file (a module reload in tests must not let an old thread mark a new db as migrated)
         with _schema_lock:
-            if not _runs_migrated:
+            if path not in _migrated:
                 _migrate(db)
+                _migrated.add(path)
     return db
 
 
@@ -151,7 +151,6 @@ def _create_schema(db):
 
 
 def _migrate(db):
-    global _runs_migrated
     if True:  # older databases: record which model each run used (dashboard cost view)
         cols = [r[1] for r in db.execute("PRAGMA table_info(claude_runs)")]
         if "model" not in cols:
@@ -173,10 +172,9 @@ def _migrate(db):
                 cum = cost
             prev[sess] = cum
         db.commit()
-        _runs_migrated = True
 
 
-_runs_migrated = False
+_migrated = set()
 
 
 def run_cost(cum, prev):
@@ -2576,6 +2574,56 @@ def tts_ogg(text, path, voice=None):
 READ_ALOUD = "🛞"  # owner request 08.11 23:23: the wheel = "I am driving, read it to me" (was 😎)
 
 
+_wheel_recent = {}  # (chat, message id) -> when our own 🛞 work on it started / ended: the 🛞 we put back must not start it again
+
+
+def wheel_is_ours(chat, mid, within=90):
+    return time.time() - _wheel_recent.get((chat, mid), 0) < within
+
+
+class WheelBusy:
+    """Owner 13.11: while the 🛞 work runs (speech synthesis / transcription) the owner's reaction on that message flips between ⏳ and ⌛
+    every few seconds — a sign of active work; it stops when the voice note / transcript is out and the 🛞 is put back."""
+    def __init__(self, chat, mid, every=3.0):
+        self.chat, self.mid, self.every, self.stop = chat, mid, every, threading.Event()
+        _wheel_recent[(chat, mid)] = time.time()
+        self.sender = ""
+        if not mid:
+            return
+        try:
+            with mdb() as db:
+                r = db.execute("SELECT sender, is_from_me FROM messages WHERE id = ? AND chat_jid = ?", (mid, chat)).fetchone()
+            self.sender = "" if not r or r[1] else (r[0] or "")
+        except (sqlite3.Error, IndexError):
+            pass
+
+    def _react(self, emoji):
+        try:
+            bridge("/react", {"chat_jid": self.chat, "message_id": self.mid, "sender": self.sender, "emoji": emoji}, timeout=20)
+        except Exception as e:
+            log("wheel busy react failed", str(e)[:100])
+
+    def _loop(self):
+        i = 0
+        while not self.stop.is_set():
+            self._react("⏳⌛"[i % 2])
+            i += 1
+            self.stop.wait(self.every)
+
+    def __enter__(self):
+        if self.mid and not pc_only():
+            self.th = threading.Thread(target=self._loop, daemon=True)
+            self.th.start()
+        return self
+
+    def __exit__(self, *a):
+        self.stop.set()
+        if self.mid and not pc_only():
+            getattr(self, "th", threading.Thread()).join(25)
+            _wheel_recent[(self.chat, self.mid)] = time.time()
+            self._react(READ_ALOUD)
+
+
 def read_aloud(chat, mid=None):
     """Owner request 08.11: 🛞 (as a message, or as a reaction on one of the bot's messages) → a voice note that reads the
     bot's last answer in this chat (or the reacted message). Local, no Claude run; works even if voice_replies is off."""
@@ -2605,8 +2653,9 @@ def read_aloud(chat, mid=None):
         return
     try:
         os.makedirs(VOICE_DIR, exist_ok=True)
-        path = tts_ogg(t, os.path.join(VOICE_DIR, f"read_{int(time.time() * 1000)}.ogg"))
-        send(chat, "", media=path)
+        with WheelBusy(chat, mid):
+            path = tts_ogg(t, os.path.join(VOICE_DIR, f"read_{int(time.time() * 1000)}.ogg"))
+            send(chat, "", media=path)
     except Exception as e:
         log("read_aloud failed", e)
 
@@ -2629,12 +2678,13 @@ def read_other(chat, mid, wait=90):
         # owner 09.11 17:27: 🛞 on a voice note = its transcript as a text message in that chat (not automatic, not a voice)
         with mdb() as db:
             r2 = db.execute("SELECT sender, timestamp FROM messages WHERE id = ? AND chat_jid = ?", (mid, chat)).fetchone()
-        text = (transcript_of(chat, mid, r2[0] if r2 else "", r2[1] if r2 else "") or "").strip()
-        if not text:
-            log("read_other: no transcript", chat, mid)
-            return
-        res = bridge("/send_transcript", {"jid": chat, "id": mid, "text": f"🤖 תמלול: {text}"[:3900]}, timeout=120)
-        log("wheel transcript", chat, mid, json.dumps(res, ensure_ascii=False)[:160])
+        with WheelBusy(chat, mid):
+            text = (transcript_of(chat, mid, r2[0] if r2 else "", r2[1] if r2 else "") or "").strip()
+            if not text:
+                log("read_other: no transcript", chat, mid)
+                return
+            res = bridge("/send_transcript", {"jid": chat, "id": mid, "text": f"🤖 תמלול: {text}"[:3900]}, timeout=120)
+            log("wheel transcript", chat, mid, json.dumps(res, ensure_ascii=False)[:160])
         return
     elif mtype:
         return  # image / video / document / sticker: unchanged (owner 09.11)
@@ -2646,8 +2696,9 @@ def read_other(chat, mid, wait=90):
         return
     try:
         os.makedirs(VOICE_DIR, exist_ok=True)
-        path = tts_ogg(t, os.path.join(VOICE_DIR, f"read_{int(time.time() * 1000)}.ogg"))
-        send(chat, "", media=path, quoted=mid, read_aloud_of=mid)
+        with WheelBusy(chat, mid):
+            path = tts_ogg(t, os.path.join(VOICE_DIR, f"read_{int(time.time() * 1000)}.ogg"))
+            send(chat, "", media=path, quoted=mid, read_aloud_of=mid)
     except Exception as e:
         log("read_other failed", e)
 
@@ -4052,7 +4103,9 @@ def event_listener():
                                 ev = json.loads(line[5:].decode("utf-8", "replace"))
                                 cj = ev.get("chat_jid", "")
                                 note_reaction(cj, ev.get("message_id", ""), ev.get("emoji", ""))
-                                if ev.get("emoji") == READ_ALOUD and (cj == PRIMARY or cj in load_groups()):
+                                if ev.get("emoji") == READ_ALOUD and wheel_is_ours(cj, ev.get("message_id", "")):
+                                    pass  # the 🛞 we put back after the work (or a second one while it runs)
+                                elif ev.get("emoji") == READ_ALOUD and (cj == PRIMARY or cj in load_groups()):
                                     work.put(lambda cj=cj, m=ev.get("message_id"): read_aloud(cj, m))
                                 elif ev.get("emoji") == READ_ALOUD and cj and CFG.get("read_aloud_others", True) and watches_people():
                                     work.put(lambda cj=cj, m=ev.get("message_id"): read_other(cj, m))
