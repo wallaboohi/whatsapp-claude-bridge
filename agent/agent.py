@@ -1256,8 +1256,8 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
     # restricted runs over other people's text never get more than "auto"
     mode = "auto" if tools == "" else CFG.get("permission_mode", "auto")
     guest = guest_cfg(chat)
-    if guest:  # isolated guest group: never the owner's permission mode, tools, connectors or browser
-        mode = "acceptEdits"
+    if guest:  # isolated guest group: never the owner's tools, connectors or browser; owner 13.11: no permission prompt may block its allowed tools (web search was refused headless)
+        mode = guest.get("permission_mode") or "bypassPermissions"
     cmd = [shutil.which("claude") or "claude", "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", mode]
     if model:
         cmd += ["--model", model]
