@@ -215,3 +215,33 @@ def test_history_sync_and_peer_ssh_field(dash, monkeypatch):
     assert srv.action({"do": "peers_save", "peers": [{"name": "לפטופ", "url": "http://127.0.0.1:8781", "ssh": "4-MINE"}]}) == {"ok": True}
     assert srv.peers()[0]["ssh"] == "4-MINE" and srv.peer_alias(srv.peers()[0]) == "4-MINE"
     assert srv.action({"do": "peers_save", "peers": [{"name": "x", "url": "http://127.0.0.1:8781", "ssh": "bad alias;rm"}]}).get("error")
+
+
+def test_provider_add_from_the_legend_keeps_the_key_out_of_the_json(dash, monkeypatch):
+    srv, root = dash
+    (root / "agent" / "providers.json").write_text(json.dumps({"claude": {"label": "Claude", "kind": "claude"}}), encoding="utf-8")
+    monkeypatch.setattr(srv, "anthropic_probe", lambda p, tok: {"ok": True, "detail": "מחובר", "models": list(p["models"])})
+    bad = srv.action({"do": "provider_add", "id": "deepseek", "base_url": "http://evil.example", "model": "m"})
+    assert bad.get("error")  # plain http to a remote host is refused
+    assert srv.action({"do": "provider_add", "id": "x", "base_url": "https://a.b", "model": "m"}).get("error")  # id too short
+    r = srv.action({"do": "provider_add", "id": "DeepSeek", "label": "DeepSeek", "base_url": "https://api.deepseek.com/anthropic/",
+                    "model": "deepseek-chat", "models": "deepseek-chat, deepseek-reasoner", "key": "sk-abc123"})
+    assert r["ok"] and r["id"] == "deepseek" and r["check"]["ok"]
+    saved = json.loads((root / "agent" / "providers.json").read_text(encoding="utf-8"))
+    assert saved["claude"]["kind"] == "claude" and saved["deepseek"]["base_url"] == "https://api.deepseek.com/anthropic"
+    assert saved["deepseek"]["models"] == ["deepseek-chat", "deepseek-reasoner"] and saved["deepseek"]["key_file"] == "deepseek.key"
+    assert "sk-abc123" not in json.dumps(saved)  # the key lives only in secrets/
+    assert (root / "secrets" / "deepseek.key").read_text(encoding="utf-8") == "sk-abc123"
+    assert srv.action({"do": "provider_add", "id": "deepseek", "base_url": "https://a.b", "model": "m"}).get("error")  # no overwrite
+    assert "sk-abc123" not in json.dumps(srv.legend())
+
+
+def test_anthropic_probe_explains_a_rejected_key(dash, monkeypatch):
+    srv, _ = dash
+    import io, urllib.error
+
+    def refuse(req, timeout=0):
+        raise urllib.error.HTTPError(req.full_url, 401, "no", {}, io.BytesIO(b"{}"))
+    monkeypatch.setattr(srv.urllib.request, "urlopen", refuse)
+    r = srv.anthropic_probe({"base_url": "https://x.y/anthropic", "models": ["m1"]}, "tok")
+    assert not r["ok"] and "המפתח נדחה" in r["detail"] and r["models"] == ["m1"]

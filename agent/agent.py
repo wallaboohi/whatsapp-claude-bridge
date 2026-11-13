@@ -378,21 +378,55 @@ def _git_author():
     return ["-c", f"user.name={a.get('name') or 'whatsapp-agent'}", "-c", f"user.email={a.get('email') or 'agent@localhost'}"]
 
 
+FALLBACK_ORDER = ("deepseek", "openrouter", "anthropic_api", "ollama")
+
+
+def fallback_providers(skip=None):
+    """Owner 13.11: the OTHER AI providers that answer right now, best first (config "fallback_order"; cloud before the small local
+    models). Background work that needs a capable model (merging the two computers' code) uses them when Claude's usage limit is on."""
+    out, allp = [], providers()
+    for name in CFG.get("fallback_order") or FALLBACK_ORDER:
+        p = allp.get(name)
+        if not p or name == skip or p.get("kind") == "claude":
+            continue
+        if provider_check(name)["ok"]:
+            out.append((name, p.get("model") or None))
+    return out
+
+
 def _resolve_conflicts(files):
-    """A headless Claude run (Read/Edit only, no git) that combines both computers' versions of each conflicted file.
+    """A headless Claude Code run (Read/Edit only, no git) that combines both computers' versions of each conflicted file. On Claude's
+    usage limit (or any failure) the same run goes on another provider (owner 13.11: the nightly sync must not wait for the quota).
     Returns '' or a short failure text."""
     prompt = ("Git merge conflict between the two computers that develop this tool (shared repo 'hub'). Conflicted files: "
               + ", ".join(files) + ". For each file: read it, combine BOTH sides into code that keeps every addition and change "
               "of each side (never drop or override one side; if both changed the same lines, write code that does both), and "
               "remove every conflict marker. Edit only these files. Do not run git or anything else. Reply 'done'.")
-    cmd = [shutil.which("claude") or "claude", "-p", "--permission-mode", "acceptEdits", "--tools", "Read,Edit",
-           "--strict-mcp-config", "--model", CFG.get("merge_model", "opus")]
-    try:
-        r = subprocess.run(cmd, cwd=ROOT, input=prompt, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                           timeout=1500, creationflags=NO_WINDOW)
-    except Exception as e:
-        return f"claude: {e}"
-    return "" if r.returncode == 0 else ((r.stdout + r.stderr).strip()[-200:] or "claude failed")
+    merge_model = CFG.get("merge_model", "opus")
+
+    def attempt(env, model):
+        cmd = [shutil.which("claude") or "claude", "-p", "--permission-mode", "acceptEdits", "--tools", "Read,Edit",
+               "--strict-mcp-config", "--model", model]
+        try:
+            r = subprocess.run(cmd, cwd=ROOT, input=prompt, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                               timeout=1500, creationflags=NO_WINDOW, env=env)
+        except Exception as e:
+            return f"claude: {e}"
+        return "" if r.returncode == 0 else ((r.stdout + r.stderr).strip()[-200:] or "claude failed")
+
+    penv, pmodel = provider_env()
+    fail = "usage limit"
+    if not (penv is None and limit_until()):  # the subscription's limit is on: do not even try it
+        fail = attempt(penv, pmodel or merge_model)
+        if not fail:
+            return ""
+    for name, mdl in fallback_providers(skip=active_provider()[0]):
+        env, m = provider_env(name, mdl)
+        fail = attempt(env, m or merge_model)
+        if not fail:
+            log("merge conflicts resolved by provider", name)
+            return ""
+    return fail
 
 
 def _hub_sync():
@@ -743,7 +777,10 @@ PROVIDER_WORDS = {"קלוד": "claude", "claude": "claude", "מנוי": "claude"
 
 
 def providers():
-    out = json.loads(json.dumps(PROVIDERS_DEFAULT))
+    try:  # re-read each time: a provider added from the dashboard works without restarting the agent
+        out = json.load(open(os.path.join(HERE, "providers.json"), encoding="utf-8"))
+    except (OSError, ValueError):
+        out = json.loads(json.dumps(PROVIDERS_DEFAULT))
     for k, v in (CFG.get("providers") or {}).items():
         out.setdefault(k, {}).update(v)
     return out
@@ -823,6 +860,25 @@ def provider_env(name=None, model=None):
     return None, None
 
 
+def anthropic_probe(p, tok):
+    """{"ok", "detail", "models"} for an Anthropic-compatible cloud API with a fixed model list (providers.json "models"): one 1-token call
+    proves the key (owner 13.11: the DeepSeek key must be the key itself, not its id)."""
+    models = list(p["models"])
+    body = {"model": p.get("model") or models[0], "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]}
+    req = urllib.request.Request(p["base_url"].rstrip("/") + "/v1/messages", data=json.dumps(body).encode(), method="POST",
+                                 headers={"x-api-key": tok, "Authorization": "Bearer " + tok, "anthropic-version": "2023-06-01",
+                                          "content-type": "application/json"})
+    try:
+        urllib.request.urlopen(req, timeout=20).read()
+        return {"ok": True, "detail": f"מחובר · המפתח תקין · {len(models)} מודלים", "models": models}
+    except urllib.error.HTTPError as e:
+        why = {401: "המפתח נדחה (ודא שהעתקת את המפתח עצמו ולא את המזהה שלו)", 403: "המפתח נדחה", 402: "אין יתרה בחשבון הספק",
+               429: "הספק מגביל קצב כרגע"}.get(e.code, f"שגיאה {e.code} מהספק")
+        return {"ok": False, "detail": why, "models": models}
+    except Exception as e:
+        return {"ok": False, "detail": f"לא מגיב: {str(e)[:70]}", "models": models}
+
+
 def provider_check(name):
     """{"ok", "detail", "models"}: is this provider reachable now, and which models it offers (no secrets in the result)."""
     p = providers().get(name)
@@ -850,6 +906,8 @@ def provider_check(name):
         if not pick:
             return {"ok": False, "detail": "אף מחשב לא מגיב: " + " · ".join(rows), "models": []}
         return {"ok": True, "detail": f"עובד דרך {pick[0].get('label') or pick[0]['url']} · " + " · ".join(rows), "models": pick[1]}
+    if p.get("models") and p.get("base_url"):
+        return anthropic_probe(p, tok)
     try:
         if "11434" in p.get("base_url", ""):
             d = json.loads(urllib.request.urlopen(p["base_url"] + "/api/tags", timeout=8).read().decode())
@@ -1258,9 +1316,81 @@ LIMIT_ANY = re.compile(r"(?i)(hit your [^\n]{0,40}limit|usage limit reached|limi
 LIMIT_AT = re.compile(r"(?i)resets?\s*(?:at\s*)?(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)?")
 SIGNIN_RE = re.compile(r"sign-in ends between (\d{4}-\d{2}-\d{2}) and (\d{4}-\d{2}-\d{2})")
 AUTH_RE = re.compile(r"(?i)(invalid api key|please run /login|not logged in|authentication_error|oauth token (?:has )?expired|"
+                     r"oauth session (?:has )?expired|could not be refreshed|failed to authenticate|"
                      r"credentials? (?:have |has )?expired|claude auth login|401 unauthorized)")
 AUTH_MSG = "⚠️ Claude במחשב לא מחובר (ההתחברות פגה) — הרץ במחשב: claude auth login" if LANG == "he" else \
     "⚠️ Claude Code on the PC is not signed in — run on the PC: claude auth login"
+
+LOGIN_URL_RE = re.compile(r"https://\S*oauth/authorize\S*")
+_login = {"proc": None, "url": "", "at": 0.0}
+
+
+def login_link():
+    """Owner 13.11: start `claude auth login` (once per 15 minutes) and return its sign-in link ("" if it could not be read).
+    The process stays alive waiting for the code the browser shows; the owner sends it back as "קוד <code>"."""
+    p = _login["proc"]
+    if p and p.poll() is None and time.time() - _login["at"] < 900 and _login["url"]:
+        return _login["url"]
+    if p and p.poll() is None:
+        p.kill()
+    _login.update(proc=None, url="", at=0.0)
+    try:
+        p = subprocess.Popen([shutil.which("claude") or "claude", "auth", "login"], stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                             errors="replace", creationflags=NO_WINDOW)
+    except Exception as e:
+        log("login_link failed", e)
+        return ""
+    found = queue.Queue()
+
+    def pump():
+        for line in p.stdout:
+            m = LOGIN_URL_RE.search(line)
+            if m:
+                found.put(m.group(0))
+                return
+    threading.Thread(target=pump, daemon=True).start()
+    try:
+        url = found.get(timeout=20)
+    except queue.Empty:
+        p.kill()
+        return ""
+    _login.update(proc=p, url=url, at=time.time())
+    return url
+
+
+def auth_msg():
+    """The "Claude is signed out" message with the sign-in link and what to do with the code."""
+    url = login_link()
+    if not url:
+        return AUTH_MSG
+    if LANG != "he":
+        return AUTH_MSG + f"\nSign-in link: {url}\nThen send me: code <the code shown>"
+    return ("⚠️ חשבון Claude במחשב התנתק (ההתחברות פגה), ולכן אני לא יכול לענות.\n"
+            "להתחברות מחדש:\n1. פתח את הקישור בדפדפן (גם מהטלפון) ואשר:\n" + url +
+            "\n2. העתק את הקוד שמוצג ושלח לי כאן: קוד <הקוד>\n(הקישור תקף כ-15 דקות)")
+
+
+def login_code_reply(text):
+    """"קוד <code>" from the owner while a sign-in link is open: hand the code to `claude auth login`. None = not for us."""
+    m = re.match(r"^\s*(?:קוד|code)\s+(\S{10,})\s*$", text or "", re.I)
+    p = _login["proc"]
+    if not m or not p or p.poll() is not None:
+        return None
+    try:
+        p.stdin.write(m.group(1) + "\n")
+        p.stdin.flush()
+        p.wait(timeout=30)
+    except Exception as e:
+        log("login code failed", e)
+        return "⚠️ לא הצלחתי להשלים את ההתחברות עם הקוד הזה. שלח שוב או התחבר במחשב: claude auth login"
+    _login["proc"] = None
+    try:
+        ok = json.loads(subprocess.run([shutil.which("claude") or "claude", "auth", "status"], capture_output=True, text=True,
+                                       encoding="utf-8", errors="replace", timeout=60, creationflags=NO_WINDOW).stdout or "{}").get("loggedIn")
+    except Exception:
+        ok = False
+    return "✅ Claude מחובר שוב." if ok else "⚠️ הקוד לא התקבל. שלח שוב או התחבר במחשב: claude auth login"
 
 
 def parse_limit(text, now=None):
@@ -1645,7 +1775,7 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
         return None
     except AuthError as e:
         log("claude not signed in", e)
-        return AUTH_MSG if interactive else None
+        return auth_msg() if interactive else None
     except Exception as e:
         log("claude failed", e)
         return None
@@ -2568,7 +2698,9 @@ def run_command(row):
         if mm and mm.group(2).lower() in set(MODELS) | {"אוטו", "אופוס", "סונט", "הייקו", "חייקו", "פייבל"}:
             reply(owner_command(f"/מודל {mm.group(2)}{mm.group(3)}", chat) or "", quoted=mid if src == "wa" else None)
             text = mm.group(4).strip()
-        local = owner_command(text, chat)
+        local = login_code_reply(text)
+        if local is None:
+            local = owner_command(text, chat)
         if local is not None:
             reply(local, quoted=mid if src == "wa" else None)
             react(mid, "✅")

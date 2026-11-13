@@ -13,6 +13,7 @@ body { margin: 0; background: var(--bg); color: var(--text); font-family: Heebo,
 .top { display: flex; align-items: center; gap: 10px; padding: 12px 20px 0; flex-wrap: wrap; }
 .top h2 { margin: 0; font-size: 1.15rem; } .top .note { font-size: .8rem; color: var(--muted); }
 .key { font-size: .78rem; color: var(--muted); padding: 4px 20px 0; line-height: 1.6; }
+.quick { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 20px 0; align-items: center; } .quick button { font: inherit; font-size: .8rem; padding: 4px 11px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--text); cursor: pointer; } .quick button.on { background: var(--brand); color: #fff; border-color: var(--brand); } .quick button:disabled { opacity: .45; cursor: default; } .quick span { font-size: .78rem; color: var(--muted); }
 .board { position: relative; display: grid; grid-template-columns: 1.2fr .9fr 1fr 1.2fr; gap: 34px; padding: 16px 20px 24px; }
 .lane h3 { margin: 0 0 8px; font-size: .95rem; color: var(--muted); font-weight: 700; }
 .lane h3 small { font-weight: 400; }
@@ -50,6 +51,7 @@ body.open .board, body.open .key, body.open .top { margin-inline-end: 410px; }  
 </head>
 <body>
 <div class="top"><h2>🧭 מקרא הגשר</h2><span class="note" id="at"></span></div>
+<div class="quick" id="quick"></div>
 <p class="key">מימין: <b>מי מדבר</b> (אתה ושאר הקבוצות) · באמצע: <b>הגשר</b> (הסוכן) · משמאל: <b>המודל</b> ואחריו <b>הספק</b> שמריץ אותו.
   הספק שולט בגשר כולו, וכל הקבוצות עוברות דרכו. לחיצה על צומת פותחת את האפשרויות שלו. בכל צומת מופיע שמו בקוד (<span style="color:var(--info)">כחול</span>) והפקודה המקבילה בנייד.</p>
 <div class="board" id="board"><svg class="wires" id="wires"></svg></div>
@@ -85,7 +87,11 @@ async function draw() {
         <div class="what">${L.model.provider === "claude" ? "מודל של Claude (לכל שיחה אפשר מודל משלה)" : "מודל של הספק " + esc(prov.label || "")}</div></div></div>
     <div class="lane"><h3>הספק <small>(מי מריץ את המודל)</small></h3>
       ${L.providers.map((p, i) => `<div class="node ${p.active ? "active" : "off"}" data-k="p${i}" data-wire="p${i}"><b>🔌 ${esc(p.label)}</b>${dot(p.ok)}
-        <div class="what">${p.active ? "✅ פעיל · " : ""}${esc(p.detail)}</div></div>`).join("")}</div>`;
+        <div class="what">${p.active ? "✅ פעיל · " : ""}${esc(p.detail)}</div></div>`).join("")}
+      <div class="node off" data-k="padd"><b>➕ ספק חדש</b><div class="what">הדבקת מפתח API של בינה אחרת</div></div></div>`;
+  $("quick").innerHTML = `<span>החלפה מהירה:</span>` + L.providers.map((p, i) => `<button class="${p.active ? "on" : ""}" data-q="${i}" ${p.ok || p.active ? "" : "disabled"} title="${esc(p.detail)}">${esc(p.label)}</button>`).join("");
+  document.querySelectorAll("#quick button[data-q]").forEach(b => b.onclick = async () => { const p = L.providers[+b.dataset.q]; if (p.active) return;
+    const r = await act({ do: "provider_set", provider: p.id, model: p.model || "" }); if (r.error) alert(r.error); else draw(); });
   document.querySelectorAll(".node[data-k]").forEach(el => el.onclick = () => open(el.dataset.k));
   wires();
   if (sel) open(sel);
@@ -141,6 +147,18 @@ function open(k) {
     if ($("gdel")) $("gdel").onclick = async () => {
       if (!confirm(`לנתק את "${g.name}" מהגשר? הקבוצה נשארת בווצאפ, רק הגשר מפסיק לענות בה.`)) return;
       const r = await act({ do: "group_disconnect", jid: g.jid }); $("msg").textContent = r.error ? "⚠️ " + r.error : "✅ נותקה"; if (!r.error) { sel = ""; draw(); } };
+  } else if (k === "padd") {
+    P.innerHTML = close + `<h3>➕ ספק חדש</h3><p>מתאים לכל שירות שמדבר בפורמט של Anthropic (למשל DeepSeek: https://api.deepseek.com/anthropic). המפתח נשמר רק במחשב הזה, בתיקיית secrets.</p>
+      <div class="row"><input id="an" placeholder="שם קצר באנגלית (deepseek)" dir="ltr"></div>
+      <div class="row"><input id="al" placeholder="שם לתצוגה"></div>
+      <div class="row"><input id="au" placeholder="כתובת (https://…)" dir="ltr"></div>
+      <div class="row"><input id="am" placeholder="מודל ברירת מחדל" dir="ltr"></div>
+      <div class="row"><input id="ams" placeholder="עוד מודלים, מופרדים בפסיק (לא חובה)" dir="ltr"></div>
+      <div class="row"><input id="ak" type="password" placeholder="מפתח API" autocomplete="off" dir="ltr"></div>
+      <div class="row"><button id="adeep">מלא ל-DeepSeek</button><button class="primary" id="asave">הוסף</button></div><div class="msg" id="msg"></div>`;
+    $("adeep").onclick = () => { $("an").value = "deepseek"; $("al").value = "DeepSeek · ענן, זול"; $("au").value = "https://api.deepseek.com/anthropic"; $("am").value = "deepseek-chat"; $("ams").value = "deepseek-chat, deepseek-reasoner"; };
+    $("asave").onclick = async () => { const r = await act({ do: "provider_add", id: $("an").value, label: $("al").value, base_url: $("au").value, model: $("am").value, models: $("ams").value, key: $("ak").value });
+      $("ak").value = ""; $("msg").textContent = r.error ? "⚠️ " + r.error : (r.check && r.check.ok ? "✅ נוסף ומחובר" : "נוסף · " + ((r.check || {}).detail || "")); if (!r.error) { sel = ""; draw(); } };
   } else if (k[0] === "p") {
     const p = L.providers[+k.slice(1)];
     P.innerHTML = close + `<h3>🔌 ${esc(p.label)} ${dot(p.ok)}</h3><p>${esc(p.detail)}${p.active ? " · <b>הספק הפעיל של הגשר</b>" : ""}</p>

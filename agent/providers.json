@@ -31,5 +31,17 @@
   "kind": "anthropic-key",
   "key_file": "anthropic.key",
   "how": "מפתח מ-console.anthropic.com נשמר ב-secrets/anthropic.key. אותם מודלים של Claude, בלי מגבלות המנוי."
+ },
+ "deepseek": {
+  "label": "DeepSeek · ענן, זול",
+  "kind": "anthropic",
+  "base_url": "https://api.deepseek.com/anthropic",
+  "key_file": "deepseek.key",
+  "model": "deepseek-chat",
+  "models": [
+   "deepseek-chat",
+   "deepseek-reasoner"
+  ],
+  "how": "מפתח מ-platform.deepseek.com (API keys → Create). המפתח נראה פעם אחת בלבד בזמן היצירה, ומתחיל ב-sk-. הדבק אותו כאן."
  }
 }

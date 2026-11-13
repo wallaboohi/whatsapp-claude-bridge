@@ -1714,6 +1714,23 @@ def test_provider_layer(agent, monkeypatch):
     assert mod.active_provider()[0] == "claude" and mod.limit_until()
 
 
+def test_auth_regex_and_login_code(agent, monkeypatch):
+    mod, _ = agent
+    # owner 13.11: the real expiry text from Claude Code must count as a sign-out
+    assert mod.AUTH_RE.search("Failed to authenticate: OAuth session expired and could not be refreshed")
+    assert not mod.AUTH_RE.search("all good")
+    # the message carries the link and the code instruction
+    monkeypatch.setattr(mod, "login_link", lambda: "https://claude.com/cai/oauth/authorize?x=1")
+    msg = mod.auth_msg()
+    assert "https://claude.com/cai/oauth/authorize?x=1" in msg and "קוד" in msg
+    # no link available: the old one-line message
+    monkeypatch.setattr(mod, "login_link", lambda: "")
+    assert mod.auth_msg() == mod.AUTH_MSG
+    # a code with no open sign-in is not ours
+    mod._login["proc"] = None
+    assert mod.login_code_reply("קוד abcdefghijkl") is None
+
+
 def test_ollama_hosts_laptop_default_desktop_fallback(agent, monkeypatch):
     """Owner 13.11: Ollama on both PCs — the first host that answers (and has the model) serves; the next is the fallback."""
     mod, _ = agent
@@ -1744,3 +1761,21 @@ def test_ollama_hosts_laptop_default_desktop_fallback(agent, monkeypatch):
     up.clear()
     mod._host_cache.clear()
     assert not mod.provider_check("ollama")["ok"]
+
+
+def test_conflict_merge_goes_to_another_provider_when_claude_is_limited(agent, monkeypatch):
+    mod, _ = agent
+    calls = []
+    monkeypatch.setattr(mod, "limit_until", lambda: "05:00")  # the subscription's usage limit is on
+    monkeypatch.setattr(mod, "provider_env", lambda name=None, model=None: (None, None) if name is None
+                        else ({"ANTHROPIC_BASE_URL": "https://p"}, "deepseek-chat"))
+    monkeypatch.setattr(mod, "fallback_providers", lambda skip=None: [("deepseek", "deepseek-chat")])
+
+    class R:
+        returncode, stdout, stderr = 0, "", ""
+    monkeypatch.setattr(mod.subprocess, "run", lambda cmd, **k: calls.append((cmd, k.get("env"))) or R())
+    assert mod._resolve_conflicts(["a.py"]) == ""
+    assert len(calls) == 1 and calls[0][1] == {"ANTHROPIC_BASE_URL": "https://p"} and "deepseek-chat" in calls[0][0]
+    # nothing else answers: the failure is reported, the merge is aborted by the caller
+    monkeypatch.setattr(mod, "fallback_providers", lambda skip=None: [])
+    assert mod._resolve_conflicts(["a.py"]) == "usage limit"

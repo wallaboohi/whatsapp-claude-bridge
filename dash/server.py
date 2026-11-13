@@ -602,6 +602,25 @@ def _provider_key(p):
         return ""
 
 
+def anthropic_probe(p, tok):
+    """{"ok", "detail", "models"} for an Anthropic-compatible cloud API with a fixed model list (providers.json "models"): one 1-token call
+    proves the key (owner 13.11: the DeepSeek key must be the key itself, not its id)."""
+    models = list(p["models"])
+    body = {"model": p.get("model") or models[0], "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]}
+    req = urllib.request.Request(p["base_url"].rstrip("/") + "/v1/messages", data=json.dumps(body).encode(), method="POST",
+                                 headers={"x-api-key": tok, "Authorization": "Bearer " + tok, "anthropic-version": "2023-06-01",
+                                          "content-type": "application/json"})
+    try:
+        urllib.request.urlopen(req, timeout=20).read()
+        return {"ok": True, "detail": f"מחובר · המפתח תקין · {len(models)} מודלים", "models": models}
+    except urllib.error.HTTPError as e:
+        why = {401: "המפתח נדחה (ודא שהעתקת את המפתח עצמו ולא את המזהה שלו)", 403: "המפתח נדחה", 402: "אין יתרה בחשבון הספק",
+               429: "הספק מגביל קצב כרגע"}.get(e.code, f"שגיאה {e.code} מהספק")
+        return {"ok": False, "detail": why, "models": models}
+    except Exception as e:
+        return {"ok": False, "detail": f"לא מגיב: {str(e)[:70]}", "models": models}
+
+
 def provider_check(name):
     """Reachable now + its models (no secret ever leaves this function)."""
     p = _providers().get(name)
@@ -629,6 +648,8 @@ def provider_check(name):
         if not pick:
             return {"ok": False, "detail": "אף מחשב לא מגיב: " + " · ".join(rows), "models": []}
         return {"ok": True, "detail": f"עובד דרך {pick[0].get('label') or pick[0]['url']} · " + " · ".join(rows), "models": pick[1]}
+    if p.get("models") and p.get("base_url"):
+        return anthropic_probe(p, tok)
     try:
         if "11434" in p.get("base_url", ""):
             d = json.loads(urllib.request.urlopen(p["base_url"] + "/api/tags", timeout=6).read().decode())
@@ -1826,6 +1847,32 @@ def action(a):
         elif os.path.exists(f):
             os.replace(f, f + f".removed-{dt.datetime.now():%Y%m%d%H%M%S}")  # kept aside, not deleted
         return {"ok": True, "check": provider_check(a.get("provider"))}
+    if kind == "provider_add":  # legend: a new Anthropic-compatible provider (DeepSeek, ...); the key goes into secrets/ only
+        name = re.sub(r"[^a-z0-9_-]", "", (a.get("id") or "").strip().lower())[:30]
+        base = (a.get("base_url") or "").strip().rstrip("/")
+        model = (a.get("model") or "").strip()
+        key = (a.get("key") or "").strip()
+        if len(name) < 2 or name in _providers():
+            return {"error": "שם קצר באנגלית שעוד לא קיים (למשל deepseek)"}
+        if not re.match(r"^(https://\S+|http://(127\.0\.0\.1|localhost)[:/]\S*)$", base):
+            return {"error": "כתובת חייבת להתחיל ב-https://"}
+        if not model or len(model) > 100:
+            return {"error": "חסר שם מודל"}
+        if key and (len(key) > 400 or any(ch.isspace() for ch in key)):
+            return {"error": "מפתח לא תקין"}
+        entry = {"label": ((a.get("label") or "").strip()[:60] or name), "kind": "anthropic", "base_url": base, "key_file": name + ".key",
+                 "model": model, "how": f"ספק שהוספת מהלוח. כתובת: {base}. המפתח נשמר רק במחשב הזה."}
+        models = [m.strip() for m in (a.get("models") or "").replace("\n", ",").split(",") if m.strip()][:40]
+        if models:
+            entry["models"] = models
+        pf = os.path.join(ROOT, "agent", "providers.json")
+        cur = json.load(open(pf, encoding="utf-8"))
+        cur[name] = entry
+        dump_json(cur, pf, ensure_ascii=False, indent=1)
+        if key:
+            os.makedirs(os.path.join(ROOT, "secrets"), exist_ok=True)
+            open(os.path.join(ROOT, "secrets", name + ".key"), "w", encoding="utf-8").write(key)
+        return {"ok": True, "id": name, "check": provider_check(name)}
     if kind == "provider_check":
         return provider_check(a.get("provider") or "")
     if kind == "model":
