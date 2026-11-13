@@ -9,7 +9,7 @@
   "kind": "anthropic",
   "base_url": "http://127.0.0.1:11434",
   "token": "ollama",
-  "model": "bridge-qwen3-4b",
+  "model": "bridge-qwen3-4b:latest",
   "how": "מותקן בנייח. בלי עלות, והמידע לא יוצא מהמחשב. רץ על המעבד, ולכן איטי וחלש מ-Claude. מודל עם הקשר מספיק לגשר: ollama create bridge-qwen3-4b (num_ctx 40960)."
  },
  "openrouter": {

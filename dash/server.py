@@ -566,6 +566,105 @@ def map_data():
             {"name": "GitHub", "what": "פרסום יומי 23:30", "path": ""}]
 
 
+# ---------------- legend: groups ⇄ bridge ⇄ model ⇄ provider (owner 13.11) ----------------
+# The provider drives the bridge, not a group: every connected group follows the bridge's provider. Each layer is handled on
+# its own, each node clickable. Same data as WhatsApp (/ספק, /מודל) — the "phone" line of each node says which command.
+
+def _providers():
+    try:
+        out = json.load(open(os.path.join(ROOT, "agent", "providers.json"), encoding="utf-8"))
+    except Exception:
+        out = {}
+    for k, v in (cfg().get("providers") or {}).items():
+        out.setdefault(k, {}).update(v)
+    return out
+
+
+def _provider_file():
+    return os.path.join(ROOT, "agent", "provider.json")
+
+
+def active_provider():
+    try:
+        o = json.load(open(_provider_file(), encoding="utf-8"))
+    except Exception:
+        o = {}
+    name = o.get("provider") if o.get("provider") in _providers() else "claude"
+    return name, o.get("model") or ""
+
+
+def _provider_key(p):
+    if not p.get("key_file"):
+        return ""
+    try:
+        return open(os.path.join(ROOT, "secrets", p["key_file"]), encoding="utf-8").read().strip()
+    except OSError:
+        return ""
+
+
+def provider_check(name):
+    """Reachable now + its models (no secret ever leaves this function)."""
+    p = _providers().get(name)
+    if not p:
+        return {"ok": False, "detail": "ספק לא מוכר", "models": []}
+    if p.get("kind") == "claude":
+        acc = cfg().get("claude_account") or ""
+        return {"ok": True, "detail": "המנוי של המחשב" + (f" · {acc}" if acc else ""),
+                "models": [k for k in json.load(open(os.path.join(ROOT, "agent", "models.json"), encoding="utf-8")) if k != "auto"]}
+    if p.get("kind") == "anthropic-key":
+        k = _provider_key(p)
+        return {"ok": bool(k), "detail": "מפתח שמור" if k else "חסר מפתח", "models": ["opus", "sonnet", "haiku"]}
+    tok = p.get("token") or _provider_key(p)
+    if not tok:
+        return {"ok": False, "detail": "חסר מפתח", "models": []}
+    try:
+        if "11434" in p.get("base_url", ""):
+            d = json.loads(urllib.request.urlopen(p["base_url"] + "/api/tags", timeout=6).read().decode())
+            models = [m["name"] for m in d.get("models", [])]
+        else:
+            req = urllib.request.Request(p["base_url"].rstrip("/") + "/v1/models", headers={"Authorization": "Bearer " + tok})
+            models = [m.get("id") for m in json.loads(urllib.request.urlopen(req, timeout=10).read().decode()).get("data", []) if m.get("id")]
+        return {"ok": True, "detail": f"מחובר · {len(models)} מודלים", "models": models}
+    except Exception as e:
+        return {"ok": False, "detail": "לא מגיב: " + str(e)[:70], "models": []}
+
+
+def legend():
+    """Everything the legend page draws, from the live state."""
+    c = cfg()
+    convs = conversations()
+    groups = []
+    for jid, v in convs.items():
+        if jid == LOCAL:
+            continue
+        mi = model_info(jid)
+        groups.append({"jid": jid, "name": v.get("name") or jid, "purpose": v.get("purpose") or "",
+                       "primary": jid == primary(), "guest": bool(v.get("guest")), "model": mi["current"],
+                       "code": "agent/groups.json · " + (v.get("instructions") or "groups/*.md"),
+                       "phone": "בקבוצה עצמה: /מודל · /סשן · /עצור · /תור"})
+    pname, pmodel = active_provider()
+    provs = []
+    for k, p in _providers().items():
+        chk = provider_check(k)
+        provs.append({"id": k, "label": p.get("label") or k, "kind": p.get("kind"), "how": p.get("how") or "",
+                      "active": k == pname, "ok": chk["ok"], "detail": chk["detail"], "models": chk["models"][:60],
+                      "model": (pmodel or p.get("model") or "") if k == pname else (p.get("model") or ""),
+                      "key_file": p.get("key_file") or "", "has_key": bool(_provider_key(p)) if p.get("key_file") else None})
+    mi = model_info(primary())
+    return {"at": dt.datetime.now().isoformat(timespec="seconds"),
+            "user": {"name": c.get("owner_name") or "הבעלים", "phone": "קבוצת הבקרה בווצאפ"},
+            "bridge": {"machine": c.get("host_label") or socket.gethostname(), "code": "agent/agent.py · whatsapp-bridge/",
+                       "phone": "/ספק · /מודל · /תקרה · /הפעל מחדש"},
+            "groups": groups,
+            "model": {"current": mi["current"] if pname == "claude" else (pmodel or (_providers().get(pname) or {}).get("model") or ""),
+                      "provider": pname, "guide": {k: {"he": v.get("he"), "tip": v.get("tip"), "cost": v.get("cost")} for k, v in (mi.get("guide") or {}).items()},
+                      "code": "agent/model_override.json · models.json" if pname == "claude" else "agent/provider.json",
+                      "phone": "/מודל <שם> (או /עצור <שם> באמצע עבודה)" if pname == "claude" else f"/ספק {pname} <מודל>"},
+            "providers": provs,
+            "provider_code": "agent/providers.json · agent/provider.json · secrets/<key>",
+            "provider_phone": "/ספק · /ספק <שם> [מודל]"}
+
+
 def system_map():
     """Owner 10.11/11.11: the live map of the whole system, opened from the dashboard (and as an image for WhatsApp).
     Engine = capabilities, methods and tools — kept in the bridge's code, shared by both PCs; project data = per
@@ -1689,6 +1788,34 @@ def action(a):
     p = paths()
     if kind in ("automations", "auto_toggle", "auto_save", "auto_restart"):
         return automation_action(a)
+    if kind == "provider_set":  # legend: the bridge's provider (+ model); only a reachable one
+        name = a.get("provider") or ""
+        if name not in _providers():
+            return {"error": "ספק לא מוכר"}
+        chk = provider_check(name)
+        if not chk["ok"]:
+            return {"error": f"לא מחובר: {chk['detail']}"}
+        mdl = a.get("model") or ""
+        if mdl and chk["models"] and mdl not in chk["models"]:
+            return {"error": "המודל לא נמצא אצל הספק"}
+        dump_json({"provider": name, "model": mdl, "at": dt.datetime.now().isoformat(timespec="seconds")}, _provider_file())
+        return {"ok": True}
+    if kind == "provider_key":  # legend: save a provider's key into secrets/ (never shown back; empty = remove)
+        p = _providers().get(a.get("provider") or "")
+        if not p or not p.get("key_file"):
+            return {"error": "לספק הזה אין מפתח"}
+        key = (a.get("key") or "").strip()
+        if key and (len(key) > 400 or any(ch.isspace() for ch in key)):
+            return {"error": "מפתח לא תקין"}
+        os.makedirs(os.path.join(ROOT, "secrets"), exist_ok=True)
+        f = os.path.join(ROOT, "secrets", p["key_file"])
+        if key:
+            open(f, "w", encoding="utf-8").write(key)
+        elif os.path.exists(f):
+            os.replace(f, f + f".removed-{dt.datetime.now():%Y%m%d%H%M%S}")  # kept aside, not deleted
+        return {"ok": True, "check": provider_check(a.get("provider"))}
+    if kind == "provider_check":
+        return provider_check(a.get("provider") or "")
     if kind == "model":
         m = a.get("model", "auto")
         set_model(a.get("chat"), m, a.get("hours") or 0)
@@ -2098,6 +2225,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/brief":
             try:
                 return self.send_json(brief())
+            except Exception as e:
+                return self.send_json({"error": str(e)}, 500)
+        if path == "/legend":
+            try:
+                return self.send_json(legend())
             except Exception as e:
                 return self.send_json({"error": str(e)}, 500)
         if path == "/system_map":

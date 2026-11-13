@@ -1700,8 +1700,8 @@ def test_provider_layer(agent, monkeypatch):
     mod, _ = agent
     assert mod.active_provider() == ("claude", None) and mod.provider_env() == (None, None)
     env, m = mod.provider_env("ollama")
-    assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:11434" and env["ANTHROPIC_API_KEY"] == "" and m == "bridge-qwen3-4b"
-    assert env["ANTHROPIC_CUSTOM_MODEL_OPTION"] == "bridge-qwen3-4b"
+    assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:11434" and env["ANTHROPIC_API_KEY"] == "" and m == "bridge-qwen3-4b:latest"
+    assert env["ANTHROPIC_CUSTOM_MODEL_OPTION"] == "bridge-qwen3-4b:latest"
     mod.kv_set("limit_until", (mod.dt.datetime.now() + mod.dt.timedelta(hours=5)).isoformat(timespec="seconds"))
     assert mod.limit_until()
     monkeypatch.setattr(mod, "provider_check", lambda n: {"ok": n != "openrouter", "detail": "x", "models": ["bridge-qwen3-4b", "qwen3:4b-instruct"]})

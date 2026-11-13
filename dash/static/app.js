@@ -636,6 +636,8 @@ function fmtRuleAt(s) { const m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?: (\d{2}:\d
 $("rulesBtn").onclick = showRules;
 // 🗺️ system map: a live page (map.html) over the dashboard; a click on a conversation opens it here (owner 11.11)
 $("mapBtn").onclick = () => { $("mapFrame").src = "map.html?t=" + Date.now(); $("mapOverlay").hidden = false; };
+// 🧭 legend (owner 13.11): groups ⇄ bridge ⇄ model ⇄ provider, in the same overlay as the map
+$("legendBtn").onclick = () => { $("mapFrame").src = "legend.html?t=" + Date.now(); $("mapOverlay").hidden = false; };
 $("mapClose").onclick = () => { $("mapOverlay").hidden = true; $("mapFrame").src = "about:blank"; };
 addEventListener("message", async e => {
   const d = e.data || {}; if (d.from !== "system-map" || !d.open) return;

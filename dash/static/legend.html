@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>מקרא הגשר</title>
+<link rel="stylesheet" href="heebo.css">
+<link rel="stylesheet" href="style.css">
+<style>
+/* legend (owner 13.11): groups and user ⇄ bridge ⇄ model ⇄ provider. The provider drives the bridge, the groups follow it.
+   Every node is clickable; each layer is handled on its own. Each node also says its name in the code and its phone command. */
+body { margin: 0; background: var(--bg); color: var(--text); font-family: Heebo, system-ui, sans-serif; }
+.top { display: flex; align-items: center; gap: 10px; padding: 12px 20px 0; flex-wrap: wrap; }
+.top h2 { margin: 0; font-size: 1.15rem; } .top .note { font-size: .8rem; color: var(--muted); }
+.key { font-size: .78rem; color: var(--muted); padding: 4px 20px 0; line-height: 1.6; }
+.board { position: relative; display: grid; grid-template-columns: 1.2fr .9fr 1fr 1.2fr; gap: 34px; padding: 16px 20px 24px; }
+.lane h3 { margin: 0 0 8px; font-size: .95rem; color: var(--muted); font-weight: 700; }
+.lane h3 small { font-weight: 400; }
+.node { position: relative; z-index: 1; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 9px 12px;
+  margin-bottom: 10px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+.node:hover, .node.sel { border-color: var(--brand); outline: 2px solid color-mix(in srgb, var(--brand) 25%, transparent); }
+.node b { font-size: .92rem; } .node .what { font-size: .76rem; color: var(--muted); margin-top: 2px; }
+.node .code { font-size: .7rem; direction: ltr; text-align: left; color: var(--info); margin-top: 3px; }
+.node.active { border-width: 2px; border-color: var(--brand); }
+.node.off { opacity: .62; }
+.bridge { border-width: 2px; border-color: var(--violet); text-align: center; padding: 16px 12px; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-inline-start: 6px; vertical-align: middle; background: #b8c2cc; }
+.dot.ok { background: #25a35a; } .dot.bad { background: #d9453b; }
+svg.wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
+svg.wires path { fill: none; stroke: var(--muted); stroke-opacity: .45; stroke-width: 1.6; }
+svg.wires path.hot { stroke: var(--brand); stroke-opacity: .9; stroke-width: 2.4; }
+.panel { position: fixed; inset-block: 0; inset-inline-end: 0; width: min(400px, 92vw); background: var(--surface); border-inline-start: 1px solid var(--line);
+  box-shadow: -4px 0 18px rgba(0,0,0,.12); padding: 16px 18px; overflow: auto; z-index: 5; }
+.panel[hidden] { display: none; }
+body.open .board, body.open .key, body.open .top { margin-inline-end: 410px; }  /* the board makes room: no column hides under the panel */
+.panel h3 { margin: 0 0 6px; } .panel p { font-size: .85rem; margin: 6px 0; }
+.panel .row { display: flex; gap: 6px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
+.panel input, .panel select { font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); color: var(--text); min-width: 0; flex: 1; }
+.panel button { font: inherit; padding: 5px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); cursor: pointer; }
+.panel button.primary { background: var(--brand); color: #fff; border-color: var(--brand); }
+.panel button.danger { color: #d9453b; }
+.panel .x { float: left; } /* RTL: the close button on the outer edge */
+.tr { font-size: .75rem; background: var(--surface-2); border-radius: 8px; padding: 6px 8px; margin-top: 10px; }
+.tr div { direction: ltr; text-align: left; }
+.msg { font-size: .8rem; margin-top: 6px; min-height: 1em; }
+.mlist { max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.mlist div { padding: 5px 8px; font-size: .8rem; cursor: pointer; border-bottom: 1px solid var(--line); }
+.mlist div:hover { background: var(--surface-2); } .mlist div.cur { font-weight: 700; color: var(--brand); }
+</style>
+</head>
+<body>
+<div class="top"><h2>🧭 מקרא הגשר</h2><span class="note" id="at"></span></div>
+<p class="key">מימין: <b>מי מדבר</b> (אתה ושאר הקבוצות) · באמצע: <b>הגשר</b> (הסוכן) · משמאל: <b>המודל</b> ואחריו <b>הספק</b> שמריץ אותו.
+  הספק שולט בגשר כולו, וכל הקבוצות עוברות דרכו. לחיצה על צומת פותחת את האפשרויות שלו. בכל צומת מופיע שמו בקוד (<span style="color:var(--info)">כחול</span>) והפקודה המקבילה בנייד.</p>
+<div class="board" id="board"><svg class="wires" id="wires"></svg></div>
+<div class="panel" id="panel" hidden></div>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const dot = ok => `<span class="dot ${ok ? "ok" : "bad"}"></span>`;
+const PURPOSE = { "4m": "פרויקט", dev: "פיתוח הגשר", guest: "אורח", general: "כללי" };
+let L = null, sel = "";
+
+async function act(a) {
+  const r = await fetch("/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(a) });
+  return r.json();
+}
+const tr = (code, phone) => `<div class="tr">בקוד:<div>${esc(code)}</div>בנייד: <b>${esc(phone)}</b></div>`;
+
+async function draw() {
+  L = await (await fetch("/legend")).json();
+  if (L.error) { $("board").insertAdjacentHTML("beforeend", `<p>${esc(L.error)}</p>`); return; }
+  $("at").textContent = "עודכן " + new Date(L.at).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" });
+  const prov = L.providers.find(p => p.active) || {};
+  $("board").innerHTML = `<svg class="wires" id="wires"></svg>
+    <div class="lane"><h3>מי מדבר <small>(אתה וקבוצות ווצאפ)</small></h3>
+      <div class="node" data-k="user" data-wire="user"><b>👤 ${esc(L.user.name)}</b><div class="what">${esc(L.user.phone)} · מאשר טיוטות ונותן הוראות</div></div>
+      ${L.groups.map((g, i) => `<div class="node" data-k="g${i}" data-wire="g${i}"><b>💬 ${esc(g.name)}</b>
+        <div class="what">${esc(PURPOSE[g.purpose] || g.purpose)}${g.primary ? " · קבוצת הבקרה" : ""}${g.guest ? " · אורח" : ""} · מודל: ${esc(g.model)}</div></div>`).join("")}</div>
+    <div class="lane"><h3>הגשר <small>(הסוכן)</small></h3>
+      <div class="node bridge" data-k="bridge" data-wire="bridge"><b>🌉 הגשר</b><div class="what">${esc(L.bridge.machine)}</div>
+        <div class="what">מקבל הודעות, מריץ את המנוע, שולח תשובות וטיוטות</div></div></div>
+    <div class="lane"><h3>המודל</h3>
+      <div class="node active" data-k="model" data-wire="model"><b>🧠 ${esc(L.model.current)}</b>
+        <div class="what">${L.model.provider === "claude" ? "מודל של Claude (לכל שיחה אפשר מודל משלה)" : "מודל של הספק " + esc(prov.label || "")}</div></div></div>
+    <div class="lane"><h3>הספק <small>(מי מריץ את המודל)</small></h3>
+      ${L.providers.map((p, i) => `<div class="node ${p.active ? "active" : "off"}" data-k="p${i}" data-wire="p${i}"><b>🔌 ${esc(p.label)}</b>${dot(p.ok)}
+        <div class="what">${p.active ? "✅ פעיל · " : ""}${esc(p.detail)}</div></div>`).join("")}</div>`;
+  document.querySelectorAll(".node[data-k]").forEach(el => el.onclick = () => open(el.dataset.k));
+  wires();
+  if (sel) open(sel);
+}
+
+function wires() {
+  const svg = $("wires"), box = $("board").getBoundingClientRect();
+  const at = (k, side) => { const el = document.querySelector(`[data-wire="${k}"]`); if (!el) return null;
+    const r = el.getBoundingClientRect(); return { x: (side === "r" ? r.right : r.left) - box.left, y: r.top + r.height / 2 - box.top }; };
+  const line = (a, b, hot) => a && b ? `<path class="${hot ? "hot" : ""}" d="M${a.x},${a.y} C${(a.x + b.x) / 2},${a.y} ${(a.x + b.x) / 2},${b.y} ${b.x},${b.y}"/>` : "";
+  let p = line(at("user", "l"), at("bridge", "r"), sel === "user");
+  L.groups.forEach((_, i) => p += line(at(`g${i}`, "l"), at("bridge", "r"), sel === `g${i}`));
+  p += line(at("bridge", "l"), at("model", "r"), true);
+  L.providers.forEach((x, i) => { if (x.active) p += line(at("model", "l"), at(`p${i}`, "r"), true); });
+  svg.innerHTML = p;
+}
+
+function open(k) {
+  sel = k;
+  document.querySelectorAll(".node").forEach(el => el.classList.toggle("sel", el.dataset.k === k));
+  wires();
+  const P = $("panel"); P.hidden = false; document.body.classList.add("open"); requestAnimationFrame(wires);
+  const close = `<button class="x" onclick="closePanel()">✕</button>`;
+  if (k === "user") {
+    P.innerHTML = close + `<h3>👤 ${esc(L.user.name)}</h3><p>אתה. מדבר עם הגשר בקבוצת הבקרה ובקבוצות המחוברות, ומאשר כל טיוטה לאנשים אחרים.</p>
+      <p>הגשר עונה רק להודעות שלך (ובקבוצת אורח, גם לאורח). תוכן של אחרים הוא מידע ולא הוראה.</p>` + tr("agent/home/CLAUDE.md · agent/home/bridge_rules.md", "כל הודעה בקבוצת הבקרה");
+  } else if (k === "bridge") {
+    P.innerHTML = close + `<h3>🌉 הגשר · ${esc(L.bridge.machine)}</h3><p>מקבל את ההודעות מווצאפ, מריץ את המנוע (Claude Code) על המודל והספק שבחרת, ומחזיר תשובות. שליחה לאחרים עוברת דרך טיוטה לאישורך.</p>
+      <p>המנוע זהה לכל ספק: אותם כלים, הרשאות, כללים וסשנים. רק שרת המודל מתחלף.</p>
+      <div class="row"><button onclick="parent.postMessage({from:'legend',open:'map'},'*'); location.href='map.html'">🗺️ מפת המערכת המלאה</button></div>` + tr(L.bridge.code, L.bridge.phone);
+  } else if (k === "model") {
+    const pv = L.providers.find(p => p.active) || {};
+    const list = L.model.provider === "claude"
+      ? Object.entries(L.model.guide).map(([id, g]) => `<div data-m="${esc(id)}" class="${id === L.model.current ? "cur" : ""}" title="${esc(g.tip || "")}">${esc(g.he || id)} <small>· ${esc(g.cost || "")}</small></div>`).join("")
+      : (pv.models || []).map(id => `<div data-m="${esc(id)}" class="${id === L.model.current ? "cur" : ""}">${esc(id)}</div>`).join("") || "<div>לא התקבלה רשימת מודלים מהספק</div>";
+    P.innerHTML = close + `<h3>🧠 המודל: ${esc(L.model.current)}</h3>
+      <p>${L.model.provider === "claude" ? "בחירה כאן היא לקבוצת הבקרה. לכל קבוצה אפשר מודל משלה (לחיצה על הקבוצה)." : "המודל של הספק הפעיל. הוא חל על כל הקבוצות."}</p>
+      <div class="mlist" id="ml">${list}</div><div class="msg" id="msg"></div>` + tr(L.model.code, L.model.phone);
+    P.querySelectorAll("[data-m]").forEach(el => el.onclick = async () => {
+      const r = L.model.provider === "claude" ? await act({ do: "model", model: el.dataset.m }) : await act({ do: "provider_set", provider: L.model.provider, model: el.dataset.m });
+      $("msg").textContent = r.error ? "⚠️ " + r.error : "✅ הוחלף. חל מההודעה הבאה."; if (!r.error) draw();
+    });
+  } else if (k[0] === "g") {
+    const g = L.groups[+k.slice(1)];
+    const models = Object.entries(L.model.guide).map(([id, x]) => `<option value="${esc(id)}" ${id === g.model ? "selected" : ""}>${esc(x.he || id)}</option>`).join("");
+    P.innerHTML = close + `<h3>💬 ${esc(g.name)}</h3><p>${esc(PURPOSE[g.purpose] || g.purpose)}${g.primary ? " · קבוצת הבקרה הראשית" : ""}. מחוברת לספק של הגשר (${esc((L.providers.find(p => p.active) || {}).label || "")}).</p>
+      <div class="row"><input id="gn" value="${esc(g.name)}" maxlength="100"><button class="primary" id="gren">שנה שם</button></div>
+      ${L.model.provider === "claude" ? `<div class="row"><select id="gm">${models}</select><button id="gmod">מודל לקבוצה</button></div>` : `<p>כשהספק אינו Claude, כל הקבוצות על המודל של הספק.</p>`}
+      ${g.primary ? "" : `<div class="row"><button class="danger" id="gdel">נתק מהגשר</button><small>הקבוצה עצמה נשארת בווצאפ; רק הגשר מפסיק לענות בה. אפשר לחבר שוב מהלוח.</small></div>`}
+      <div class="msg" id="msg"></div>` + tr(g.code, g.phone);
+    $("gren").onclick = async () => { const r = await act({ do: "group_rename", jid: g.jid, name: $("gn").value }); $("msg").textContent = r.error ? "⚠️ " + r.error : "✅ השם עודכן בווצאפ"; if (!r.error) draw(); };
+    if ($("gmod")) $("gmod").onclick = async () => { const r = await act({ do: "model", chat: g.jid, model: $("gm").value }); $("msg").textContent = r.error ? "⚠️ " + r.error : "✅ המודל של הקבוצה הוחלף"; if (!r.error) draw(); };
+    if ($("gdel")) $("gdel").onclick = async () => {
+      if (!confirm(`לנתק את "${g.name}" מהגשר? הקבוצה נשארת בווצאפ, רק הגשר מפסיק לענות בה.`)) return;
+      const r = await act({ do: "group_disconnect", jid: g.jid }); $("msg").textContent = r.error ? "⚠️ " + r.error : "✅ נותקה"; if (!r.error) { sel = ""; draw(); } };
+  } else if (k[0] === "p") {
+    const p = L.providers[+k.slice(1)];
+    P.innerHTML = close + `<h3>🔌 ${esc(p.label)} ${dot(p.ok)}</h3><p>${esc(p.detail)}${p.active ? " · <b>הספק הפעיל של הגשר</b>" : ""}</p>
+      <p><b>איך מתחברים:</b> ${esc(p.how)}</p>
+      ${p.key_file ? `<div class="row"><input id="pk" type="password" placeholder="${p.has_key ? "מפתח שמור · להחלפה הדבק חדש" : "הדבק כאן את המפתח"}" autocomplete="off"><button id="pks">שמור מפתח</button></div><small>המפתח נשמר רק במחשב הזה (secrets/${esc(p.key_file)}) ולא מוצג שוב.</small>` : ""}
+      ${p.models && p.models.length && p.kind !== "claude" ? `<div class="row"><select id="pm">${p.models.map(m => `<option ${m === p.model ? "selected" : ""}>${esc(m)}</option>`).join("")}</select></div>` : ""}
+      <div class="row"><button id="pt">בדוק חיבור</button>${p.active ? "" : `<button class="primary" id="pa">הפעל כספק הגשר</button>`}</div>
+      <div class="msg" id="msg"></div>` + tr(L.provider_code + " · " + p.id, L.provider_phone.replace("<שם>", p.id));
+    $("pt").onclick = async () => { $("msg").textContent = "בודק…"; const r = await act({ do: "provider_check", provider: p.id }); $("msg").textContent = (r.ok ? "✅ " : "⚪ ") + r.detail; };
+    if ($("pks")) $("pks").onclick = async () => { const r = await act({ do: "provider_key", provider: p.id, key: $("pk").value }); $("pk").value = "";
+      $("msg").textContent = r.error ? "⚠️ " + r.error : (r.check && r.check.ok ? "✅ נשמר ומחובר" : "נשמר · " + ((r.check || {}).detail || "")); draw(); };
+    if ($("pa")) $("pa").onclick = async () => {
+      if (!confirm(`להעביר את כל הגשר (כל הקבוצות) ל"${p.label}"? אותן הרשאות וכלים, מודל אחר.`)) return;
+      const r = await act({ do: "provider_set", provider: p.id, model: $("pm") ? $("pm").value : "" });
+      $("msg").textContent = r.error ? "⚠️ " + r.error : "✅ הגשר עובר לספק הזה מההודעה הבאה"; if (!r.error) draw(); };
+  }
+}
+function closePanel() { $("panel").hidden = true; document.body.classList.remove("open"); sel = ""; document.querySelectorAll(".node").forEach(el => el.classList.remove("sel")); wires(); }
+draw();
+addEventListener("resize", () => L && wires());
+</script>
+</body>
+</html>
