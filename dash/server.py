@@ -617,6 +617,18 @@ def provider_check(name):
     tok = p.get("token") or _provider_key(p)
     if not tok:
         return {"ok": False, "detail": "חסר מפתח", "models": []}
+    if p.get("probe") == "ollama":  # every host in order (laptop = default, desktop = fallback): which serves now, which are down
+        rows, pick = [], None
+        for h in p.get("hosts") or []:
+            try:
+                names = [m["name"] for m in json.loads(urllib.request.urlopen(h["url"].rstrip("/") + "/api/tags", timeout=4).read().decode()).get("models", [])]
+                rows.append(f"{h.get('label') or h['url']} ✅")
+                pick = pick or (h, names)
+            except Exception:
+                rows.append(f"{h.get('label') or h['url']} ⚪")
+        if not pick:
+            return {"ok": False, "detail": "אף מחשב לא מגיב: " + " · ".join(rows), "models": []}
+        return {"ok": True, "detail": f"עובד דרך {pick[0].get('label') or pick[0]['url']} · " + " · ".join(rows), "models": pick[1]}
     try:
         if "11434" in p.get("base_url", ""):
             d = json.loads(urllib.request.urlopen(p["base_url"] + "/api/tags", timeout=6).read().decode())

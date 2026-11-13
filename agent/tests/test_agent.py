@@ -1712,3 +1712,35 @@ def test_provider_layer(agent, monkeypatch):
     assert mod.provider_env()[1] == "qwen3:4b-instruct"
     mod.owner_command("/ספק claude", mod.PRIMARY)
     assert mod.active_provider()[0] == "claude" and mod.limit_until()
+
+
+def test_ollama_hosts_laptop_default_desktop_fallback(agent, monkeypatch):
+    """Owner 13.11: Ollama on both PCs — the first host that answers (and has the model) serves; the next is the fallback."""
+    mod, _ = agent
+    up = {"http://127.0.0.1:11435": ["bridge-qwen3-4b:latest"], "http://127.0.0.1:11434": ["bridge-qwen3-4b:latest", "other"]}
+
+    class Resp:
+        def __init__(self, names): self.names = names
+        def read(self): return json.dumps({"models": [{"name": n} for n in self.names]}).encode()
+
+    def fake_urlopen(req, timeout=0):
+        url = req if isinstance(req, str) else req.full_url
+        base = url.rsplit("/api/tags", 1)[0]
+        if base not in up:
+            raise OSError("down")
+        return Resp(up[base])
+    monkeypatch.setattr(mod.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setitem(mod.CFG, "providers", {"ollama": {"hosts": [{"url": "http://127.0.0.1:11435", "label": "לפטופ"},
+                                                                  {"url": "http://127.0.0.1:11434", "label": "נייח"}]}})
+    env, m = mod.provider_env("ollama")
+    assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:11435" and m == "bridge-qwen3-4b:latest", "the laptop is the default"
+    c = mod.provider_check("ollama")
+    assert c["ok"] and "לפטופ ✅" in c["detail"] and "נייח ✅" in c["detail"]
+    del up["http://127.0.0.1:11435"]
+    mod._host_cache.clear()
+    env, _ = mod.provider_env("ollama")
+    assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:11434", "laptop down -> the desktop's Ollama"
+    assert "לפטופ ⚪" in mod.provider_check("ollama")["detail"] and "עובד דרך נייח" in mod.provider_check("ollama")["detail"]
+    up.clear()
+    mod._host_cache.clear()
+    assert not mod.provider_check("ollama")["ok"]

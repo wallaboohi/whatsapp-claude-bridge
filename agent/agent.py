@@ -772,6 +772,39 @@ def provider_key(p):
         return ""
 
 
+_host_cache = {}
+
+
+def provider_hosts(p):
+    """[{"url", "label"}] in order of preference: the provider's own "hosts" (Ollama: the laptop first, the desktop as fallback — set per
+    machine in config.json providers.ollama.hosts), else its single base_url."""
+    if p.get("hosts"):
+        return p["hosts"]
+    return [{"url": p["base_url"], "label": ""}] if p.get("base_url") else []
+
+
+def provider_host(p, model=None, max_age=20):
+    """The first host that answers (and, for Ollama, has the model); None when none does. Cached briefly: every Claude run asks."""
+    hosts = provider_hosts(p)
+    if p.get("probe") != "ollama":
+        return hosts[0] if hosts else None
+    key = (tuple(h["url"] for h in hosts), model or "")
+    hit = _host_cache.get(key)
+    if hit and time.time() - hit[0] < max_age:
+        return hit[1]
+    pick = None
+    for h in hosts:
+        try:
+            names = [m["name"] for m in json.loads(urllib.request.urlopen(h["url"].rstrip("/") + "/api/tags", timeout=3).read().decode()).get("models", [])]
+        except Exception:
+            continue
+        if not model or model in names or model + ":latest" in names:
+            pick = dict(h, models=names)
+            break
+    _host_cache[key] = (time.time(), pick)
+    return pick
+
+
 def provider_env(name=None, model=None):
     """(env for the claude process or None = the normal sign-in, model to pass or None = the bridge's own choice)."""
     if name is None:
@@ -781,7 +814,9 @@ def provider_env(name=None, model=None):
         return dict(os.environ, ANTHROPIC_API_KEY=provider_key(p)), model
     if p.get("kind") == "anthropic":
         m = model or p.get("model") or ""
-        env = dict(os.environ, ANTHROPIC_BASE_URL=p["base_url"], ANTHROPIC_AUTH_TOKEN=p.get("token") or provider_key(p),
+        h = provider_host(p, m)
+        env = dict(os.environ, ANTHROPIC_BASE_URL=(h or {}).get("url") or p.get("base_url") or p["hosts"][0]["url"],
+                   ANTHROPIC_AUTH_TOKEN=p.get("token") or provider_key(p),
                    ANTHROPIC_API_KEY="", ANTHROPIC_CUSTOM_MODEL_OPTION=m, ANTHROPIC_CUSTOM_MODEL_OPTION_NAME=m,
                    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1")
         return env, m or None
@@ -803,8 +838,20 @@ def provider_check(name):
     tok = p.get("token") or provider_key(p)
     if not tok:
         return {"ok": False, "detail": f"חסר מפתח: secrets/{p.get('key_file')}", "models": []}
+    if p.get("probe") == "ollama":  # every host, in order: which one is serving now and which are down
+        rows, pick = [], None
+        for h in provider_hosts(p):
+            try:
+                names = [m["name"] for m in json.loads(urllib.request.urlopen(h["url"].rstrip("/") + "/api/tags", timeout=4).read().decode()).get("models", [])]
+                rows.append(f"{h.get('label') or h['url']} ✅")
+                pick = pick or (h, names)
+            except Exception:
+                rows.append(f"{h.get('label') or h['url']} ⚪")
+        if not pick:
+            return {"ok": False, "detail": "אף מחשב לא מגיב: " + " · ".join(rows), "models": []}
+        return {"ok": True, "detail": f"עובד דרך {pick[0].get('label') or pick[0]['url']} · " + " · ".join(rows), "models": pick[1]}
     try:
-        if "11434" in p["base_url"]:  # Ollama: its own list (names as `ollama list` shows them)
+        if "11434" in p.get("base_url", ""):
             d = json.loads(urllib.request.urlopen(p["base_url"] + "/api/tags", timeout=8).read().decode())
             models = [m["name"] for m in d.get("models", [])]
         else:
@@ -2976,7 +3023,9 @@ def tunnel_cmd(peer, ssh="ssh"):
     port = peer_port(peer)
     return [ssh, "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=30",
             "-o", "ServerAliveCountMax=3", "-o", "ConnectTimeout=15",
-            "-L", f"{port}:127.0.0.1:8770", "-R", f"{port}:127.0.0.1:8770", str(peer["tunnel"])]
+            "-L", f"{port}:127.0.0.1:8770", "-R", f"{port}:127.0.0.1:8770",
+            # owner 13.11: each machine reaches the OTHER machine's Ollama on 127.0.0.1:11435 (the laptop's is the default host)
+            "-L", "11435:127.0.0.1:11434", "-R", "11435:127.0.0.1:11434", str(peer["tunnel"])]
 
 
 def _kill_old_tunnels():

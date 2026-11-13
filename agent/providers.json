@@ -7,10 +7,16 @@
  "ollama": {
   "label": "Ollama · מקומי במחשב",
   "kind": "anthropic",
-  "base_url": "http://127.0.0.1:11434",
   "token": "ollama",
   "model": "bridge-qwen3-4b:latest",
-  "how": "מותקן בנייח. בלי עלות, והמידע לא יוצא מהמחשב. רץ על המעבד, ולכן איטי וחלש מ-Claude. מודל עם הקשר מספיק לגשר: ollama create bridge-qwen3-4b (num_ctx 40960)."
+  "how": "מקומי, בלי עלות, והמידע לא יוצא מהמחשבים שלך. מותקן בשני המחשבים: ברירת המחדל היא הלפטופ (כרטיס GTX 1650), והנייח משמש גיבוי כשהלפטופ לא עונה. הסדר נקבע לכל מחשב ב-config.json ← providers.ollama.hosts. מודל עם הקשר מספיק לגשר: ollama create bridge-qwen3-4b (num_ctx 40960).",
+  "probe": "ollama",
+  "hosts": [
+   {
+    "url": "http://127.0.0.1:11434",
+    "label": "המחשב הזה"
+   }
+  ]
  },
  "openrouter": {
   "label": "OpenRouter · ענן, הרבה מודלים",
