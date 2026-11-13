@@ -8,3 +8,9 @@
 - סודות נשארים ב-`SECRETS/` ולא מודפסים. לא מפעילים מחדש ממשק שיקיר עובד בו בלי אישור.
 - קוד: `git pull --ff-only` מ-hub לפני שינוי; בדיקות לפני ואחרי (`agent/tests`); קומיט + `git push hub HEAD:main`. לא `git add` רחב על תיקיות.
 - התשובה האחרונה שלך נשלחת לקבוצה אוטומטית; קבצים לשליחה נשמרים ב-`outbox/`.
+
+## אוטומציית המקטע (ppe-tracker) — גם היא חלק מהגשר
+- הקוד שרץ בלפטופ ב-`C:\Users\walla\ppe-tracker` (תוספים `segment_d_auto.py`, `wa_plugin.py`: אוכל, נוכחות, דוח יומי, סקר לינה שבועי, רכבים). מאגר גיט נפרד מהמאגר הזה, כי הוא מכיל הגדרות ונתונים אישיים.
+- *מאגר משותף משלו (יקיר 13.11):* `C:/Users/walla/ppe-tracker-hub.git` בלפטופ, ענף `master`. בנייח עותק קריאה: `C:\Users\walla\ppe-tracker-shared` (`git pull` משם). עותק הגיבוי `C:\Users\walla\ppe-tracker` בנייח מתעדכן לבד מהלפטופ ואין לערוך בו.
+- מזהי הקבוצות (קבוצת המקטע, ציפורה, דולב) נמצאים רק ב-`segment_d.json` (`segment_group`, `tzipora_group`, `report.group_jid`). קבוצה שהוחלפה = עדכון שם, לא שינוי קוד. כל יכולת היא קוד בגשר או בתיקייה הזו, לא בקבוצה.
+- לא נכנסים למאגר: `plugin.db`, `keys/`, `segment_d_state/`, קבצי נתונים אישיים (`shoes_*.json`, `lodging_costs.*`, `signed.json`, `segment_d_local.json`).
