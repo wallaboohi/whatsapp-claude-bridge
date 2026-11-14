@@ -151,7 +151,7 @@ function openLayer(kind) {
     h = `<p class="hint">הספק הוא מי שמריץ את המודל (🏠 מקומי על המחשבים שלך, ☁️ אצל הספק). מפתחות וספקים חדשים: במקרא.</p>` +
       m.machines.map((x, i) => { const a = x.ai || {};
         return `<div class="sec" data-i="${i}"><b>${x.self ? "🖥️" : "💻"} ${esc(x.name)}</b> · פעיל: ${a.where === "local" ? "🏠" : "☁️"} <b>${esc(a.short || "—")}</b> ${esc(a.model || "")}
-          <div class="row"><select class="prov">${provs.map(p => `<option value="${esc(p.id)}" ${p.id === a.provider ? "selected" : ""}>${p.where === "local" ? "🏠" : "☁️"} ${esc(p.label)}${p.ready ? "" : " (לא זמין)"}</option>`).join("")}</select>
+          <div class="row"><select class="prov">${provs.map(p => `<option value="${esc(p.id)}" ${p.id === a.provider ? "selected" : ""}>${p.where === "local" ? "🏠" : "☁️"} ${esc(p.label)}${p.ready ? " ✅" : " 🔴 (" + esc(p.reason || p.detail || "לא זמין") + ")"}</option>`).join("")}</select>
           <select class="mdl"><option value="">מודל ברירת מחדל</option></select><button class="primary" data-act="provider_set">החלף</button></div><div class="msg"></div></div>`; }).join("") +
       `<div class="row"><button onclick="location.href='legend.html'">מקרא הגשר: מפתחות וספק חדש</button></div>`;
   } else if (kind === "account") {

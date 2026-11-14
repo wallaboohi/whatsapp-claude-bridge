@@ -51,12 +51,12 @@
   "base_url": "http://127.0.0.1:8799/p/gemini",
   "token": "local-proxy",
   "key_file": "gemini.key",
-  "model": "gemini-flash-latest",
+  "model": "gemini-flash-lite-latest",
   "models": [
-   "gemini-flash-latest",
    "gemini-flash-lite-latest",
-   "gemini-pro-latest",
-   "gemini-3-flash-preview"
+   "gemini-3-flash-preview",
+   "gemini-flash-latest",
+   "gemini-pro-latest"
   ],
   "upstream": {
    "base": "https://generativelanguage.googleapis.com/v1beta/openai"

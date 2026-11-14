@@ -27,6 +27,9 @@ body { margin: 0; background: var(--bg); color: var(--text); font-family: Heebo,
 .bridge { border-width: 2px; border-color: var(--violet); text-align: center; padding: 16px 12px; }
 .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-inline-start: 6px; vertical-align: middle; background: #b8c2cc; }
 .dot.ok { background: #25a35a; } .dot.bad { background: #d9453b; }
+.bad-t { color: #d9453b !important; }
+.node.bad-node { border-color: rgba(217, 69, 59, 0.45); }
+#quick button.bad { border-color: rgba(217, 69, 59, 0.45); color: #d9453b; }
 svg.wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
 svg.wires path { fill: none; stroke: var(--muted); stroke-opacity: .45; stroke-width: 1.6; }
 svg.wires path.hot { stroke: var(--brand); stroke-opacity: .9; stroke-width: 2.4; }
@@ -86,10 +89,10 @@ async function draw() {
       <div class="node active" data-k="model" data-wire="model"><b>🧠 ${esc(L.model.current)}</b>
         <div class="what">${L.model.provider === "claude" ? "מודל של Claude (לכל שיחה אפשר מודל משלה)" : "מודל של הספק " + esc(prov.label || "")}</div></div></div>
     <div class="lane"><h3>הספק <small>(מי מריץ את המודל)</small></h3>
-      ${L.providers.map((p, i) => `<div class="node ${p.active ? "active" : "off"}" data-k="p${i}" data-wire="p${i}"><b>${p.where === "local" ? "🏠" : "☁️"} ${esc(p.label)}</b>${dot(p.ok)}
-        <div class="what">${p.active ? "✅ פעיל · " : ""}${esc(p.detail)}</div><div class="what">⚙️ מנוע: ${esc(p.engine || "")}</div></div>`).join("")}
+      ${L.providers.map((p, i) => `<div class="node ${p.active ? "active" : "off"} ${p.ok ? "" : "bad-node"}" data-k="p${i}" data-wire="p${i}"><b>${p.where === "local" ? "🏠" : "☁️"} ${esc(p.label)}</b>${dot(p.ok)}
+        <div class="what ${p.ok ? "" : "bad-t"}">${p.active ? "✅ פעיל · " : ""}${p.ok ? "" : "🔴 "}${esc(p.detail)}</div><div class="what">⚙️ מנוע: ${esc(p.engine || "")}</div></div>`).join("")}
       <div class="node off" data-k="padd"><b>➕ ספק חדש</b><div class="what">הדבקת מפתח API של בינה אחרת</div></div></div>`;
-  $("quick").innerHTML = `<span>החלפה מהירה:</span>` + L.providers.map((p, i) => `<button class="${p.active ? "on" : ""}" data-q="${i}" ${p.ok || p.active ? "" : "disabled"} title="${esc(p.detail)}">${p.where === "local" ? "🏠" : "☁️"} ${esc(p.short || p.label)}</button>`).join("");
+  $("quick").innerHTML = `<span>החלפה מהירה:</span>` + L.providers.map((p, i) => `<button class="${p.active ? "on" : ""} ${p.ok ? "" : "bad"}" data-q="${i}" ${p.ok || p.active ? "" : "disabled"} title="${esc(p.detail)}">${p.where === "local" ? "🏠" : "☁️"} ${esc(p.short || p.label)} ${p.ok ? "✅" : "🔴"}</button>`).join("");
   document.querySelectorAll("#quick button[data-q]").forEach(b => b.onclick = async () => { const p = L.providers[+b.dataset.q]; if (p.active) return;
     const r = await act({ do: "provider_set", provider: p.id, model: p.model || "" }); if (r.error) alert(r.error); else draw(); });
   document.querySelectorAll(".node[data-k]").forEach(el => el.onclick = () => open(el.dataset.k));

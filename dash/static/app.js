@@ -90,7 +90,7 @@ async function loadAi() {
       `<p class="note tight">🔁 ${L("גיבוי: כשבינה לא עובדת (מכסה, מפתח, תקלה) הבאה בתור עונה, והתשובה אומרת מה קרה.", "Failover: when an AI fails the next one answers and says what happened.")}</p>` +
       // owner 14.11: see each AI's state and (re)connect it himself: check now, paste a key, sign Claude in again
       `<details class="ai-conn"><summary>🔌 ${L("מצב וחיבור של כל בינה", "State and connection of each AI")}</summary>` +
-      lg.providers.filter(p => p.id !== "auto").map((p, i) => `<div class="ai-row" data-id="${esc(p.id)}"><span class="st">${p.ok ? "✅" : "⚪"}</span> <b>${esc(p.short || p.label)}</b> <span class="det">${esc(p.detail || "")}</span>
+      lg.providers.filter(p => p.id !== "auto").map((p, i) => `<div class="ai-row" data-id="${esc(p.id)}"><span class="st ${p.ok ? "ok" : "bad"}">${p.ok ? "✅" : "🔴"}</span> <b>${esc(p.short || p.label)}</b> <span class="det ${p.ok ? "" : "bad-t"}">${esc(p.detail || "")}</span>
         <span class="acts"><button class="btn small chk">🔄 ${L("בדוק", "Check")}</button>${p.key_file ? `<button class="btn small key">🔑 ${p.has_key ? L("חדש מפתח", "Renew key") : L("הוסף מפתח", "Add key")}</button>` : ""}${p.id === "claude" ? `<button class="btn small login">🔐 ${L("התחבר מחדש", "Sign in again")}</button>` : ""}</span>
         <div class="keybox" hidden><input type="password" placeholder="${L("הדבק כאן את המפתח (לא יוצג שוב)", "Paste the key (never shown again)")}"> <button class="btn small primary save">${L("שמור ובדוק", "Save & check")}</button></div>
         <div class="loginbox" hidden></div></div>`).join("") + `</details>`;
@@ -102,7 +102,7 @@ async function loadAi() {
     });
     document.querySelectorAll("#aiList .ai-row").forEach(row => {
       const id = row.dataset.id, det = row.querySelector(".det"), st = row.querySelector(".st");
-      const show = r => { st.textContent = r.ok ? "✅" : "⚪"; det.textContent = r.detail || r.error || ""; };
+      const show = r => { st.className = "st " + (r.ok ? "ok" : "bad"); st.textContent = r.ok ? "✅" : "🔴"; det.className = "det " + (r.ok ? "" : "bad-t"); det.textContent = r.detail || r.error || ""; };
       row.querySelector(".chk").onclick = async e => { e.stopPropagation(); det.textContent = L("בודק…", "checking…"); show(await act({ do: "provider_check", provider: id })); };
       const kb = row.querySelector(".key");
       if (kb) kb.onclick = e => { e.stopPropagation(); row.querySelector(".keybox").hidden = !row.querySelector(".keybox").hidden; };

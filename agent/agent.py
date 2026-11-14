@@ -1220,11 +1220,15 @@ def hebrew_share(text):
 
 
 def ensure_hebrew(text, chat=None):
-    """Owner 14.11: a message that is mostly Latin letters is translated to Hebrew by Claude's cheap model before it is sent; when that is not
+    """Owner 14.11: a message that is mostly Latin letters is translated to Hebrew by a ready provider before it is sent; when that is not
     possible the owner gets a Hebrew warning above the original instead of silent English."""
     if hebrew_share(text) >= 0.35:
         return text
-    _ctx.force_provider = "claude"
+    active = active_provider()[0]
+    tr_provider = active if (active != "claude" and provider_ready(active)) else (auto_pick(skip=("claude",)) or ("claude" if not limit_until() else None))
+    if not tr_provider:
+        return "⚠️ הבינה ענתה באנגלית ולא הצלחתי לתרגם. התשובה המקורית:\n" + text
+    _ctx.force_provider = tr_provider
     try:
         tr = claude("תרגם לעברית טבעית וברורה את הטקסט הבא. בלי תוספות ובלי הסברים; קוד, כתובות ושמות נשארים כמות שהם:\n\n" + text,
                     model=CFG.get("light_model") or "haiku", session=False, timeout=120, chat=chat or PRIMARY, tools="")
@@ -2357,7 +2361,7 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
     _pc = providers().get(getattr(_ctx, "provider_used", None)) or {}
     if _pc.get("kind") == "cli" and not guest and tools != "":  # owner 14.11: an agent CLI of this computer is the engine and the AI
         _ctx.engine_used = "cli"
-        return _run_cli(_ctx.provider_used, _pc, prompt, pmodel or model if penv is not None else None, append, chat, on_stage, timeout)
+        return _run_cli(_ctx.provider_used, _pc, prompt, pmodel or None, append, chat, on_stage, timeout)
     if eng == "qwen" and penv is None:  # Qwen Code cannot use the Claude subscription: it needs a provider with an OpenAI endpoint
         alt = failover_target()
         if not alt:
@@ -2365,7 +2369,7 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
         _ctx.force_provider = alt[1]
         penv, pmodel = provider_env()
     if penv is not None:  # owner 14.11: nothing English reaches the owner
-        append = ((append or "") + "\n\nחשוב מאוד: ענה תמיד בעברית בלבד, בעברית ברורה וטבעית (קוד, שמות קבצים וכתובות נשארים כמות שהם). אל תכתוב באנגלית.").strip()
+        append = ((append or "") + "\n\nהוראה קריטית: ענה תמיד אך ורק בעברית! תשובתך המלאה חייבת להיכתב בעברית ברורה וטבעית. קוד, שמות קבצים וכתובות נשארים כמות שהם. אל תכתוב באנגלית כלל.").strip()
     if penv is not None and pmodel:
         model = pmodel
     qwen_env = None
@@ -2388,7 +2392,8 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
         if resume:
             cmd += ["--resume", resume] + (["--fork-session"] if fork else [])  # a side question reads the context but never changes the session
     elif eng == "opencode":
-        cmd = [opencode_bin(), "run", "--auto", "--format", "json", "--archived"] + (["-m", model] if model else [])
+        cmd = [opencode_bin(), "run", "--auto", "--format", "json"]  # no --archived: the npm build (laptop, 1.19.x) does not know it, 14.11
+        cmd = cmd + (["-m", model] if model else [])
         qwen_env = penv
         resume = None
         prompt = ((append + "\n\n") if append else "") + conversation_pack(chat or PRIMARY) + "\n\n---\nההודעה הנוכחית (ענה עליה):\n" + prompt
@@ -3600,7 +3605,7 @@ def run_deferred(items):
 def release_limit_waiters():
     """Once the limit has reset: commands parked by it go back to the queue (oldest first, as before), then the notice;
     background work it skipped (scheduled jobs, the morning summary) runs (owner 11.11)."""
-    if limit_until():
+    if limit_until() and not failover_target():
         return 0
     by = parked_by_chat("waiting_limit")  # also commands stranded by an earlier crash / restart (owner 11.11)
     with adb() as db:
@@ -3662,7 +3667,7 @@ def run_command(row):
             react(mid, "✅")
             return
         lu = limit_until()
-        if lu:  # no Claude run while the usage limit is on: wait for the reset
+        if lu and not failover_target():  # no Claude run while the usage limit is on and no failover target: wait for the reset
             parked = True
             wait_for_limit(cid, chat, mid, src, lu)
             return
