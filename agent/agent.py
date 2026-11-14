@@ -2681,8 +2681,9 @@ def session_rotates(chat, raw=""):
         return False
     if started and dt.datetime.fromisoformat(started).date() != dt.date.today():
         return True
-    uncapped = g.get("purpose") == "dev" or is_dev_work(raw)  # no message cap while working on the bridge/agent code
-    return not uncapped and int(kv_get(K("session_runs", chat)) or 0) >= int(CFG.get("session_max_runs", 60))
+    dev = g.get("purpose") == "dev" or is_dev_work(raw)  # owner 14.11: dev work gets a longer cap, never none (a long session makes each message ~10x dearer)
+    cap = int(CFG.get("session_max_runs_dev", 40)) if dev else int(CFG.get("session_max_runs", 15))
+    return int(kv_get(K("session_runs", chat)) or 0) >= cap
 
 
 def session_active(chat, raw=""):
