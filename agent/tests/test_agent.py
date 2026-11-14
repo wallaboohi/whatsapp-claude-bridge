@@ -485,6 +485,7 @@ def test_usage_limit_parks_and_requeues_commands(agent, monkeypatch):
     for i in (1, 2):
         mod.enqueue_command(f"L{i}", "מה המצב", "2026-11-08 10:20")
     called = []
+    monkeypatch.setattr(mod, "failover_target", lambda *a, **k: None)  # owner 14.11: with a failover target the limit does not park; here there is none
     monkeypatch.setattr(mod, "claude", lambda *a, **k: called.append(1) or "x")
     for _ in (1, 2):
         mod.run_command(mod.claim_next(mod.PRIMARY))
@@ -1933,7 +1934,7 @@ def test_group_name_never_keeps_a_model_id_and_english_is_translated(agent, monk
     monkeypatch.setattr(mod, "active_provider", lambda *a: ("groq", None))
     assert mod.group_label("opus", chat) == "Groq"
     monkeypatch.setattr(mod, "active_provider", lambda *a: ("auto", None))
-    monkeypatch.setattr(mod, "auto_pick", lambda *a: "claude")
+    monkeypatch.setattr(mod, "auto_pick", lambda *a, **k: "claude")
     assert mod.group_label("sonnet", chat) == "סונט"  # recorded under another choice: ignored
     mod.kv_set(mod.K("ai_label", chat), "")
     monkeypatch.setattr(mod, "active_provider", lambda *a: ("ollama", "bridge-qwen3-4b:latest"))
