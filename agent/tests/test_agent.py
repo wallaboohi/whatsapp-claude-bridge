@@ -35,6 +35,7 @@ def agent(tmp_path, monkeypatch):
     mod.adb().close()
     monkeypatch.setattr(mod, "opencode_bin", lambda: None)  # tests never depend on whether OpenCode is installed on this PC
     monkeypatch.setattr(mod, "cli_ready", lambda p: False)  # nor on the agent CLIs (Gemini CLI, Copilot, Codex)
+    monkeypatch.setattr(mod, "reachable", lambda url, timeout=3: True)  # nor on a local Ollama / translation server listening (CI has none)
     return mod, db
 
 
