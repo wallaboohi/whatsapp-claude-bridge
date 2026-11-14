@@ -103,7 +103,8 @@ def to_openai(body, provider):
         if m.get("role") == "assistant":
             calls = [{"id": b["id"], "type": "function", "function": {"name": b["name"], "arguments": json.dumps(b.get("input") or {}, ensure_ascii=False)}}
                      for b in _blocks(c) if b.get("type") == "tool_use"]
-            msg = {"role": "assistant", "content": _text(c) or None}
+            # Cloudflare Workers AI rejects a null / missing assistant content (400 "oneOf at '/' not met"): upstream "string_content" sends ""
+            msg = {"role": "assistant", "content": _text(c) or ("" if up.get("string_content") else None)}
             if calls:
                 msg["tool_calls"] = calls
             if msg["content"] or calls:

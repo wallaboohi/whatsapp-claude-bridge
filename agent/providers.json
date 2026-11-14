@@ -173,7 +173,8 @@
   "cost": "חינם",
   "upstream": {
    "base": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
-   "account_file": "cloudflare.account"
+   "account_file": "cloudflare.account",
+   "string_content": true
   },
   "model": "@cf/openai/gpt-oss-120b",
   "models": [

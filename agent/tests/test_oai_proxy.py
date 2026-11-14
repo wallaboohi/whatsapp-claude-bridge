@@ -177,3 +177,12 @@ def test_token_cap_is_learned_from_the_providers_message():
     assert px.token_cap("max_completion_tokens is too large: 128000. This model supports at most 8192 completion tokens", {"max_completion_tokens": 128000}) == 8192
     assert px.token_cap("max_tokens must be at most 64000", req) is None  # not below what was sent: no retry
     assert px.token_cap("rate limit exceeded", req) is None
+
+
+def test_cloudflare_assistant_tool_call_turn_has_string_content():
+    body = {"model": "m", "messages": [{"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "c1", "name": "Read", "input": {}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "c1", "content": "text"}]}]}
+    cf = px.to_openai(body, {"model": "m", "upstream": {"string_content": True}})
+    assert cf["messages"][1]["content"] == "" and cf["messages"][1]["tool_calls"]  # Cloudflare 400s on null content
+    assert px.to_openai(body, {"model": "m"})["messages"][1]["content"] is None  # other providers keep the standard null
