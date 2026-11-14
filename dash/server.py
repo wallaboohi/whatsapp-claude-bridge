@@ -2579,9 +2579,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_bytes(body, r.headers.get("Content-Type", "application/octet-stream"))
                 except Exception:
                     return self.send_bytes(b"not found", "text/plain", 404)
-            if rest not in ("/data", "/brief"):
+            if rest not in ("/data", "/brief", "/legend"):  # /legend: the 🧠 chip of a conversation on the other machine (owner 14.11)
                 return self.send_json({"error": "not allowed"}, 404)
-            return self.send_json(peer_call(pi, rest + (("?" + q) if q else ""), timeout=8))
+            return self.send_json(peer_call(pi, rest + (("?" + q) if q else ""), timeout=30 if rest == "/legend" else 8))
         if path == "/data":
             try:
                 return self.send_json(data((qs.get("chat") or [None])[0]))
