@@ -2061,3 +2061,36 @@ def test_explain_error_is_plain_hebrew_and_400_is_a_provider_problem(agent):
     assert "ההתחברות של Claude" in mod.explain_error("Failed to authenticate: OAuth session expired")
     assert "היתרה" in mod.explain_error("API Error: 402 insufficient balance", "gemini")
     assert mod.ensure_hebrew("שלום, הכול בסדר") == "שלום, הכול בסדר"
+
+
+def test_every_hosted_ai_gets_the_hebrew_rule(agent, monkeypatch, tmp_path):
+    """Owner 14.11: the agent CLIs (Codex, Copilot, Gemini CLI) answered in English: they never got the Hebrew rule. Now they get it
+    in the instructions and as the last line of the message."""
+    mod, _ = agent
+    seen = {}
+
+    class R:
+        returncode, stdout, stderr = 0, '{"response": "שלום"}', ""
+    monkeypatch.setattr(mod.shutil, "which", lambda b: "C:/x/" + str(b) + ".exe")
+    monkeypatch.setattr(mod.subprocess, "run", lambda cmd, **k: seen.update(cmd=cmd, input=k.get("input")) or R())
+    monkeypatch.setattr(mod, "conversation_pack", lambda chat: "")
+    p = {"short": "Gemini CLI", "cli": {"bin": "gemini", "args": ["-o", "json"], "prompt": "stdin", "out": "json:response"}}
+    res = mod._run_cli("gemini_cli", p, "מה שלומך?", None, None, mod.PRIMARY, None, 60)
+    assert res["result"] == "שלום"
+    assert mod.HEBREW_RULE in seen["input"] and seen["input"].rstrip().endswith(mod.HEBREW_TAIL.strip())
+
+
+def test_watchdog_heals_a_bridge_whose_api_is_down(agent, monkeypatch):
+    """Owner 14.11: the bridge process ran but its API did not answer (port held), so nothing was sent: kill it (its loop restarts it),
+    and start the task when no loop runs."""
+    mod, _ = agent
+    calls = []
+
+    class R:
+        def __init__(self, out=""):
+            self.stdout = out
+    monkeypatch.setattr(mod.subprocess, "run", lambda cmd, **k: calls.append(cmd) or R("0" if cmd[0] == "powershell" else ""))
+    monkeypatch.setattr(mod, "push", lambda *a, **k: calls.append(["push", a[0]]))
+    mod.heal_bridge("ה-API לא ענה 3 דק'")
+    names = [c[0] for c in calls]
+    assert "taskkill" in names and "schtasks" in names and "push" in names  # no loop was running: the task is started too

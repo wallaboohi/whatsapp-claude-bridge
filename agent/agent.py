@@ -2305,6 +2305,10 @@ def npm_direct(exe):
     return [exe]
 
 
+HEBREW_RULE = "הוראה קריטית: ענה תמיד אך ורק בעברית! תשובתך המלאה חייבת להיכתב בעברית ברורה וטבעית. קוד, שמות קבצים וכתובות נשארים כמות שהם. אל תכתוב באנגלית כלל."
+HEBREW_TAIL = "\n\n(חשוב: כתוב את כל התשובה בעברית בלבד.)"  # owner 14.11: the last line of the message, where models follow it best
+
+
 def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
     """Owner 14.11: any agent CLI installed on this computer answers a conversation (providers.json kind "cli"): Gemini CLI, GitHub Copilot
     CLI, Codex. It runs in HOME with its own tools; the prompt goes on stdin or as an argument; the answer is read as JSON, a file or text.
@@ -2313,7 +2317,8 @@ def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
     exe = shutil.which(c.get("bin") or "")
     if not exe:
         raise ProviderDown(name, "unreachable", 30)
-    full = ((append + "\n\n") if append else "") + conversation_pack(chat or PRIMARY) + "\n\n---\nההודעה הנוכחית (ענה עליה):\n" + prompt
+    append = ((append or "") + "\n\n" + HEBREW_RULE).strip()  # owner 14.11: the CLIs never got the Hebrew rule (they leave before it is added)
+    full = ((append + "\n\n") if append else "") + conversation_pack(chat or PRIMARY) + "\n\n---\nההודעה הנוכחית (ענה עליה):\n" + prompt + HEBREW_TAIL
     cmd = npm_direct(exe) + list(c.get("args") or [])
     m = model or p.get("model")
     if m and c.get("model_flag"):
@@ -2401,7 +2406,8 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
         _ctx.force_provider = alt[1]
         penv, pmodel = provider_env()
     if penv is not None:  # owner 14.11: nothing English reaches the owner
-        append = ((append or "") + "\n\nהוראה קריטית: ענה תמיד אך ורק בעברית! תשובתך המלאה חייבת להיכתב בעברית ברורה וטבעית. קוד, שמות קבצים וכתובות נשארים כמות שהם. אל תכתוב באנגלית כלל.").strip()
+        append = ((append or "") + "\n\n" + HEBREW_RULE).strip()
+        prompt = prompt + HEBREW_TAIL
     if penv is not None and pmodel:
         model = pmodel
     qwen_env = None
@@ -5676,19 +5682,45 @@ def report_reconnect(down_since, now, alerted, settle=None):
         _ctx.chat = None
 
 
+def heal_bridge(why):
+    """Owner 14.11: the bridge process was alive but its API did not answer (19:42 desktop: the port was still held; 10:18 laptop: the
+    restart loop itself was gone), so nothing was sent or received for up to 100 minutes. Restart it: kill the process (run-bridge.cmd
+    starts it again after 10 s, with the saved session: no QR), and start the scheduled task when no loop is running."""
+    task = CFG.get("bridge_task", "WhatsApp bridge")
+    try:
+        loops = subprocess.run(["powershell", "-NoProfile", "-Command",
+                                "(Get-CimInstance Win32_Process -Filter \"Name='cmd.exe'\" | ?{ $_.CommandLine -match 'run-bridge' } | Measure-Object).Count"],
+                               capture_output=True, text=True, timeout=60, creationflags=NO_WINDOW).stdout.strip()
+        subprocess.run(["taskkill", "/F", "/IM", "whatsapp-bridge.exe"], capture_output=True, timeout=60, creationflags=NO_WINDOW)
+        if loops in ("", "0"):
+            subprocess.run(["schtasks", "/run", "/tn", task], capture_output=True, timeout=60, creationflags=NO_WINDOW)
+        log("bridge healed:", why, "| loops running:", loops or "?")
+        push(f"🔧 הגשר במחשב הזה לא ענה ({why}) והופעל מחדש לבד", PRIMARY, "bridge_heal")
+    except Exception as e:
+        log("bridge heal failed", e)
+
+
 def watchdog():
-    """Alerts on the PC when WhatsApp stays disconnected or the device was logged out; reports recovery."""
+    """Alerts on the PC when WhatsApp stays disconnected or the device was logged out; reports recovery. Owner 14.11: when the bridge's
+    API itself stops answering for bridge_heal_minutes (default 3), the bridge is restarted (heal_bridge), at most every 15 minutes."""
     down_since, alerted = None, False
+    api_down, healed_at = None, 0.0
     limit = dt.timedelta(minutes=CFG.get("disconnect_alert_minutes", 10))
+    heal_after = dt.timedelta(minutes=CFG.get("bridge_heal_minutes", 3))
     while True:
         try:
             st = bridge("/status", timeout=10)
             ok = bool(st.get("connected"))
+            api_down = None
             if st.get("logged_in") is False and not alerted:
                 notify(T["logged_out_t"], T["logged_out_b"])
                 alerted = True
         except Exception:
             ok = False
+            api_down = api_down or dt.datetime.now()
+            if CFG.get("bridge_heal", True) and dt.datetime.now() - api_down > heal_after and time.time() - healed_at > 900:
+                healed_at = time.time()
+                heal_bridge(f"ה-API לא ענה {int((dt.datetime.now() - api_down).total_seconds() // 60)} דק'")
         now = dt.datetime.now()
         if ok:
             if down_since:  # back: why / how long / owner messages that were missed (in the background, after the sync)
