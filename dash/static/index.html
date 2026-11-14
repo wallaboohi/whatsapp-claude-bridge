@@ -107,20 +107,27 @@
         <button class="tile" data-detail="cost" style="--accent: var(--brand)"><span class="tile-ico">💲</span><span class="tile-value" id="kCost">—</span><span class="tile-label" data-en="Claude cost today">עלות Claude היום</span>
           <span class="meter" role="progressbar" aria-label="ניצול תקציב יומי" id="kCostMeter"><span id="kCostBar"></span></span></button>
       </div>
-      <div class="chat-top">
-        <section class="model-box" id="modelBox" aria-labelledby="h-model">
-          <div class="card-head"><h2 id="h-model" data-en="Claude model">מודל Claude</h2><button class="mb-toggle" id="mbToggle" aria-expanded="true" title="מזער / הרחב" data-en-title="Minimize / expand">▾ מזער</button></div>
-          <p class="note tight" id="modelNow"></p>
-          <select id="modelSel" class="btn sel" aria-label="בחירת מודל" data-en-aria="Choose model"></select>
-          <p class="note tight" id="modelTip"></p>
-          <p class="note tight" id="modelRec"></p>
-          <button type="button" class="mb-usage" id="mbUsage" title="פירוט שבועי וחודשי" data-en-title="Weekly and monthly detail"></button>
-          <div class="mb-detail" id="mbDetail" hidden></div>
-        </section>
-      </div>
       <div class="chat-row">
+        <div class="chat-top">
+          <section class="model-box" id="modelBox" aria-labelledby="h-model">
+            <div class="card-head"><h2 id="h-model" data-en="Claude model">מודל Claude</h2><button class="mb-toggle" id="mbToggle" aria-expanded="true" title="מזער / הרחב" data-en-title="Minimize / expand">▾ מזער</button></div>
+            <p class="note tight" id="modelNow"></p>
+            <select id="modelSel" class="btn sel" aria-label="בחירת מודל" data-en-aria="Choose model"></select>
+            <p class="note tight" id="modelTip"></p>
+            <p class="note tight" id="modelRec"></p>
+            <button type="button" class="mb-usage" id="mbUsage" title="פירוט שבועי וחודשי" data-en-title="Weekly and monthly detail"></button>
+            <div class="mb-detail" id="mbDetail" hidden></div>
+          </section>
+          <section class="model-box ai-box" id="aiBox" aria-labelledby="h-ai">
+            <div class="card-head"><h2 id="h-ai" data-en="Hosted AI">בינה מארחת</h2><button class="mb-toggle" id="aiToggle" aria-expanded="true" title="מזער / הרחב" data-en-title="Minimize / expand">▾ מזער</button></div>
+            <p class="note tight" id="aiNow"></p>
+            <select id="aiSel" class="btn sel" aria-label="בחירת בינה לשיחה הזו" data-en-aria="Choose the AI for this conversation"></select>
+            <p class="note tight" id="aiState"></p>
+          </section>
+        </div>
         <div class="chat" id="chat" tabindex="0" aria-live="polite"></div>
       </div>
+      <div class="queue-line" id="queueLine" hidden></div>
       <div class="attach-row" id="attachRow" hidden></div>
       <div class="cam-box" id="camBox" hidden>
         <video id="camVideo" autoplay playsinline muted></video>
@@ -137,6 +144,7 @@
         <button type="button" class="btn small" id="camBtn" title="צלם תמונה במצלמת המחשב ונצרף אותה" data-en-title="Take a photo with the PC camera and attach it" data-en="📷 Photo">📷 צלם</button>
         <label class="chk" id="syncLbl" title="כשמסומן, ההודעה והתשובה נשלחות גם לקבוצה בווצאפ (ובנייד תראה אותן). כשלא — הכול נשאר כאן, והשיחה ממשיכה מהנייד מאותה נקודה." data-en-title="When checked, the message and answer also go to the WhatsApp group. Otherwise everything stays here and the phone continues from the same point."><input type="checkbox" id="syncChk"> <span data-en="Also send to WhatsApp">שלח גם לווצאפ</span></label>
         <button type="button" class="btn small danger-soft" id="stopBtn" hidden data-en="⛔ Stop">⛔ עצור</button>
+        <label class="chk" title="צליל קצר כשמגיעה תשובה" data-en-title="A short sound when an answer arrives"><input type="checkbox" id="soundChk"> <span data-en="🔔 Sound">🔔 צליל</span></label>
         <span class="note" id="sendHint"></span>
       </div>
     </section>

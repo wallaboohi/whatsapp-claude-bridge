@@ -78,6 +78,7 @@ async function loadAi() {
   try {
     const chat = curChat || "", lg = await (await fetch(base() + "/legend?chat=" + encodeURIComponent(chat))).json();
     const sc = lg.scope || {}, cur = lg.providers.find(p => p.active) || {};
+    try { drawAiBox(lg, chat); } catch (e) {}
     $("aiBadge").textContent = (cur.where === "local" ? "🏠 " : "☁️ ") + (cur.short || cur.label || "—") + (cur.id && cur.id !== "claude" && lg.model.current && !sc.own ? " · " + lg.model.current : "") + (sc.own ? " · " + L("לשיחה", "chat") : "");
     const opts = (scopeChat) => lg.providers.map((p, i) => {
       const on = scopeChat ? (sc.own && p.active) : p.id === (sc.computer || {}).provider;
@@ -567,7 +568,8 @@ function render(d) {
     // while Claude thinks there are no new steps: a ticking clock + "thinking" line so the screen never looks frozen (owner 10.11)
     const lastAt = steps.length ? steps[steps.length - 1].at : lv.started;
     const think = lv.done ? "" : `<li class="now thinking">🧠 ${L("חושב", "thinking")}<span class="dots"><i>.</i><i>.</i><i>.</i></span> <span class="live-clock since" data-from="${esc(lastAt || "")}"></span></li>`;
-    return `<span class="st-head">${head}</span><ol>${steps.map((x, j) => `<li class="${j === steps.length - 1 && !lv.done ? "cur" : ""}" title="${esc(x.text)}">${hhmm(toDate(x.at))} · ${esc(x.text)}</li>`).join("")}${think}</ol>`;
+    const stopB = lv.done ? "" : ` <button type="button" class="btn small danger-soft live-stop">⏹ ${L("עצור", "Stop")}</button>`;  // owner 14.11
+    return `<span class="st-head">${head}</span>${stopB}<ol>${steps.map((x, j) => `<li class="${j === steps.length - 1 && !lv.done ? "cur" : ""}" title="${esc(x.text)}">${hhmm(toDate(x.at))} · ${esc(x.text)}</li>`).join("")}${think}</ol>`;
   };
   // owner 14.11: a run newer than the last WhatsApp status message (a dashboard-only run) is shown live at the bottom, even before its first
   // step, instead of being glued to an old status bubble higher up (which looked frozen)
@@ -600,6 +602,14 @@ function render(d) {
   if (lv && liveNew && (!lv.done || ts19(lv.started) >= lastMe))
     html += `<div class="bubble tool status">${statusBody()}</div>`;
   chat.innerHTML = html || `<p class="empty">${L("עדיין אין שיחה", "No conversation yet")}</p>`;
+  chat.querySelectorAll(".live-stop").forEach(b => b.onclick = () => $("stopBtn").click());
+  // owner 14.11: how many of his messages wait, right above the input; a sound when a new answer arrives
+  const mine = conv.filter(m => !m.tool && m.cmd), waiting = mine.filter(m => m.cmd.st === "pending").length, working = mine.some(m => m.cmd.st === "running");
+  $("queueLine").hidden = !(waiting || working);
+  $("queueLine").textContent = (working ? L("🧠 עובד על ההודעה שלך", "🧠 working on your message") : "") + (waiting ? (working ? " · " : "") + L(`📥 ${waiting} הודעות בתור`, `📥 ${waiting} queued`) : "");
+  const lastTool = conv.filter(m => m.tool && !isStatus(m)).map(m => String(m.id)).pop() || "";
+  if (chat._lastTool !== undefined && lastTool && lastTool !== chat._lastTool && chat._chat === curChat && $("soundChk").checked) ding();
+  chat._lastTool = lastTool; chat._chat = curChat;
   drawOutbox(false);
   if (atBottom || !chat._init) { chat.scrollTop = chat.scrollHeight; chat._init = true; }
   const pc = $("pendingChip"); pc.hidden = !a.pending; pc.textContent = a.pending ? L(`${a.pending} ממתינות לתשובה`, `${a.pending} awaiting an answer`) : "";
@@ -928,6 +938,38 @@ try { if (localStorage.getItem("wa-dash-mb-min") === "1") $("modelBox").classLis
 const mbLabel = () => { const m = $("modelBox").classList.contains("min"); $("mbToggle").textContent = m ? L("▸ הרחב", "▸ Expand") : L("▾ מזער", "▾ Minimize"); $("mbToggle").setAttribute("aria-expanded", !m); };
 $("mbToggle").onclick = () => { $("modelBox").classList.toggle("min"); try { localStorage.setItem("wa-dash-mb-min", $("modelBox").classList.contains("min") ? "1" : "0"); } catch (e) {} mbLabel(); };
 mbLabel();
+// owner 14.11: a short two-tone sound when an answer arrives (🔔 next to the input, remembered)
+try { $("soundChk").checked = localStorage.getItem("wa-dash-sound") !== "0"; } catch (e) { $("soundChk").checked = true; }
+$("soundChk").onchange = () => { try { localStorage.setItem("wa-dash-sound", $("soundChk").checked ? "1" : "0"); } catch (e) {} };
+function ding() {
+  try {
+    const ac = ding.ac || (ding.ac = new (window.AudioContext || window.webkitAudioContext)());
+    [[880, 0], [1320, .14]].forEach(([f, t]) => { const o = ac.createOscillator(), g = ac.createGain(); o.frequency.value = f; o.connect(g); g.connect(ac.destination);
+      g.gain.setValueAtTime(.0001, ac.currentTime + t); g.gain.exponentialRampToValueAtTime(.18, ac.currentTime + t + .02); g.gain.exponentialRampToValueAtTime(.0001, ac.currentTime + t + .18);
+      o.start(ac.currentTime + t); o.stop(ac.currentTime + t + .2); });
+  } catch (e) {}
+}
+// owner 14.11: the hosted-AI box beside the model box: who answers in this conversation, switch it here (the same as the 🧠 chip)
+try { if (localStorage.getItem("wa-dash-ai-min") === "1") $("aiBox").classList.add("min"); } catch (e) {}
+const aiLabel = () => { const m = $("aiBox").classList.contains("min"); $("aiToggle").textContent = m ? L("▸ הרחב", "▸ Expand") : L("▾ מזער", "▾ Minimize"); $("aiToggle").setAttribute("aria-expanded", !m); };
+$("aiToggle").onclick = () => { $("aiBox").classList.toggle("min"); try { localStorage.setItem("wa-dash-ai-min", $("aiBox").classList.contains("min") ? "1" : "0"); } catch (e) {} aiLabel(); };
+aiLabel();
+function drawAiBox(lg, chat) {
+  const sc = lg.scope || {}, cur = lg.providers.find(p => p.active) || {}, comp = sc.computer || {};
+  $("aiNow").textContent = `${cur.where === "local" ? "🏠" : "☁️"} ${cur.short || cur.label || "—"}` + (sc.own ? L(" · נבחר לשיחה הזו", " · chosen for this chat") : L(` · כמו המחשב`, " · as the computer"));
+  $("aiState").textContent = (cur.ok ? "✅ " : "⚪ ") + (cur.detail || "");
+  const sel = $("aiSel");
+  sel.innerHTML = `<option value="">${L("כמו המחשב", "As the computer")} (${esc(comp.short || "")})</option>` +
+    lg.providers.map(p => `<option value="${esc(p.id)}" ${sc.own && p.active ? "selected" : ""} ${p.ok || (sc.own && p.active) ? "" : "disabled"}>${p.ok ? "" : "⚪ "}${p.where === "local" ? "🏠" : "☁️"} ${esc(p.short || p.label)}${p.cost ? " · " + esc(p.cost) : ""}</option>`).join("");
+  if (!sc.own) sel.value = "";
+  sel.disabled = !chat || chat === "local";
+  sel.onchange = async () => {
+    const v = sel.value, p = lg.providers.find(x => x.id === v) || {};
+    await act(v ? { do: "provider_set", provider: v, model: p.model || "", chat } : { do: "provider_clear", chat },
+      v ? L("בשיחה הזו עונה עכשיו ", "This chat is now answered by ") + (p.short || p.label) : L("השיחה חזרה לבינה של המחשב", "Back to the computer's AI"));
+    loadAi();
+  };
+}
 function fitChat() {
   const card = document.querySelector(".chat-card"); if (!card) return;
   const top = card.getBoundingClientRect().top + window.scrollY;

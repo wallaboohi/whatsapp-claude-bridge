@@ -273,11 +273,16 @@ details.item > summary::-webkit-details-marker { display: none; }
 .model-box.min > :not(.card-head) { display: none; }
 /* owner 11.11 20:11: the model box stays in its place (top left of the chat) but is pinned over the chat — it takes no row
    of its own, so the chat keeps its full height and width (no empty band beside the box) */
+/* owner 14.11 13:06: pinned to the top-left corner of the chat window itself (not the card: it rose ~2 cm over the tabs and the
+   bar when the page scrolled), the hosted-AI box beside it in the same style; both minimize */
 @media (min-width: 1001px) {
-  .chat-card { position: relative; }
-  .chat-top { height: 0; margin: 0; overflow: visible; }
-  .chat-top .model-box { position: absolute; top: 6px; inset-inline-end: 14px; box-shadow: 0 6px 18px rgba(0,0,0,.16); }
+  .chat-row { position: relative; }
+  .chat-top { position: absolute; top: 8px; inset-inline-end: 22px; height: auto; margin: 0; z-index: 3; display: flex; gap: 8px; align-items: flex-start; }
+  .chat-top .model-box { box-shadow: 0 6px 18px rgba(0,0,0,.16); }
 }
+.ai-box { width: 240px; }
+.ai-box.min > :not(.card-head) { display: none; }
+.ai-box #aiState { font-size: .76rem; }
 
 /* the status message (thinking / git / running…) stays one compact bubble inside the conversation */
 .bubble.status { font-size: .82rem; padding: 6px 10px 4px; max-width: 60%; }
@@ -528,3 +533,7 @@ p.help { margin: 4px 0 0; }
 .ai-row .keybox, .ai-row .loginbox { margin-top: 4px; }
 .ai-row input { max-width: 200px; }
 #aiPop { width: 400px; max-height: 80vh; overflow: auto; }  /* owner 14.11: above the chat cards, scrolls when long */
+
+/* owner 14.11: queue line above the input; stop button inside the live bubble */
+.queue-line { font-size: .82rem; font-weight: 600; color: var(--brand); padding: 4px 8px; }
+.bubble.status .live-stop { margin-inline-start: 6px; padding: 1px 8px; font-size: .75rem; }
