@@ -867,7 +867,7 @@ BILLING_RE = re.compile(r"(?i)(insufficient (balance|funds|credit)|no credits|cr
 RATE_RE = re.compile(r"(?i)(\b429\b|rate.?limit|quota|too many requests|overloaded|\b50[234]\b|resource.?exhausted|\b413\b|request too large|tokens per minute|\b410\b)")
 DENIED_RE = re.compile(r"(?i)(\b40[13]\b|unauthori[sz]ed|invalid api key|authentication)")
 DOWN_RE = re.compile(r"(?i)(connection refused|econnrefused|enotfound|fetch failed|timed out|unreachable|socket hang up)")
-REJECT_RE = re.compile(r"(?i)(\b400\b|bad input|bad request|invalid request|oneof at)")  # the provider refused the request itself (owner 14.11: Cloudflare 400)
+REJECT_RE = re.compile(r"(?i)((api error|http|status|code)\D{0,10}\b400\b|\b400 bad request|bad input|bad request|invalid request|oneof at)")  # the provider refused the request itself (owner 14.11: Cloudflare 400); a bare "400" in other text is not one
 LOGIN_RE = re.compile(r"(?i)(oauth (session|token) expired|failed to authenticate|please run /login|not logged in)")
 ERROR_ANSWER_RE = re.compile(r"(?is)^\s*(API Error\b|Failed to authenticate|Error:|HTTP Error)")
 
@@ -1293,7 +1293,7 @@ def ai_tag(model=None):
         name = getattr(_ctx, "provider_used", None) or auto_pick() or "claude"
     p = providers().get(name) or {}
     short = p.get("short") or (p.get("label") or name).split("·")[0].strip()
-    m = effective_model(model)
+    m = (p.get("model") or None) if p.get("kind") in ("cli", "opencode") else effective_model(model)  # a CLI brings its own model: never show the group's (Codex showed Gemini)
     kind, place = where_of(name, m)
     eng = getattr(_ctx, "engine_used", "claude")
     extra = (f" · מנוע {(ENGINES.get(eng) or {}).get('short', eng)}" if eng not in ("claude", "cli", "opencode") else "") + (f" · 🔁 {getattr(_ctx, 'failover_why', '') or 'מכסת Claude נגמרה'}, ולכן עונה {short}" if getattr(_ctx, "failover_used", False) else "")
@@ -2232,6 +2232,48 @@ def ensure_qwen_settings():
         write_json(path, cur)
         return True
     return False
+
+
+def ensure_cli_mcp():
+    """Owner 14.11: every hosted AI is equal to Claude: the bridge's own WhatsApp MCP server (the same tools Claude has) is registered in each
+    agent CLI's settings: Codex (~/.codex/config.toml), Gemini CLI, GitHub Copilot CLI, OpenCode. Merged into what is there, written only when
+    something changed; returns the names of the files it wrote."""
+    srv = os.path.join(ROOT, "whatsapp-mcp-server")
+    py = os.path.join(srv, ".venv", "Scripts", "python.exe")
+    main_py = os.path.join(srv, "main.py")
+    if not (os.path.exists(py) and os.path.exists(main_py)):
+        return []
+    wrote = []
+
+    def merge_json(path, fn):
+        try:
+            cur = json.load(open(path, encoding="utf-8"))
+        except (OSError, ValueError):
+            cur = {}
+        before = json.dumps(cur, sort_keys=True)
+        fn(cur)
+        if json.dumps(cur, sort_keys=True) != before:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            write_json(path, cur)
+            wrote.append(path)
+
+    merge_json(os.path.expanduser("~/.gemini/settings.json"), lambda c: c.setdefault("mcpServers", {}).__setitem__("whatsapp", {"command": py, "args": [main_py]}))
+    merge_json(os.path.expanduser("~/.copilot/mcp-config.json"), lambda c: c.setdefault("mcpServers", {}).__setitem__(
+        "whatsapp", {"type": "local", "command": py, "args": [main_py], "tools": ["*"]}))
+    merge_json(os.path.expanduser("~/.config/opencode/opencode.json"), lambda c: (c.setdefault("$schema", "https://opencode.ai/config.json"), c.setdefault("mcp", {}).__setitem__(
+        "whatsapp", {"type": "local", "command": [py, main_py], "enabled": True})))
+    toml = os.path.expanduser("~/.codex/config.toml")
+    try:
+        text = open(toml, encoding="utf-8").read()
+    except OSError:
+        text = ""
+    if "[mcp_servers.whatsapp]" not in text:
+        block = f"[mcp_servers.whatsapp]\ncommand = '{py}'\nargs = ['{main_py}']\n"
+        os.makedirs(os.path.dirname(toml), exist_ok=True)
+        with open(toml, "w", encoding="utf-8", newline="\n") as f:
+            f.write(block + ("\n" + text if text else ""))  # top level: a table placed after another table's keys would swallow them
+        wrote.append(toml)
+    return wrote
 
 
 def qwen_cmd_env(name, model, append):
@@ -6657,6 +6699,8 @@ if __name__ == "__main__":
         log("oai proxy", "started" if _px.start_in_thread() else "port taken (another copy serves)")
         if engine_ready("qwen"):
             log("qwen settings", "updated" if ensure_qwen_settings() else "up to date")
+            _w = ensure_cli_mcp()
+            log("cli mcp", ("updated " + ", ".join(os.path.basename(x) for x in _w)) if _w else "up to date")
     except Exception as e:
         log("oai proxy not started", e)
     sweep_loop(_down_since)

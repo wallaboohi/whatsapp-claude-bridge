@@ -2108,3 +2108,26 @@ def test_failover_tag_names_the_model_that_answered(agent, monkeypatch, tmp_path
     finally:
         mod._ctx.provider_used, mod._ctx.failover_used = None, False
     assert mod.effective_model("opus") == "bridge-qwen3-4b:latest"  # no failover: the chosen AI's model
+
+
+def test_ensure_cli_mcp_gives_every_agent_cli_the_bridge_whatsapp_tools(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    srv = tmp_path / "root" / "whatsapp-mcp-server"
+    (srv / ".venv" / "Scripts").mkdir(parents=True)
+    (srv / ".venv" / "Scripts" / "python.exe").write_text("x")
+    (srv / "main.py").write_text("x")
+    home = tmp_path / "home"
+    (home / ".codex").mkdir(parents=True)
+    (home / ".codex" / "config.toml").write_text('model = "gpt-5"\n\n[projects."x"]\ntrust_level = "trusted"\n', encoding="utf-8")
+    (home / ".gemini").mkdir()
+    (home / ".gemini" / "settings.json").write_text(json.dumps({"theme": "dark"}), encoding="utf-8")
+    monkeypatch.setattr(mod, "ROOT", str(tmp_path / "root"))
+    monkeypatch.setattr(mod.os.path, "expanduser", lambda p: str(home) + p[1:].replace("/", os.sep) if p.startswith("~") else p)
+    assert len(mod.ensure_cli_mcp()) == 4
+    assert mod.ensure_cli_mcp() == []  # idempotent: nothing to write the second time
+    toml = (home / ".codex" / "config.toml").read_text(encoding="utf-8")
+    assert toml.startswith("[mcp_servers.whatsapp]") and 'model = "gpt-5"' in toml and "[projects." in toml
+    g = json.load(open(home / ".gemini" / "settings.json", encoding="utf-8"))
+    assert g["theme"] == "dark" and g["mcpServers"]["whatsapp"]["args"][0].endswith("main.py")
+    assert "whatsapp" in json.load(open(home / ".copilot" / "mcp-config.json", encoding="utf-8"))["mcpServers"]
+    assert json.load(open(home / ".config" / "opencode" / "opencode.json", encoding="utf-8"))["mcp"]["whatsapp"]["enabled"] is True
