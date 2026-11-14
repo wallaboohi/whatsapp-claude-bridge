@@ -2019,11 +2019,68 @@ def engine_endpoint(name, model=None):
     return None
 
 
+WA_READ_TOOLS = ["list_messages", "list_chats", "get_chat", "get_direct_chat_by_contact", "get_contact_chats", "get_last_interaction", "get_message_context",
+                 "search_contacts", "search_all", "list_transcripts", "list_polls", "list_drafts", "get_status", "download_media"]
+
+
+def conversation_pack(chat, n=14):
+    """Owner 14.11: what another engine's fresh session needs to continue this conversation: the hand-off note and the last messages of the chat
+    (the owner's and the bridge's own answers), plus the way to read more on demand."""
+    parts = []
+    try:
+        h = open(handoff_path(chat), encoding="utf-8").read().strip()[:1500]
+        if h:
+            parts.append("סיכום קודם של השיחה:\n" + h)
+    except OSError:
+        pass
+    try:
+        with mdb() as db:
+            rows = db.execute("SELECT timestamp, is_from_me, content FROM messages WHERE chat_jid = ? AND coalesce(content, '') != '' ORDER BY timestamp DESC LIMIT ?",
+                              (chat, n)).fetchall()
+    except Exception:
+        rows = []
+    pre = (CFG.get("reply_prefix") or "🤖").strip()
+    lines = []
+    for ts, mine, text in reversed(rows):
+        who = "הבינה" if (text or "").lstrip().startswith(pre) else ("הבעלים" if mine else "אחר")
+        lines.append(f"[{str(ts)[11:16]}] {who}: {' '.join((text or '').split())[:300]}")
+    if lines:
+        parts.append("ההודעות האחרונות בשיחה (מהישנה לחדשה):\n" + "\n".join(lines))
+    parts.append("אם צריך עוד הקשר, קרא הודעות לפי דרישה בכלי הווצאפ (list_messages, search_all, get_message_context). אל תשלח הודעות בעצמך.")
+    return "\n\n".join(parts)
+
+
+def ensure_qwen_settings():
+    """Owner 14.11: ~/.qwen/settings.json for Qwen Code: OpenAI-protocol auth, no telemetry, and the WhatsApp MCP server with READ-ONLY tools, so a
+    hosted AI can read the bridge's messages on demand. Merged into what is there; written only when something changed."""
+    path = os.path.expanduser("~/.qwen/settings.json")
+    try:
+        cur = json.load(open(path, encoding="utf-8"))
+    except (OSError, ValueError):
+        cur = {}
+    before = json.dumps(cur, sort_keys=True)
+    cur.setdefault("security", {}).setdefault("auth", {})["selectedType"] = "openai"
+    cur.setdefault("telemetry", {})["enabled"] = False
+    srv = os.path.join(ROOT, "whatsapp-mcp-server")
+    py = os.path.join(srv, ".venv", "Scripts", "python.exe")
+    if os.path.exists(py):
+        cur.setdefault("mcpServers", {})["whatsapp"] = {"command": py, "args": ["main.py"], "cwd": srv, "includeTools": WA_READ_TOOLS, "timeout": 30000}
+    if json.dumps(cur, sort_keys=True) != before:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        write_json(path, cur)
+        return True
+    return False
+
+
 def qwen_cmd_env(name, model, append):
     """The Qwen Code command and environment for provider `name`; RuntimeError when that provider has no OpenAI-compatible endpoint (Claude)."""
     ep = engine_endpoint(name, model)
     if not ep:
         raise RuntimeError(f"המנוע Qwen Code לא יכול לרוץ על הספק {name}: אין לו כתובת בפורמט OpenAI")
+    try:
+        ensure_qwen_settings()  # owner 14.11: connecting to the bridge gives the WhatsApp tools, whatever the machine's history
+    except Exception as e:
+        log("qwen settings failed", e)
     base, key, m = ep
     cmd = [shutil.which("qwen") or "qwen", "-y", "-o", "stream-json", "-m", m]
     if append:
@@ -2078,6 +2135,9 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
     else:
         cmd, qwen_env, model = qwen_cmd_env(getattr(_ctx, "provider_used", None) or active_provider()[0], model, append)
         resume = None  # Qwen Code keeps its own sessions: a Claude session id means nothing to it
+        prompt = conversation_pack(chat or PRIMARY) + "\n\n---\nההודעה הנוכחית (ענה עליה):\n" + prompt  # owner 14.11: a new session still has the conversation
+    if eng == "claude" and penv is not None and not resume and not guest and tools != "":
+        prompt = conversation_pack(chat or PRIMARY) + "\n\n---\nההודעה הנוכחית (ענה עליה):\n" + prompt  # owner 14.11: any hosted AI that joins gets the conversation
     chat = chat or PRIMARY
     if stoppable is None:
         stoppable = on_stage is not None  # only the owner's interactive runs; plugin / hand-off runs never eat a stop request
@@ -2288,6 +2348,9 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
         if why:
             log(f"claude skipped ({why}) for", chat)
             return None
+    if session and not _ctx.failover_used and active_engine() == "claude" and kv_get(K("gap", chat)):
+        prompt = ("בזמן שהמכסה שלך הייתה חסומה ענתה בשיחה הזו בינה אחרת. כך נראתה השיחה; המשך משם:\n" + conversation_pack(chat, 20) + "\n\n---\n" + prompt)
+        kv_set(K("gap", chat), "")
     sid = kv_get(K("session_id", chat)) if session else None
     if sid and session_rotates(chat, prompt if raw is None else raw):
         write_handoff(sid, chat)
@@ -2307,6 +2370,8 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
     except Exception as e:
         log("claude failed", e)
         return None
+    if getattr(_ctx, "failover_used", False) or getattr(_ctx, "engine_used", "claude") != "claude":
+        kv_set(K("gap", chat), "1")  # Claude's own session missed this exchange: its next run gets the conversation as context
     if session and res.get("session_id") and getattr(_ctx, "engine_used", "claude") == "claude" and not getattr(_ctx, "failover_used", False):
         if res["session_id"] != kv_get(K("session_id", chat)):
             kv_set(K("session_started", chat), dt.datetime.now().isoformat())
@@ -6248,6 +6313,8 @@ if __name__ == "__main__":
         _px = _ilu.module_from_spec(_spec)
         _spec.loader.exec_module(_px)
         log("oai proxy", "started" if _px.start_in_thread() else "port taken (another copy serves)")
+        if engine_ready("qwen"):
+            log("qwen settings", "updated" if ensure_qwen_settings() else "up to date")
     except Exception as e:
         log("oai proxy not started", e)
     sweep_loop(_down_since)

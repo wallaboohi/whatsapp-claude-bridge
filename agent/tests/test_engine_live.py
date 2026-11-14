@@ -28,3 +28,17 @@ def test_the_bridge_answers_through_qwen_code_when_claude_is_capped(agent, monke
     assert mod._ctx.engine_used == "qwen" and mod._ctx.failover_used is True and mod._ctx.provider_used == "nvidia"
     tag = mod.ai_tag("opus")
     assert "NVIDIA" in tag and "Qwen Code" in tag and "מכסת Claude נגמרה" in tag
+
+
+def test_a_hosted_ai_reads_the_bridge_through_the_whatsapp_tools(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    monkeypatch.setattr(mod, "ENGINE_FILE", str(tmp_path / "engine.json"))
+    monkeypatch.setattr(mod, "FAILOVER_FILE", str(tmp_path / "failover.json"))
+    monkeypatch.setattr(mod, "PROVIDER_FILE", str(tmp_path / "provider.json"))
+    monkeypatch.setattr(mod, "provider_ready", lambda n: n == "nvidia")
+    monkeypatch.setattr(mod, "auto_pick", lambda skip=(): "nvidia")
+    mod.kv_set("limit_until", (mod.dt.datetime.now() + mod.dt.timedelta(hours=1)).isoformat(timespec="seconds"))
+    mod.set_failover(on_limit=True, engine="qwen")
+    out = mod.claude("Use the whatsapp tool get_status and reply with only the bridge version number it reports.", session=False, timeout=300,
+                     chat=mod.PRIMARY, on_stage=lambda *a: None)
+    assert out and "1.1" in out, out  # the connection itself gave the tool: the live bridge reports 1.1.x
