@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.7 — 2026-11-14
+- כל בינה מתארחת שווה ל-Claude: שרת ה-MCP של הגשר (כלי הווצאפ) נרשם אוטומטית בהגדרות של Codex, Gemini CLI, Copilot ו-OpenCode בכל הפעלת סוכן. נבדק בהרצה: Codex ו-Copilot הפעילו get_status.
+- זיהוי שגיאת 400 מדויק (בהקשר HTTP בלבד); הכותרת של כלי שורת פקודה מציגה את המודל שלו.
+- Every hosted AI now has the bridge's WhatsApp MCP tools (Codex, Gemini CLI, Copilot, OpenCode); precise 400 detection; CLI tag shows its own model.
+
 ## 1.1.6 — 2026-11-14
 - תיקון Cloudflare Workers AI: תור שבו הבינה קראה לכלי נדחה (400) כי שרת התרגום שלח content ריק (null); עכשיו נשלחת מחרוזת ריקה (upstream.string_content).
 - הסבר שגיאות בעברית: מה קרה, איפה, למה, מה הגשר עושה ומה אפשר לעשות, עם שורה טכנית קצרה; שגיאת 400 מוכרת כתקלה בספק והגשר עובר לבינה הבאה.
