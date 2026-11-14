@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.5 — 2026-11-14
+- שינויי יקיר שהיו ממתינים בעץ: מודל ברירת המחדל של Gemini הוא gemini-flash-lite-latest, ותיקונים בלוח (מפה, מקרא, app.js).
+- כולל Cloudflare Workers AI וסולם /אוטו מהמהיר לאיטי (מ-1.1.3 ו-1.1.4).
+- Owner's pending changes (Gemini default model flash-lite, dashboard map/legend) on top of Cloudflare and the fast-to-slow /auto ladder.
+
 ## 1.1.4 — 2026-11-14
 - תיקון הבנייה של 1.1.3 (תג 1.1.3 נשאר בלי שחרור): בדיקות הסוכן לא תלויות עוד בשרת Ollama או בשרת התרגום שמאזינים במחשב; ב-CI אין אותם ולכן 4 בדיקות נכשלו.
 - כולל את כל מה שב-1.1.3: Cloudflare Workers AI מחובר (user/tokens/verify), וסולם /אוטו מהמהיר לאיטי: Claude, Cloudflare, Groq, Gemini, Codex, Copilot, OpenCode, Gemini CLI, OpenRouter חינמי, NVIDIA.
