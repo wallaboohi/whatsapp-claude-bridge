@@ -127,7 +127,7 @@ def main():
     if already_running():
         return
     port = server.start_free_port()
-    window = webview.create_window(f"ווצאפ ↔ Claude · לוח בקרה {server.VERSION}", f"http://127.0.0.1:{port}/",
+    window = webview.create_window(f"ווצאפ ↔ Claude · לוח בקרה {server.VERSION}{' · ' + server.BUILD if server.BUILD else ''}", f"http://127.0.0.1:{port}/",
                                    width=1360, height=900, min_size=(760, 600), text_select=True)
     listen_for_show(window)
     allow_mic_camera(window)

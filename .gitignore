@@ -42,3 +42,4 @@ agent/peers.json
 agent/config.json.bak-*
 agent/groups.json.bak-*
 agent/failover/
+dash/BUILD

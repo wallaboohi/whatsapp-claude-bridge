@@ -26,6 +26,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 PKG = getattr(sys, "_MEIPASS", None) and os.path.join(sys._MEIPASS, "dash") or os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(PKG, "static")
 VERSION = open(os.path.join(PKG, "VERSION")).read().strip()
+try:  # a local, not-yet-released build says which commit it was built from (dash/BUILD, written by the build; the version number itself stays 1.1.x)
+    BUILD = open(os.path.join(PKG, "BUILD")).read().strip()
+except OSError:
+    BUILD = ""
 SETTINGS = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "WhatsAppDash", "settings.json")
 
 
@@ -988,7 +992,7 @@ def data(chat=None):
     hourly = rows(p["msg"], "SELECT substr(timestamp,12,2) h, count(*) n FROM messages WHERE substr(timestamp,1,19) > ? GROUP BY 1", (day0,))
     spent = rows(p["agent"], "SELECT coalesce(sum(cost),0) s FROM claude_runs WHERE substr(at,1,10) = ?", (today,))
     return {
-        "version": VERSION,
+        "version": VERSION, "build": BUILD,
         "tool_version": (open(os.path.join(ROOT, "VERSION")).read().strip() if os.path.exists(os.path.join(ROOT, "VERSION")) else "?"),
         "maintainer": bool(c.get("maintainer")),
         "now": dt.datetime.now().isoformat(timespec="seconds"),

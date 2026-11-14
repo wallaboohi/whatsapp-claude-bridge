@@ -489,7 +489,7 @@ $("mbUsage").onclick = () => { mbOpen = !mbOpen; $("mbDetail").hidden = !mbOpen;
 function render(d) {
   last = d;
   if (d.maintainer && !pubShown) { pubShown = true; $("pubBox").hidden = false; gitRefresh(); }
-  $("verChip").textContent = "v" + d.version; $("verChip").title = L(`לוח בקרה ${d.version} · כלי ${d.tool_version || "?"}`, `Dashboard ${d.version} · tool ${d.tool_version || "?"}`);
+  $("verChip").textContent = "v" + d.version + (d.build ? " · " + d.build : ""); $("verChip").title = L(`לוח בקרה ${d.version} · כלי ${d.tool_version || "?"}`, `Dashboard ${d.version} · tool ${d.tool_version || "?"}`);
   $("toolVer").textContent = d.tool_version || "—";
   $("updated").textContent = L("עודכן ", "Updated ") + new Date().toLocaleTimeString(LOCALE(), { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   const b = d.bridge || {}, p = d.policy || {}, a = d.agent || {};
