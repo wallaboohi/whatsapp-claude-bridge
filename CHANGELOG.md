@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.4 — 2026-11-14
+- תיקון הבנייה של 1.1.3 (תג 1.1.3 נשאר בלי שחרור): בדיקות הסוכן לא תלויות עוד בשרת Ollama או בשרת התרגום שמאזינים במחשב; ב-CI אין אותם ולכן 4 בדיקות נכשלו.
+- כולל את כל מה שב-1.1.3: Cloudflare Workers AI מחובר (user/tokens/verify), וסולם /אוטו מהמהיר לאיטי: Claude, Cloudflare, Groq, Gemini, Codex, Copilot, OpenCode, Gemini CLI, OpenRouter חינמי, NVIDIA.
+- Fixes the 1.1.3 CI build (tag 1.1.3 stays unreleased): agent tests no longer need a local Ollama or translation server; includes Cloudflare Workers AI and the fast-to-slow /auto ladder.
+
 ## 1.1.3 — 2026-11-14
 - Cloudflare Workers AI מחובר: טוקן ב-secrets/cloudflare.key ומזהה חשבון ב-secrets/cloudflare.account; בדיקת חיבור דרך user/tokens/verify (בלי צריכת מכסה).
 - סולם /אוטו מהמהיר לאיטי: Claude, Cloudflare, Groq, Gemini, Codex, Copilot, OpenCode, Gemini CLI, OpenRouter חינמי, NVIDIA. בעיה שתוקנה: בלפטופ, כשמכסת Claude נגמרה, שאלה פשוטה חיכתה מעל 20 דקות בגלל מעבר איטי בין ספקים.
