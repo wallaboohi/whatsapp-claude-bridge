@@ -131,7 +131,10 @@
   ],
   "ladder": [
    "claude",
+   "codex",
+   "copilot",
    "opencode",
+   "gemini_cli",
    "gemini",
    "groq",
    "nvidia",
@@ -203,5 +206,92 @@
   "cost": "חינם",
   "where": "remote",
   "how": "מנוע הקוד OpenCode שמותקן במחשב (האפליקציה כוללת opencode-cli.exe). מודלי opencode/*-free חינמיים בלי הרשמה (OpenCode Zen); גם ollama/* מקומי. התחברות לשירותים נוספים (למשל GitHub Copilot): opencode auth login. נבדק 14.11: קרא קובץ והחזיר תשובה תוך 4 שניות."
+ },
+ "gemini_cli": {
+  "label": "Gemini CLI · של גוגל (מותקן במחשב)",
+  "short": "Gemini CLI",
+  "kind": "cli",
+  "model": "gemini-flash-lite-latest",
+  "models": [
+   "gemini-flash-lite-latest",
+   "gemini-flash-latest",
+   "gemini-3-flash-preview",
+   "gemini-pro-latest"
+  ],
+  "cli": {
+   "bin": "gemini",
+   "args": [
+    "-y",
+    "--skip-trust",
+    "-o",
+    "json",
+    "-p",
+    "ענה על הבקשה שבקלט."
+   ],
+   "model_flag": "-m",
+   "prompt": "stdin",
+   "out": "json:response",
+   "key_env": {
+    "GEMINI_API_KEY": "gemini.key"
+   },
+   "login_file": "~/.gemini/oauth_creds.json"
+  },
+  "aliases": [
+   "gemini-cli",
+   "גמיני-סיאלאיי"
+  ],
+  "cost": "חינם",
+  "where": "remote",
+  "how": "Gemini CLI של גוגל (npm i -g @google/gemini-cli). בלי התחברות משתמש במפתח secrets/gemini.key (מכסה יומית קטנה); התחברות עם חשבון גוגל (הרצת gemini פעם אחת בחלון ובחירת Login with Google) נותנת מכסה נפרדת. נבדק 14.11: קרא קובץ וענה."
+ },
+ "copilot": {
+  "label": "GitHub Copilot CLI (מותקן, מחובר לחשבון GitHub)",
+  "short": "Copilot",
+  "kind": "cli",
+  "model": "",
+  "models": [],
+  "cli": {
+   "bin": "copilot",
+   "args": [
+    "--allow-all",
+    "-s",
+    "--no-color"
+   ],
+   "model_flag": "--model",
+   "prompt": "arg:-p",
+   "out": "text"
+  },
+  "aliases": [
+   "copilot",
+   "קופיילוט"
+  ],
+  "cost": "מנוי GitHub",
+  "where": "remote",
+  "how": "GitHub Copilot CLI (npm i -g @github/copilot), מחובר לחשבון GitHub של המחשב. כל ריצה צורכת קרדיטים של Copilot לפי התוכנית שלך. התחברות מחדש: copilot ואז /login בחלון. נבדק 14.11: קרא קובץ וענה (0.25 קרדיט)."
+ },
+ "codex": {
+  "label": "Codex CLI של OpenAI (מותקן, מחובר)",
+  "short": "Codex",
+  "kind": "cli",
+  "model": "",
+  "models": [],
+  "cli": {
+   "bin": "codex",
+   "args": [
+    "exec",
+    "--skip-git-repo-check",
+    "--dangerously-bypass-approvals-and-sandbox"
+   ],
+   "model_flag": "-m",
+   "prompt": "stdin:-",
+   "out": "file:-o"
+  },
+  "aliases": [
+   "codex",
+   "קודקס"
+  ],
+  "cost": "מנוי ChatGPT",
+  "where": "remote",
+  "how": "Codex CLI (npm i -g @openai/codex), מחובר לחשבון (~/.codex/auth.json). המכסה לפי החשבון. התחברות מחדש: codex login בחלון. נבדק 14.11: קרא קובץ וענה."
  }
 }

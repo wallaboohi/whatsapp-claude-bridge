@@ -143,3 +143,11 @@
 - **מעבר מהיר:** כתובת שלא עונה נכשלת מיד (בדיקת TCP, `reachable`), ו-Claude Code מקבל `CLAUDE_CODE_MAX_RETRIES=2` ו-`API_TIMEOUT_MS=180000` מול בינה מתארחת (`hosted_max_retries`, `hosted_timeout_ms`). מבחן הבינה השבורה ירד מ-7:13 ל-2:48 (השאר הוא זמן התשובה של NVIDIA).
 - **מצב וחיבור בממשק:** בשבב 🧠 ← "🔌 מצב וחיבור של כל בינה": לכל בינה ✅/⚪ ופירוט, "🔄 בדוק" (בדיקה טרייה), "🔑 הוסף/חדש מפתח" (נשמר ב-`secrets/`), ול-Claude "🔐 התחבר מחדש" (קישור ואז קוד). מצב Claude אמיתי: מחובר כ-, תוכנית, ומכסה שנגמרה עד שעה.
 - **תוקן בדרך:** `import time` מקומי בפעולות הלוח גרם לשגיאה בכל פעולה שקוראת `time` לפניו (גם "החלף בינה" הקיימת); ושכבת הסרגל העליון הייתה מתחת לכרטיסי השיחה, כך שחלון הבינות הוסתר.
+
+## 14. כלי שורת הפקודה של המחשב כמנועים: Gemini CLI, GitHub Copilot CLI, Codex (14.11.2026)
+- **הותקנו** (`npm i -g`, חבילות רשמיות שנבדקו ב-npm: `@google/gemini-cli` 0.68.0 של Google, `@github/copilot` 1.0.112 של GitHub, `@openai/codex` 0.169.0 של OpenAI).
+- **ספק מסוג `cli`** ב-`providers.json` (`_run_cli` ב-`agent.py`): הכלי רץ ב-`home` עם הכלים שלו, ההודעה עם הקשר השיחה נכנסת ב-stdin או כארגומנט, והתשובה נקראת מ-JSON, מקובץ או מטקסט. מגבלה, התחברות או חיבור שנכשלו → `ProviderDown` → הבינה הבאה עונה. מעטפות `.cmd` של npm מוחלפות בהרצת node ישירה (`npm_direct`), כי cmd.exe חותך ארגומנט בשורה הראשונה.
+- **מצב:** Copilot ו-Codex כבר מחוברים לחשבונות של יקיר (Copilot צורך קרדיטים, כ-0.25 לריצה). Gemini CLI עובד עם `secrets/gemini.key` (המכסה היומית של `gemini-3.8-flash` נגמרה, `gemini-flash-lite-latest` עובד); התחברות בחשבון גוגל נותנת מכסה נפרדת.
+- **נבדק בהרצה אמיתית דרך הגשר** (`LIVE_ENGINE=1 pytest agent/tests/test_engine_live.py -k agent_cli`): שלושתם קראו קובץ והחזירו את התוכן (Gemini CLI 7 שניות, Codex 9, Copilot 20).
+- **סולם `/אוטו` וגיבוי:** Claude ← Codex ← Copilot ← OpenCode ← Gemini CLI ← Gemini ← Groq ← NVIDIA ← OpenRouter, ובסוף Ollama המקומי.
+- **בלוח:** תיבת "בינה מארחת" ליד תיבת המודל, בפינת חלון השיחה, עם מזעור; ובשבב 🧠 מצב החיבור של כל כלי.

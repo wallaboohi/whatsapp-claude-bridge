@@ -94,3 +94,25 @@ def test_opencode_answers_a_conversation_with_tools(agent, monkeypatch, tmp_path
         assert mod.ai_tag().startswith("🧠 OpenCode")
     finally:
         mod._ctx.chat = None
+
+
+@pytest.mark.parametrize("prov", ["gemini_cli", "codex", "copilot"])
+def test_agent_cli_answers_a_conversation(agent, monkeypatch, tmp_path, prov):
+    """Owner 14.11: the agent CLIs installed on this PC answer a conversation through the bridge (real run, reads a file)."""
+    mod, _ = agent
+    monkeypatch.setattr(mod, "cli_ready", lambda p: bool(shutil.which((p.get("cli") or {}).get("bin") or "")))
+    if not mod.cli_ready(mod.providers()[prov]):
+        pytest.skip(prov + " is not installed")
+    monkeypatch.setattr(mod, "FAILOVER_FILE", str(tmp_path / "failover.json"))
+    os.makedirs(mod.HOME, exist_ok=True)
+    open(os.path.join(mod.HOME, "note.txt"), "w", encoding="utf-8").write("Fruit of the day: ZEBRA-4471\n")
+    mod.set_provider(prov, chat=mod.PRIMARY)
+    mod._ctx.chat = mod.PRIMARY
+    stages = []
+    try:
+        out = mod.claude("קרא את הקובץ note.txt שבתיקייה הנוכחית (" + mod.HOME + ") וכתוב מה כתוב בו.", session=False, timeout=300,
+                         chat=mod.PRIMARY, on_stage=lambda *a: stages.append(a))
+        assert out and "ZEBRA-4471" in out, out
+        assert mod._ctx.engine_used == "cli" and mod._ctx.provider_used == prov and stages
+    finally:
+        mod._ctx.chat = None

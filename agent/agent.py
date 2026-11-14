@@ -25,6 +25,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -917,6 +918,8 @@ def provider_ready(name):
         return limit_raw() is None
     if p.get("kind") == "opencode":
         return bool(opencode_bin())
+    if p.get("kind") == "cli":
+        return cli_ready(p)
     return bool(provider_key(p)) if p.get("key_file") else True
 
 
@@ -1042,6 +1045,10 @@ def provider_env(name=None, model=None):
     p = providers().get(name) or {}
     if p.get("kind") == "anthropic-key":
         return dict(os.environ, ANTHROPIC_API_KEY=provider_key(p)), model
+    if p.get("kind") == "cli":  # owner 14.11: an agent CLI (Gemini CLI, Copilot, Codex) brings its own model and sign-in
+        if not cli_ready(p):
+            raise ProviderDown(name, "unreachable", 30)
+        return dict(os.environ), model or p.get("model") or None
     if p.get("kind") == "opencode":  # owner 14.11: OpenCode runs its own models (free Zen ones, Ollama); its own engine
         if not opencode_bin():
             raise ProviderDown(name, "unreachable", 30)
@@ -1231,7 +1238,7 @@ def ai_tag(model=None):
     m = effective_model(model)
     kind, place = where_of(name, m)
     eng = getattr(_ctx, "engine_used", "claude")
-    extra = (f" · מנוע {(ENGINES.get(eng) or {}).get('short', eng)}" if eng != "claude" else "") + (f" · 🔁 {getattr(_ctx, 'failover_why', '') or 'מכסת Claude נגמרה'}, ולכן עונה {short}" if getattr(_ctx, "failover_used", False) else "")
+    extra = (f" · מנוע {(ENGINES.get(eng) or {}).get('short', eng)}" if eng not in ("claude", "cli", "opencode") else "") + (f" · 🔁 {getattr(_ctx, 'failover_why', '') or 'מכסת Claude נגמרה'}, ולכן עונה {short}" if getattr(_ctx, "failover_used", False) else "")
     return f"🧠 {short}" + (f" · {model_he(m)}" if m else "") + (f" · 🏠 מקומי, {place}" if kind == "local" else " · ☁️ מרוחק (ענן)") + extra + "\n"
 
 
@@ -2214,6 +2221,102 @@ def _opencode_event(ev, oc):
     return None
 
 
+def cli_ready(p):
+    """An agent CLI provider (Gemini CLI, Copilot CLI, Codex...) is installed, and has its key where it needs one."""
+    c = p.get("cli") or {}
+    if not shutil.which(c.get("bin") or ""):
+        return False
+    need = c.get("key_env") or {}
+    if need and not (c.get("login_file") and os.path.exists(os.path.expanduser(c["login_file"]))):
+        return all(provider_key({"key_file": f}) for f in need.values())
+    return True
+
+
+def npm_direct(exe):
+    """[node, script] for an npm .cmd shim on Windows: cmd.exe cuts an argument at its first line break (Copilot got only the first line, 14.11)."""
+    if not exe.lower().endswith((".cmd", ".bat")):
+        return [exe]
+    try:
+        m = re.search(r'"%dp0%\\([^"]+\.(?:js|mjs|cjs))"', open(exe, encoding="utf-8", errors="replace").read())
+        node = shutil.which("node")
+        if m and node:
+            js = os.path.join(os.path.dirname(exe), m.group(1))
+            if os.path.isfile(js):
+                return [node, js]
+    except OSError:
+        pass
+    return [exe]
+
+
+def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
+    """Owner 14.11: any agent CLI installed on this computer answers a conversation (providers.json kind "cli"): Gemini CLI, GitHub Copilot
+    CLI, Codex. It runs in HOME with its own tools; the prompt goes on stdin or as an argument; the answer is read as JSON, a file or text.
+    Returns a Claude-shaped result; ProviderDown on a limit / sign-in / connection error so the next AI answers."""
+    c = p.get("cli") or {}
+    exe = shutil.which(c.get("bin") or "")
+    if not exe:
+        raise ProviderDown(name, "unreachable", 30)
+    full = ((append + "\n\n") if append else "") + conversation_pack(chat or PRIMARY) + "\n\n---\nההודעה הנוכחית (ענה עליה):\n" + prompt
+    cmd = npm_direct(exe) + list(c.get("args") or [])
+    m = model or p.get("model")
+    if m and c.get("model_flag"):
+        cmd += [c["model_flag"], m]
+    out_file = None
+    if (c.get("out") or "").startswith("file:"):
+        out_file = os.path.join(tempfile.gettempdir(), f"cli_{name}_{int(time.time() * 1000)}.txt")
+        cmd += [c["out"][5:], out_file]
+    stdin_text = None
+    how = c.get("prompt") or "stdin"
+    if how.startswith("arg:"):
+        cmd += [how[4:], full[:28000]]  # Windows command line limit
+    else:
+        stdin_text = full
+        if how.startswith("stdin:"):
+            cmd += [how[6:]]
+    env = dict(os.environ, NO_COLOR="1")
+    if not (c.get("login_file") and os.path.exists(os.path.expanduser(c["login_file"]))):
+        for var, f in (c.get("key_env") or {}).items():
+            k = provider_key({"key_file": f})
+            if k:
+                env[var] = k
+    if on_stage:
+        on_stage(f"🧠 {p.get('short') or name} חושב", "")
+    t0 = time.time()
+    try:
+        r = subprocess.run(cmd, cwd=HOME, input=stdin_text, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=timeout or None, env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"{name} did not finish in time")
+    text, err = "", (r.stderr or "") + ("\n" + r.stdout if r.returncode else "")
+    o = c.get("out") or "text"
+    if o.startswith("json:"):
+        raw = r.stdout or ""
+        try:
+            d = json.loads(raw[raw.find("{"):]) if "{" in raw else {}
+        except ValueError:
+            d = {}
+        text = str(d.get(o[5:]) or "").strip()
+        if d.get("error"):
+            err += "\n" + json.dumps(d["error"], ensure_ascii=False)
+    elif out_file:
+        try:
+            text = open(out_file, encoding="utf-8", errors="replace").read().strip()
+            os.remove(out_file)
+        except OSError:
+            text = ""
+    else:
+        text = (r.stdout or "").strip()
+    if not text:
+        bad = classify_down(err) or (("rate", 15) if re.search(r"429|quota|exhausted|rate.?limit", err, re.I) else None)             or (("key", 120) if re.search(r"login|log in|sign.?in|auth|401|403|credential", err, re.I) else None)
+        if bad:
+            raise ProviderDown(name, bad[0], bad[1])
+        raise RuntimeError(f"{name} returned no answer: {err.strip()[-200:]}")
+    with adb() as db:
+        db.execute("INSERT INTO claude_runs (at, session, cost, input_tokens, output_tokens, seconds, ok, model, cum, chat) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                   (dt.datetime.now().isoformat(), None, 0, 0, 0, time.time() - t0, 1, m or name, 0, chat))
+    return {"type": "result", "result": text, "is_error": False, "session_id": None, "usage": {}, "total_cost_usd": 0}
+
+
 def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat=None, tools=None, max_budget=None, stoppable=None, fork=False):
     """One headless Claude Code run; the prompt goes in on stdin (no command-line length limit, no cmd.exe quoting).
     tools="" = a restricted run: no tools and no MCP servers at all (for classifying other people's text)."""
@@ -2230,6 +2333,10 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
     penv, pmodel = provider_env()  # owner 13.11: another provider behind the same engine (same tools and permissions)
     if (providers().get(getattr(_ctx, "provider_used", None)) or {}).get("kind") == "opencode" and not guest and tools != "":
         eng = _ctx.engine_used = "opencode"
+    _pc = providers().get(getattr(_ctx, "provider_used", None)) or {}
+    if _pc.get("kind") == "cli" and not guest and tools != "":  # owner 14.11: an agent CLI of this computer is the engine and the AI
+        _ctx.engine_used = "cli"
+        return _run_cli(_ctx.provider_used, _pc, prompt, pmodel or model if penv is not None else None, append, chat, on_stage, timeout)
     if eng == "qwen" and penv is None:  # Qwen Code cannot use the Claude subscription: it needs a provider with an OpenAI endpoint
         alt = failover_target()
         if not alt:

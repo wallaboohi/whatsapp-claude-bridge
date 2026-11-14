@@ -34,6 +34,7 @@ def agent(tmp_path, monkeypatch):
         monkeypatch.setattr(mod, name, str(tmp_path / fname))
     mod.adb().close()
     monkeypatch.setattr(mod, "opencode_bin", lambda: None)  # tests never depend on whether OpenCode is installed on this PC
+    monkeypatch.setattr(mod, "cli_ready", lambda p: False)  # nor on the agent CLIs (Gemini CLI, Copilot, Codex)
     return mod, db
 
 

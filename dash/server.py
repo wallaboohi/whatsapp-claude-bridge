@@ -673,6 +673,17 @@ def provider_check(name):
             return {"ok": False, "detail": "לא מחובר: לחץ \"התחבר מחדש\"", "models": models, "login": True}
         return {"ok": not capped, "detail": f"מחובר · {acc.get('email') or ''}" + (f" · {acc['plan']}" if acc.get("plan") else "")
                 + (f" · ⏸️ המכסה נגמרה עד {lim[11:16]}" if capped else ""), "models": models, "login": True}
+    if p.get("kind") == "cli":  # owner 14.11: an agent CLI of this computer (Gemini CLI, Copilot, Codex): installed + signed in, no request spent
+        c = p.get("cli") or {}
+        exe = shutil.which(c.get("bin") or "")
+        if not exe:
+            return {"ok": False, "detail": f"{c.get('bin')} לא מותקן במחשב הזה", "models": list(p.get("models") or [])}
+        login = {"copilot": "~/.copilot", "codex": "~/.codex/auth.json", "gemini": "~/.gemini/oauth_creds.json"}.get(c.get("bin"), "")
+        signed = bool(login) and os.path.exists(os.path.expanduser(login))
+        keyed = all(_provider_key({"key_file": f}) for f in (c.get("key_env") or {}).values()) if c.get("key_env") else False
+        if not signed and not keyed:
+            return {"ok": False, "detail": f"מותקן, לא מחובר: הרץ {c.get('bin')} בחלון והתחבר", "models": list(p.get("models") or [])}
+        return {"ok": True, "detail": "מותקן · " + ("מחובר לחשבון" if signed else "עובד עם המפתח השמור"), "models": list(p.get("models") or [])}
     if p.get("kind") == "opencode":  # the OpenCode program on this computer and its models (free Zen + Ollama); no request is spent
         exe = cfg().get("opencode_path") or shutil.which("opencode") or os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "ai.opencode.desktop", "resources", "opencode-cli.exe")
         if not exe or not os.path.isfile(exe):
