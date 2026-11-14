@@ -2094,3 +2094,17 @@ def test_watchdog_heals_a_bridge_whose_api_is_down(agent, monkeypatch):
     mod.heal_bridge("ה-API לא ענה 3 דק'")
     names = [c[0] for c in calls]
     assert "taskkill" in names and "schtasks" in names and "push" in names  # no loop was running: the task is started too
+
+
+def test_failover_tag_names_the_model_that_answered(agent, monkeypatch, tmp_path):
+    """Owner 14.11: after a failover to Claude the first line said "Claude · bridge-qwen3-4b" (the chosen AI's model)."""
+    mod, _ = agent
+    monkeypatch.setattr(mod, "PROVIDER_FILE", str(tmp_path / "provider.json"))
+    mod.set_provider("ollama", "bridge-qwen3-4b:latest")
+    mod._ctx.provider_used, mod._ctx.failover_used = "claude", True
+    try:
+        assert mod.effective_model("opus") == "opus"
+        assert "bridge-qwen3-4b" not in mod.ai_tag("opus") and "אופוס" in mod.ai_tag("opus")
+    finally:
+        mod._ctx.provider_used, mod._ctx.failover_used = None, False
+    assert mod.effective_model("opus") == "bridge-qwen3-4b:latest"  # no failover: the chosen AI's model

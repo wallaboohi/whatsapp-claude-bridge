@@ -116,3 +116,29 @@ def test_agent_cli_answers_a_conversation(agent, monkeypatch, tmp_path, prov):
         assert mod._ctx.engine_used == "cli" and mod._ctx.provider_used == prov and stages
     finally:
         mod._ctx.chat = None
+
+
+def test_cloudflare_answers_a_long_conversation_without_claudes_session(agent, monkeypatch, tmp_path):
+    """Owner 14.11: Cloudflare got Claude's whole session (too long → 400). A hosted AI now starts fresh with the conversation pack,
+    and Claude's session id stays."""
+    mod, _ = agent
+    real_ready = mod.provider_ready
+    monkeypatch.setattr(mod, "FAILOVER_FILE", str(tmp_path / "failover.json"))
+    mod.set_failover(on_limit=False)
+    if not mod.provider_key(mod.providers()["cloudflare"]):
+        pytest.skip("no Cloudflare key")
+    os.makedirs(mod.HOME, exist_ok=True)
+    open(os.path.join(mod.HOME, "note.txt"), "w", encoding="utf-8").write("Fruit of the day: ZEBRA-4471\n")
+    mod.set_provider("cloudflare", "@cf/openai/gpt-oss-120b", chat=mod.PRIMARY)
+    mod.kv_set(mod.K("session_id", mod.PRIMARY), "11111111-2222-3333-4444-555555555555")  # Claude's (here: a fake) long session
+    logs = []
+    monkeypatch.setattr(mod, "log", lambda *a: logs.append(" ".join(map(str, a))[:300]))
+    mod._ctx.chat = mod.PRIMARY
+    try:
+        out = mod.claude("קרא את הקובץ note.txt שבתיקייה הנוכחית (" + mod.HOME + ") וכתוב מה כתוב בו.", session=True, timeout=300,
+                         chat=mod.PRIMARY, on_stage=lambda *a: None)
+        assert out and "ZEBRA-4471" in out, (out, logs[-12:])
+        assert mod._ctx.provider_used == "cloudflare"
+        assert mod.kv_get(mod.K("session_id", mod.PRIMARY)) == "11111111-2222-3333-4444-555555555555"
+    finally:
+        mod._ctx.chat = None

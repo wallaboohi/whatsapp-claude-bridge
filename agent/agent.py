@@ -1234,8 +1234,9 @@ def switch_provider(name, model=None):
 def effective_model(model):
     """The model that really answers: the provider's own when the bridge is not on Claude (the picked Claude model is not used then)."""
     name, pm = active_provider()
-    if name == "auto":
-        name, pm = getattr(_ctx, "provider_used", None) or auto_pick() or "claude", None
+    used = getattr(_ctx, "provider_used", None)
+    if name == "auto" or (getattr(_ctx, "failover_used", False) and used):  # owner 14.11: after a failover, the model of the AI that answered
+        name, pm = used or auto_pick() or "claude", None                       # (the tag showed "Claude · bridge-qwen3-4b")
     if name == "claude":
         return model
     return pm or (providers().get(name) or {}).get("model") or model
@@ -2405,6 +2406,8 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
             raise RuntimeError("אין ספק זמין למנוע Qwen Code")
         _ctx.force_provider = alt[1]
         penv, pmodel = provider_env()
+    if penv is not None and resume:  # owner 14.11: a hosted AI never gets Claude's whole session: it was too long for Cloudflare
+        resume = None                # ("Prompt is too long" → 400); it gets the conversation pack instead (below)
     if penv is not None:  # owner 14.11: nothing English reaches the owner
         append = ((append or "") + "\n\n" + HEBREW_RULE).strip()
         prompt = prompt + HEBREW_TAIL
@@ -2682,9 +2685,10 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
     except Exception as e:
         log("claude failed", e)
         return None
-    if getattr(_ctx, "failover_used", False) or getattr(_ctx, "engine_used", "claude") != "claude":
+    if getattr(_ctx, "failover_used", False) or getattr(_ctx, "engine_used", "claude") != "claude" or (getattr(_ctx, "provider_used", None) or "claude") != "claude":
         kv_set(K("gap", chat), "1")  # Claude's own session missed this exchange: its next run gets the conversation as context
-    if session and res.get("session_id") and getattr(_ctx, "engine_used", "claude") == "claude" and not getattr(_ctx, "failover_used", False):
+    if session and res.get("session_id") and getattr(_ctx, "engine_used", "claude") == "claude" and not getattr(_ctx, "failover_used", False) \
+            and (getattr(_ctx, "provider_used", None) or "claude") == "claude":  # a hosted AI's fresh session never replaces Claude's
         if res["session_id"] != kv_get(K("session_id", chat)):
             kv_set(K("session_started", chat), dt.datetime.now().isoformat())
             kv_set(K("session_runs", chat), "0")
