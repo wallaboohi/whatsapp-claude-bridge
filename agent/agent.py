@@ -930,7 +930,7 @@ def down_why_he(e):
     if isinstance(e, AuthError):
         return "המפתח או החיבור נדחו"
     why = str(getattr(e, "why", "") or "")
-    return {"billing": "אין יתרה", "rate": "נגמרה המכסה או עומס", "key": "המפתח נדחה", "unreachable": "אין חיבור"}.get(why, why or "תקלה")
+    return {"billing": "אין יתרה", "rate": "נגמרה המכסה או עומס", "key": "המפתח נדחה", "unreachable": "אין חיבור", "error": "לא החזיר תשובה"}.get(why, why or "תקלה")
 
 
 def local_last_resort(tried=()):
@@ -958,6 +958,16 @@ def _run_auto(*a, **k):
             except (ProviderDown, LimitHit, AuthError) as e:
                 if not _failover_step(e, tried):
                     raise
+            except RuntimeError as e:  # owner 14.11: a hosted AI / engine that returns nothing (crash, empty answer) is a failed provider too
+                used = getattr(_ctx, "provider_used", None)
+                if not used or used == "claude" and not getattr(_ctx, "force_provider", None):
+                    raise
+                log("provider gave no answer:", used, str(e)[:200])
+                eng = getattr(_ctx, "engine_used", "claude")
+                if not _failover_step(ProviderDown(used, "error", 15), tried):
+                    raise
+                if eng != "claude":  # the other engine itself may be what broke (07:35 14.11, Qwen Code): go on with Claude Code + the translator
+                    _ctx.force_engine = "claude"
     finally:
         _ctx.force_provider = _ctx.force_engine = None
 

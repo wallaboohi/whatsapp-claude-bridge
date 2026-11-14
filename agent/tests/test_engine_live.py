@@ -42,3 +42,29 @@ def test_a_hosted_ai_reads_the_bridge_through_the_whatsapp_tools(agent, monkeypa
     out = mod.claude("Use the whatsapp tool get_status and reply with only the bridge version number it reports.", session=False, timeout=300,
                      chat=mod.PRIMARY, on_stage=lambda *a: None)
     assert out and "1.1" in out, out  # the connection itself gave the tool: the live bridge reports 1.1.x
+
+
+def test_a_broken_chosen_ai_is_replaced_and_the_answer_says_why(agent, monkeypatch, tmp_path):
+    """Owner 14.11: a conversation whose chosen AI does not work still gets an answer, from the next ready one, with the reason."""
+    mod, _ = agent
+    monkeypatch.setattr(mod, "ENGINE_FILE", str(tmp_path / "engine.json"))
+    monkeypatch.setattr(mod, "FAILOVER_FILE", str(tmp_path / "failover.json"))
+    monkeypatch.setattr(mod, "PROVIDER_FILE", str(tmp_path / "provider.json"))
+    real = mod.providers()
+    broken = {"label": "Broken", "short": "Broken", "kind": "anthropic", "base_url": "http://127.0.0.1:9", "token": "x", "model": "none", "where": "remote"}
+    monkeypatch.setattr(mod, "providers", lambda: {**real, "broken": broken})
+    monkeypatch.setattr(mod, "auto_pick", lambda skip=(): "nvidia" if "broken" in skip else "broken")
+    mod.CFG.setdefault("language", "he")
+    os.makedirs(mod.HOME, exist_ok=True)
+    open(os.path.join(mod.HOME, "note.txt"), "w", encoding="utf-8").write("The secret code is ZEBRA-4471\n")
+    mod.set_failover(on_limit=True, engine="qwen")
+    mod.set_provider("broken", chat=mod.PRIMARY)
+    mod._ctx.chat = mod.PRIMARY
+    try:
+        out = mod.claude("Read the file note.txt in the current directory and reply with only the secret code it contains.", session=False, timeout=300,
+                         chat=mod.PRIMARY, on_stage=lambda *a: None)
+        assert out and "ZEBRA-4471" in out, out
+        assert mod._ctx.provider_used == "nvidia" and mod._ctx.failover_used is True
+        assert "🔁 Broken לא עבד" in mod.ai_tag("opus")
+    finally:
+        mod._ctx.chat = None
