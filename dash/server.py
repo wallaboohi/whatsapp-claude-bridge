@@ -14,6 +14,7 @@ import subprocess
 import sys
 import re
 import shutil
+import queue
 import socket
 import threading
 import time
@@ -529,7 +530,7 @@ def brief():
             "dash_version": VERSION, "bridge": {k: b.get(k) for k in ("connected", "version", "paused", "error", "connected_since", "health")},
             "agent_alive": alive, "heartbeat": hb, "listen_paused": kv("listen_paused") or "", "groups": gl, "tunnels": tunnels,
             "services": services(), "backup_dir": backup_dir_abs(), "cost": cost_summary(),
-            "host_label": c.get("host_label") or "", "account": c.get("claude_account") or "", "git": git_state()}
+            "host_label": c.get("host_label") or "", "account": c.get("claude_account") or "", "git": git_state(), "ai": ai_brief()}
 
 
 def _first_doc_line(path):
@@ -738,6 +739,86 @@ def legend():
             "provider_phone": "/ספק · /ספק <שם> [מודל]"}
 
 
+_CLAUDE_ACC = {"at": 0.0, "v": None}
+_LOGIN = {"proc": None, "url": "", "at": 0.0}
+LOGIN_URL_RE = re.compile(r"https://\S*oauth/authorize\S*")
+_NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def claude_account_info(max_age=60, force=False):
+    """Owner 14.11: who this computer's Claude Code is signed in as, from `claude auth status`: {logged_in, email, org, plan}."""
+    if not force and _CLAUDE_ACC["v"] and time.time() - _CLAUDE_ACC["at"] < max_age:
+        return _CLAUDE_ACC["v"]
+    v = {"logged_in": False, "email": "", "org": "", "plan": ""}
+    try:
+        r = subprocess.run([shutil.which("claude") or "claude", "auth", "status"], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=30, creationflags=_NOWIN)
+        d = json.loads(r.stdout or "{}")
+        v = {"logged_in": bool(d.get("loggedIn")), "email": d.get("email") or "", "org": d.get("orgName") or "", "plan": d.get("subscriptionType") or ""}
+    except Exception:
+        pass
+    _CLAUDE_ACC.update(at=time.time(), v=v)
+    return v
+
+
+def ai_brief():
+    """Which AI this computer's bridge runs on: the provider (local / remote), the model and the Claude account (for the map and /חשבונות)."""
+    pname, pmodel = active_provider()
+    p = _providers().get(pname) or {}
+    return {"provider": pname, "short": p.get("short") or p.get("label") or pname, "model": pmodel or p.get("model") or "",
+            "where": "local" if (p.get("where") == "local" or p.get("hosts")) else "remote", "claude": claude_account_info()}
+
+
+def claude_login_start():
+    """Start `claude auth login` on this computer and return its sign-in link (kept 15 minutes); the browser then shows a code to paste back."""
+    p = _LOGIN["proc"]
+    if p and p.poll() is None and time.time() - _LOGIN["at"] < 900 and _LOGIN["url"]:
+        return {"url": _LOGIN["url"]}
+    if p and p.poll() is None:
+        p.kill()
+    _LOGIN.update(proc=None, url="", at=0.0)
+    try:
+        p = subprocess.Popen([shutil.which("claude") or "claude", "auth", "login"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             text=True, encoding="utf-8", errors="replace", creationflags=_NOWIN)
+    except Exception as e:
+        return {"error": f"לא הצלחתי להפעיל את ההתחברות: {e}"}
+    found = queue.Queue()
+
+    def pump():
+        for line in p.stdout:
+            m = LOGIN_URL_RE.search(line)
+            if m:
+                found.put(m.group(0))
+                return
+    threading.Thread(target=pump, daemon=True).start()
+    try:
+        url = found.get(timeout=25)
+    except queue.Empty:
+        p.kill()
+        return {"error": "לא התקבל קישור התחברות"}
+    _LOGIN.update(proc=p, url=url, at=time.time())
+    return {"url": url}
+
+
+def claude_login_code(code):
+    """The code the browser showed: hand it to the waiting `claude auth login`; the answer is the account now signed in."""
+    code = (code or "").strip()
+    p = _LOGIN["proc"]
+    if not re.match(r"^\S{10,}$", code):
+        return {"error": "הקוד נראה לא תקין"}
+    if not p or p.poll() is not None:
+        return {"error": "אין התחברות פתוחה: לחץ שוב על 'החלף חשבון'"}
+    try:
+        p.stdin.write(code + "\n")
+        p.stdin.flush()
+        p.wait(timeout=40)
+    except Exception as e:
+        return {"error": f"ההתחברות לא הושלמה: {e}"}
+    _LOGIN["proc"] = None
+    info = claude_account_info(force=True)
+    return {"ok": info["logged_in"], "account": info} if info["logged_in"] else {"error": "הקוד לא התקבל. נסה שוב."}
+
+
 def ai_map():
     """Owner 14.11: the map's AI lane: who thinks now, which models run on the owner's own computers (and on which) and which in the cloud,
     the OpenAI translator and the cost ladder of /אוטו."""
@@ -778,7 +859,7 @@ def system_map():
                          "self": who == "self", "online": bool(b), "bridge": bool((b.get("bridge") or {}).get("connected")),
                          "bridge_version": (b.get("bridge") or {}).get("version") or "", "agent": bool(b.get("agent_alive")),
                          "dash_version": b.get("dash_version") or "", "git": ((b.get("git") or {}).get("head") or "")[:7],
-                         "dirty": (b.get("git") or {}).get("dirty") or 0, "account": b.get("account") or "",
+                         "dirty": (b.get("git") or {}).get("dirty") or 0, "account": b.get("account") or "", "ai": b.get("ai") or {},
                          "conversations": [{"jid": g["jid"], "name": g["name"], "purpose": g.get("purpose", "")}
                                            for g in (b.get("groups") or [])]})
     tools = [{"name": os.path.basename(f), "what": TOOL_HE.get(os.path.basename(f)) or _first_doc_line(f)}
@@ -1949,6 +2030,12 @@ def action(a):
             os.makedirs(os.path.join(ROOT, "secrets"), exist_ok=True)
             open(os.path.join(ROOT, "secrets", name + ".key"), "w", encoding="utf-8").write(key)
         return {"ok": True, "id": name, "check": provider_check(name)}
+    if kind == "claude_account":
+        return claude_account_info(force=True)
+    if kind == "claude_login_start":  # map: sign this computer in with another Claude account (link, then the code)
+        return claude_login_start()
+    if kind == "claude_login_code":
+        return claude_login_code(a.get("code"))
     if kind == "provider_check":
         return provider_check(a.get("provider") or "")
     if kind == "model":

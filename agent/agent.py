@@ -1249,6 +1249,27 @@ def slow_reply(chat, word):
     return "🛑 בוטל. לא התחלתי."
 
 
+def accounts_text():
+    """Owner 14.11: who runs on which Claude account and which AI, on every computer (the two PCs use different accounts)."""
+    name, pm = active_provider()
+    p = providers().get(name) or {}
+    kind, _ = where_of(name, pm or p.get("model"))
+    lines = ["*🔑 חשבונות ובינות בכל מחשב*", "",
+             f"🖥️ *{CFG.get('host_label') or socket.gethostname()}* (זה): 🔑 {claude_account() or 'לא ידוע'} · 🧠 {'🏠' if kind == 'local' else '☁️'} {p.get('short') or name} · {model_he(pm or p.get('model') or '')}"]
+    for pr in CFG.get("peers") or []:
+        nm = pr.get("name") or peer_alias(pr) or "?"
+        b = peer_fetch(pr, timeout=10)
+        if not b:
+            lines.append(f"💻 *{nm}*: לא זמין")
+            continue
+        ai = b.get("ai") or {}
+        c = ai.get("claude") or {}
+        acct = (c["email"] + (f" ({c.get('plan')}" + (f", {c.get('org')}" if c.get("org") else "") + ")" if c.get("plan") else "")) if c.get("email") else "לא ידוע (המחשב עוד לא עודכן)"
+        lines.append(f"💻 *{b.get('host_label') or b.get('machine') or nm}*: 🔑 {acct} · 🧠 {'🏠' if ai.get('where') == 'local' else '☁️'} {ai.get('short', '—')} · {ai.get('model', '')}")
+    lines += ["", "להחלפה: במפת המערכת בלוח (🗺️), בכל מחשב: 'החלף ספק' ו'החלף חשבון Claude'."]
+    return "\n".join(lines)
+
+
 def versioning_mod():
     import importlib.util as _u
     spec = _u.spec_from_file_location("versioning", os.path.join(ROOT, "tools", "versioning.py"))
@@ -2788,6 +2809,8 @@ def owner_command(text, chat=None):
     m = re.match(r"^/\s*(?:מודל|מודלים)\s+(?:חינמי|חינמיים)(?:\s+(\d+))?\s*$", text.strip())
     if m:  # owner 14.11: the numbered list of free models (local / remote, where it runs, how fast) and the pick by number
         return free_menu_pick(chat or PRIMARY, int(m.group(1))) if m.group(1) else free_menu_text(chat or PRIMARY)
+    if re.match(r"^/\s*(חשבונות|חשבון|accounts)\s*$", text.strip()):  # owner 14.11: who is on which account, on which AI
+        return accounts_text()
     m = re.match(r"^/\s*(גרסה|version)(?:\s+אשר\s+(\d+\.\d+\.\d+))?\s*$", text.strip())
     if m:  # owner 14.11: the version rules live in tools/versioning.py; an exception needs this approval
         v = versioning_mod()

@@ -33,6 +33,13 @@ svg.wires path { fill: none; stroke: var(--muted); stroke-opacity: .45; stroke-w
 .top { display: flex; align-items: center; gap: 10px; padding: 12px 20px 0; }
 .top h2 { margin: 0; font-size: 1.15rem; } .top .note { font-size: .8rem; color: var(--muted); }
 .legend { font-size: .75rem; color: var(--muted); padding: 0 20px; }
+.ai { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 6px; }
+.ai .row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; align-items: center; }
+.ai select, .ai input { font: inherit; font-size: .78rem; padding: 3px 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); color: var(--text); min-width: 0; }
+.ai button { font: inherit; font-size: .76rem; padding: 3px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); cursor: pointer; }
+.ai button:hover { border-color: var(--brand); }
+.ai .box { font-size: .76rem; margin-top: 6px; background: var(--surface-2); border-radius: 8px; padding: 6px 8px; }
+.ai .box a { color: var(--brand); word-break: break-all; }
 </style>
 </head>
 <body>
@@ -47,6 +54,7 @@ const PURPOSE = { "4m": "פרויקט", dev: "פיתוח הגשר", guest: "או
 const post = msg => { try { parent.postMessage(Object.assign({ from: "system-map" }, msg), "*"); } catch (e) {} };
 
 async function draw() {
+  $("map").innerHTML = '<svg class="wires" id="wires"></svg>';
   const m = await (await fetch("/system_map")).json();
   if (m.error) { $("map").insertAdjacentHTML("beforeend", `<p>${esc(m.error)}</p>`); return; }
   $("at").textContent = "עודכן " + new Date(m.at).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" });
@@ -54,6 +62,7 @@ async function draw() {
     <div class="node machine ${x.self ? "self" : ""}" data-wire="m${i}">
       <b>${x.self ? "🖥️" : "💻"} ${esc(x.name)}</b>${dot(x.online ? "ok" : "bad")}
       <div class="what">גשר ${dot(x.bridge ? "ok" : "bad")} ${esc(x.bridge_version)} · סוכן ${dot(x.agent ? "ok" : "bad")} · לוח ${esc(x.dash_version)} · קוד ${esc(x.git)}${x.dirty ? " ✎" : ""}</div>
+      ${aiBlock(x, i, m)}
       <div class="convs">${x.conversations.map(c => `
         <div class="conv" data-jid="${esc(c.jid)}" data-peer="${x.self ? "" : i - 1}"><span>💬 ${esc(c.name)} <small>· ${esc(PURPOSE[c.purpose] || c.purpose)}</small></span>
           <span class="r" data-rules="1">📜 כללים</span></div>`).join("")}</div>
@@ -77,10 +86,48 @@ async function draw() {
     <div class="lane"><h3>מידע ומאגרים</h3>${data}</div>
     <div class="lane"><h3>חיבורים</h3>${links}</div>
     <div class="lane"><h3>בינות <small>(מי חושב, ואיפה)</small></h3>${aiLane(m.ai)}</div>`);
+  wireAi();
   document.querySelectorAll(".conv").forEach(el => el.onclick = e => post({ open: el.dataset.jid, peer: el.dataset.peer, rules: !!e.target.closest("[data-rules]") }));
   document.querySelectorAll("[data-path]").forEach(el => el.onclick = () =>
     fetch("/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ do: "open_path", path: el.dataset.path }) }));
   wires(m);
+}
+
+const peerBase = i => i === 0 ? "" : "/peer/" + (i - 1);  // the first machine is this one
+async function machineAct(i, body) {
+  try { return await (await fetch(peerBase(i) + "/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json(); }
+  catch (e) { return { error: "המחשב לא מגיב" }; }
+}
+function aiBlock(x, i, m) {  // owner 14.11: which Claude account and which AI run on this computer, and the way to change them
+  const a = x.ai || {}, c = a.claude || {};
+  const acct = c.email ? `<b>${esc(c.email)}</b> · ${esc(c.plan || "")}${c.org ? " · " + esc(c.org) : ""}` : (c.logged_in === false ? "<b>לא מחובר</b>" : "לא ידוע (המחשב עוד לא עודכן)");
+  const opts = ((m.ai || {}).providers || []).map(p => `<option value="${esc(p.id)}" ${p.id === a.provider ? "selected" : ""}>${p.where === "local" ? "🏠" : "☁️"} ${esc(p.label)}</option>`).join("");
+  return `<div class="ai" data-m="${i}">
+    <div class="what">🔑 חשבון Claude: ${acct}${x.account ? ` <small>(${esc(x.account)})</small>` : ""}</div>
+    <div class="what">🧠 ספק פעיל: ${a.where === "local" ? "🏠" : "☁️"} <b>${esc(a.short || "—")}</b> · ${esc(a.model || "")}</div>
+    <div class="row"><select class="pick">${opts}</select><button class="swap">החלף ספק</button><button class="acct">החלף חשבון Claude</button></div>
+    <div class="box" hidden></div></div>`;
+}
+function wireAi() {
+  document.querySelectorAll(".ai").forEach(el => {
+    const i = +el.dataset.m, box = el.querySelector(".box"), say = h => { box.hidden = false; box.innerHTML = h; };
+    el.querySelector(".swap").onclick = async () => {
+      say("מחליף…"); const r = await machineAct(i, { do: "provider_set", provider: el.querySelector(".pick").value, model: "" });
+      if (r.error) say("⚠️ " + esc(r.error)); else { say("✅ הספק הוחלף, תקף מההודעה הבאה"); setTimeout(draw, 1500); }
+    };
+    el.querySelector(".acct").onclick = async () => {
+      if (!confirm("להתחבר ל-Claude עם חשבון אחר במחשב הזה? זה משפיע על כל השיחות שרצות עליו.")) return;
+      say("מכין קישור התחברות…"); const r = await machineAct(i, { do: "claude_login_start" });
+      if (r.error) return say("⚠️ " + esc(r.error));
+      say(`1. פתח את הקישור והתחבר עם החשבון הרצוי:<br><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.url.slice(0, 70))}…</a><br>2. הדבק כאן את הקוד שמוצג:
+        <div class="row"><input class="code" placeholder="הקוד" dir="ltr"><button class="send">אשר</button></div>`);
+      box.querySelector(".send").onclick = async () => {
+        const v = box.querySelector(".code").value; say("בודק…");
+        const r2 = await machineAct(i, { do: "claude_login_code", code: v });
+        if (r2.error) say("⚠️ " + esc(r2.error)); else { say(`✅ מחובר עכשיו: <b>${esc(r2.account.email)}</b> · ${esc(r2.account.plan)}`); setTimeout(draw, 2500); }
+      };
+    };
+  });
 }
 
 function aiLane(a) {  // owner 14.11: local (on the owner's own computers) vs remote (cloud): the place decides the response time
