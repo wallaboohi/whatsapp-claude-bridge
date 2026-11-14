@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.2 — 2026-11-14
+- Agent-engine layer (agent/engine.json, /מנוע): Claude Code or Qwen Code (free, works against any OpenAI-protocol provider, local Ollama included, no Claude account). Failover when Claude's usage quota is used up (agent/failover.json, /גיבוי): the run moves to the first ready free provider of the cost ladder on the chosen engine instead of stopping the bridge; the answer's tag says engine, provider, where it runs and the failover.
+- Hosted AIs get the conversation and the WhatsApp tools just by connecting: the hand-off note and the last messages go in front of the prompt of every session-less run, the WhatsApp MCP server (read-only tools) is wired into Qwen Code's settings, and Claude is told what it missed after a failover.
+- System map: a card per layer (channels, bridge, engine, model and provider, Claude account); a click opens a window to replace it per computer (engine + failover, provider + model, restart agent / bridge, Claude account sign-in); every computer shows its Claude account (/חשבונות). Local builds of the app show the commit next to the version.
+- Providers: free only plus Claude (Gemini, Groq, NVIDIA NIM, OpenRouter free models read live, a Cloudflare Workers AI preset); tools/oai_proxy.py translates Anthropic to OpenAI (tools, images, streaming, learns max_tokens limits); /מודל חינמי lists them numbered, local vs remote and how fast; /אוטו picks the cheapest ready one.
+- Owner rules built in: Hebrew-only answers (translated when a model answers in English), an approval before a run expected to cross 5 minutes, /תוך כדי side questions on a forked context, tools/versioning.py + /גרסה (one patch per release, no skips, no reuse of a tagged number).
+- CI builds the agent tests and the dashboard app on Python 3.14; the desktop and laptop agents run on 3.14.10.
+- Fixes: a model id never goes into a group name; NVIDIA default model; a unit test no longer writes a sample rule into the real agent/home; Qwen Code errors (413 / 410) move the failover on.
+
 ## 1.1.1 — 2026-11-13
 - Fix the release build: test_bridge_rules_in_every_conversation wrote into agent/home, which does not exist in a clean checkout (v1.1.0's GitHub build failed on it); the test now creates the folder. Same code as 1.1.0 otherwise: dashboard provider add / quick switch / DeepSeek preset, provider fallback for the nightly merge, Claude sign-out link, Ollama on both PCs
 
