@@ -544,7 +544,11 @@ function render(d) {
     const think = lv.done ? "" : `<li class="now thinking">🧠 ${L("חושב", "thinking")}<span class="dots"><i>.</i><i>.</i><i>.</i></span> <span class="live-clock since" data-from="${esc(lastAt || "")}"></span></li>`;
     return `<span class="st-head">${head}</span><ol>${steps.map((x, j) => `<li class="${j === steps.length - 1 && !lv.done ? "cur" : ""}" title="${esc(x.text)}">${hhmm(toDate(x.at))} · ${esc(x.text)}</li>`).join("")}${think}</ol>`;
   };
-  const statusHtml = (m, i) => (i !== lastStatus || !steps.length)
+  // owner 14.11: a run newer than the last WhatsApp status message (a dashboard-only run) is shown live at the bottom, even before its first
+  // step, instead of being glued to an old status bubble higher up (which looked frozen)
+  const ts19 = x => String(x || "").replace("T", " ").slice(0, 19);
+  const liveNew = !!lv && (lastStatus < 0 || ts19(lv.started) > ts19(conv[lastStatus].timestamp));
+  const statusHtml = (m, i) => (i !== lastStatus || !steps.length || liveNew)
     ? `<div class="bubble tool status old"><span class="st-head">${wa(m.content)}</span><span class="meta">${fmt(m.timestamp)}</span></div>`
     : `<div class="bubble tool status">${statusBody()}<span class="meta">${fmt(m.timestamp)}</span></div>`;
   // owner 14.11: every message of his says the agent got it and where it stands, so he never wonders if it was received
@@ -568,7 +572,7 @@ function render(d) {
   let html = conv.map((m, i) => isStatus(m) ? statusHtml(m, i) : bubbleHtml(m)).join("");
   // a PC-only run has no WhatsApp status message: show its steps as a bubble at the end of the conversation
   const lastMe = conv.filter(m => !m.tool).map(m => String(m.timestamp).slice(0, 19)).sort().pop() || "";
-  if (lv && steps.length && lastStatus < 0 && (!lv.done || String(lv.started).replace("T", " ") >= lastMe))
+  if (lv && liveNew && (!lv.done || ts19(lv.started) >= lastMe))
     html += `<div class="bubble tool status">${statusBody()}</div>`;
   chat.innerHTML = html || `<p class="empty">${L("עדיין אין שיחה", "No conversation yet")}</p>`;
   drawOutbox(false);
@@ -814,6 +818,7 @@ function renderOffline(d) {
   $("chat").innerHTML = `<p class="empty">${L("אין חיבור למחשב השני", "No connection to the other computer")}</p>`;
 }
 load(); setInterval(load, 10000);
+setInterval(() => { if (last && last.live && !last.live.done && !document.hidden) load(); }, 3000);  // while working: refresh every 3 s (owner 14.11)
 // live clocks in the working status bubble tick every second between data refreshes
 setInterval(() => document.querySelectorAll(".live-clock[data-from]").forEach(el => {
   const t = toDate(el.dataset.from); if (isNaN(t)) return;
