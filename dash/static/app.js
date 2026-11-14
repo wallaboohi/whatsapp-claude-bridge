@@ -881,6 +881,7 @@ document.addEventListener("contextmenu", e => {
   ctx.querySelector('[data-cmd="lastsent"]').hidden = !inBox || !stored("wa-dash-sent-last");
   ["copymsg", "copyfull", "quotereply", "quote"].forEach(c => ctx.querySelector(`[data-cmd="${c}"]`).hidden = !bubble);
   ctx.querySelector('[data-cmd="delmsg"]').hidden = !(bubble && bubble.dataset.wa);
+  ctx.querySelector('[data-cmd="editmine"]').hidden = !(bubble && bubble.classList.contains("me") && String(bubble.dataset.k || "").startsWith("L"));
   ctx.querySelector('[data-cmd="copy"]').disabled = !sel && !(inBox && say.selectionStart !== say.selectionEnd);
   ctx.hidden = false;
   const w = ctx.offsetWidth, h = ctx.offsetHeight;
@@ -895,6 +896,14 @@ ctx.addEventListener("click", async e => {
   const cmd = e.target.closest("button") && e.target.closest("button").dataset.cmd; if (!cmd) return;
   hideCtx();
   const boxSel = () => say.value.slice(say.selectionStart, say.selectionEnd);
+  if (cmd === "editmine" && ctxBubble) {  // owner 14.11: fixing a dictation / typing mistake teaches the dictionary (dictionary.md)
+    const now = msgText(ctxBubble), fixed = prompt(L("תקן את ההודעה (המילים שתתקן יילמדו למילון):", "Fix the message (the corrected words are learned):"), now);
+    if (fixed !== null && fixed.trim() && fixed.trim() !== now) {
+      const r = await act({ do: "edit_mine", id: ctxBubble.dataset.k, text: fixed.trim(), chat: curChat });
+      if (r && !r.error) toast(r.learned && r.learned.length ? L("נלמד: ", "Learned: ") + r.learned.join(" · ") : L("ההודעה תוקנה (לא נמצאה מילה ללמידה)", "Fixed (nothing to learn)"));
+      load();
+    }
+  }
   if (cmd === "copy") { await copyText(ctxTarget ? boxSel() : String(window.getSelection())); toast(L("הועתק", "Copied")); }
   if (cmd === "cut") { const t = boxSel(); await copyText(t); say.setRangeText("", say.selectionStart, say.selectionEnd, "start"); grow(); }
   if (cmd === "paste" || cmd === "pastetext") {

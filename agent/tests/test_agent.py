@@ -2015,3 +2015,14 @@ def test_opencode_events_become_an_answer_and_live_steps(agent):
     oc2 = {"text": [], "sid": "", "err": "", "tin": 0, "tout": 0}
     mod._opencode_event({"type": "error", "error": {"message": "Model unavailable"}}, oc2)
     assert oc2["err"] == "Model unavailable"
+
+
+def test_dictionary_learns_from_an_edit_once(tmp_path):
+    """Owner 14.11: an edit of his own message (WhatsApp or dashboard) teaches the word fix, once."""
+    import dictlearn
+    path = str(tmp_path / "dictionary.md")
+    pairs = dictlearn.edit_pairs("וודא סנכרון הגרבא העדכנית", "וודא סנכרון הגרסה העדכנית")
+    assert pairs == [("הגרבא", "הגרסה")]
+    assert dictlearn.add_pairs(path, pairs, "מעריכה בלוח")[0].startswith("הגרבא → הגרסה")
+    assert dictlearn.add_pairs(path, pairs) == []  # never twice
+    assert dictlearn.edit_pairs("שלום 123", "שלום 456") == []  # numbers are not words

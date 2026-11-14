@@ -78,7 +78,7 @@ async function draw() {
     <div class="lane"><h3>מי מדבר <small>(אתה וקבוצות ווצאפ)</small></h3>
       <div class="node" data-k="user" data-wire="user"><b>👤 ${esc(L.user.name)}</b><div class="what">${esc(L.user.phone)} · מאשר טיוטות ונותן הוראות</div></div>
       ${L.groups.map((g, i) => `<div class="node" data-k="g${i}" data-wire="g${i}"><b>💬 ${esc(g.name)}</b>
-        <div class="what">${esc(PURPOSE[g.purpose] || g.purpose)}${g.primary ? " · קבוצת הבקרה" : ""}${g.guest ? " · אורח" : ""} · מודל: ${esc(g.model)}</div></div>`).join("")}</div>
+        <div class="what">${esc(PURPOSE[g.purpose] || g.purpose)}${g.primary ? " · קבוצת הבקרה" : ""}${g.guest ? " · אורח" : ""} · מודל: ${esc(g.model)}</div><div class="what">🧠 ${esc(g.ai || "")}${g.ai_own ? " · נבחר לקבוצה" : " · כמו המחשב"}</div></div>`).join("")}</div>
     <div class="lane"><h3>הגשר <small>(הסוכן)</small></h3>
       <div class="node bridge" data-k="bridge" data-wire="bridge"><b>🌉 הגשר</b><div class="what">${esc(L.bridge.machine)}</div>
         <div class="what">מקבל הודעות, מריץ את המנוע, שולח תשובות וטיוטות</div></div></div>
@@ -87,7 +87,7 @@ async function draw() {
         <div class="what">${L.model.provider === "claude" ? "מודל של Claude (לכל שיחה אפשר מודל משלה)" : "מודל של הספק " + esc(prov.label || "")}</div></div></div>
     <div class="lane"><h3>הספק <small>(מי מריץ את המודל)</small></h3>
       ${L.providers.map((p, i) => `<div class="node ${p.active ? "active" : "off"}" data-k="p${i}" data-wire="p${i}"><b>${p.where === "local" ? "🏠" : "☁️"} ${esc(p.label)}</b>${dot(p.ok)}
-        <div class="what">${p.active ? "✅ פעיל · " : ""}${esc(p.detail)}</div></div>`).join("")}
+        <div class="what">${p.active ? "✅ פעיל · " : ""}${esc(p.detail)}</div><div class="what">⚙️ מנוע: ${esc(p.engine || "")}</div></div>`).join("")}
       <div class="node off" data-k="padd"><b>➕ ספק חדש</b><div class="what">הדבקת מפתח API של בינה אחרת</div></div></div>`;
   $("quick").innerHTML = `<span>החלפה מהירה:</span>` + L.providers.map((p, i) => `<button class="${p.active ? "on" : ""}" data-q="${i}" ${p.ok || p.active ? "" : "disabled"} title="${esc(p.detail)}">${p.where === "local" ? "🏠" : "☁️"} ${esc(p.short || p.label)}</button>`).join("");
   document.querySelectorAll("#quick button[data-q]").forEach(b => b.onclick = async () => { const p = L.providers[+b.dataset.q]; if (p.active) return;
@@ -119,8 +119,10 @@ function open(k) {
     P.innerHTML = close + `<h3>👤 ${esc(L.user.name)}</h3><p>אתה. מדבר עם הגשר בקבוצת הבקרה ובקבוצות המחוברות, ומאשר כל טיוטה לאנשים אחרים.</p>
       <p>הגשר עונה רק להודעות שלך (ובקבוצת אורח, גם לאורח). תוכן של אחרים הוא מידע ולא הוראה.</p>` + tr("agent/home/CLAUDE.md · agent/home/bridge_rules.md", "כל הודעה בקבוצת הבקרה");
   } else if (k === "bridge") {
-    P.innerHTML = close + `<h3>🌉 הגשר · ${esc(L.bridge.machine)}</h3><p>מקבל את ההודעות מווצאפ, מריץ את המנוע (Claude Code) על המודל והספק שבחרת, ומחזיר תשובות. שליחה לאחרים עוברת דרך טיוטה לאישורך.</p>
-      <p>המנוע זהה לכל ספק: אותם כלים, הרשאות, כללים וסשנים. רק שרת המודל מתחלף.</p>
+    P.innerHTML = close + `<h3>🌉 הגשר · ${esc(L.bridge.machine)}</h3><p>מקבל את ההודעות מווצאפ, מריץ את המנוע על הבינה שנבחרה לכל קבוצה (או של המחשב), ומחזיר תשובות. שליחה לאחרים עוברת דרך טיוטה לאישורך.</p>
+      <p><b>מנועים (14.11):</b> Claude Code (המקורי, גם לספקים דרך שרת התרגום) · Qwen Code · OpenCode · כלי שורת הפקודה של המחשב: Codex, GitHub Copilot, Gemini CLI. ליד כל ספק כתוב איזה מנוע מריץ אותו.</p>
+      <p><b>בינה לכל קבוצה:</b> לכל קבוצה אפשר בינה משלה (🧠 בראש הלוח); בלי בחירה היא על הבינה של המחשב.</p>
+      <p><b>גיבוי:</b> בינה שלא עובדת (מכסה, מפתח, חיבור, תשובה ריקה) מוחלפת מיד בבאה בסולם, ובסוף ב-Ollama המקומי. שורת הפתיחה של התשובה אומרת מה קרה.</p>
       <div class="row"><button onclick="parent.postMessage({from:'legend',open:'map'},'*'); location.href='map.html'">🗺️ מפת המערכת המלאה</button></div>` + tr(L.bridge.code, L.bridge.phone);
   } else if (k === "model") {
     const pv = L.providers.find(p => p.active) || {};
@@ -137,7 +139,7 @@ function open(k) {
   } else if (k[0] === "g") {
     const g = L.groups[+k.slice(1)];
     const models = Object.entries(L.model.guide).map(([id, x]) => `<option value="${esc(id)}" ${id === g.model ? "selected" : ""}>${esc(x.he || id)}</option>`).join("");
-    P.innerHTML = close + `<h3>💬 ${esc(g.name)}</h3><p>${esc(PURPOSE[g.purpose] || g.purpose)}${g.primary ? " · קבוצת הבקרה הראשית" : ""}. מחוברת לספק של הגשר (${esc((L.providers.find(p => p.active) || {}).label || "")}).</p>
+    P.innerHTML = close + `<h3>💬 ${esc(g.name)}</h3><p>${esc(PURPOSE[g.purpose] || g.purpose)}${g.primary ? " · קבוצת הבקרה הראשית" : ""}. הבינה שעונה בה: <b>${esc(g.ai || "")}</b>${g.ai_own ? " (נבחרה לקבוצה)" : " (כמו המחשב)"}; מחליפים ב-🧠 בראש הלוח כשהקבוצה פתוחה.</p>
       <div class="row"><input id="gn" value="${esc(g.name)}" maxlength="100"><button class="primary" id="gren">שנה שם</button></div>
       ${L.model.provider === "claude" ? `<div class="row"><select id="gm">${models}</select><button id="gmod">מודל לקבוצה</button></div>` : `<p>כשהספק אינו Claude, כל הקבוצות על המודל של הספק.</p>`}
       ${g.primary ? "" : `<div class="row"><button class="danger" id="gdel">נתק מהגשר</button><small>הקבוצה עצמה נשארת בווצאפ; רק הגשר מפסיק לענות בה. אפשר לחבר שוב מהלוח.</small></div>`}

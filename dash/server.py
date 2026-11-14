@@ -752,8 +752,11 @@ def legend(chat=None):
         if jid == LOCAL:
             continue
         mi = model_info(jid)
+        ga, _gm = active_provider(jid)
+        g_own = ((_provider_state().get("groups") or {}).get(jid) or {}).get("provider") in _providers()
         groups.append({"jid": jid, "name": v.get("name") or jid, "purpose": v.get("purpose") or "",
                        "primary": jid == primary(), "guest": bool(v.get("guest")), "model": mi["current"],
+                       "ai": (_providers().get(ga) or {}).get("short") or ga, "ai_own": g_own,
                        "code": "agent/groups.json · " + (v.get("instructions") or "groups/*.md"),
                        "phone": "בקבוצה עצמה: /מודל · /סשן · /עצור · /תור"})
     pname, pmodel = active_provider(chat if chat in convs else None)
@@ -767,7 +770,9 @@ def legend(chat=None):
                       "where": "local" if (p.get("where") == "local" or p.get("hosts")) else "remote",
                       "active": k == pname, "ok": chk["ok"], "detail": chk["detail"], "models": chk["models"][:60],
                       "model": (pmodel or p.get("model") or "") if k == pname else (p.get("model") or ""),
-                      "key_file": p.get("key_file") or "", "has_key": bool(_provider_key(p)) if p.get("key_file") else None})
+                      "key_file": p.get("key_file") or "", "has_key": bool(_provider_key(p)) if p.get("key_file") else None,
+                      # owner 14.11: which engine runs this AI (the legend shows every layer)
+                      "engine": {"cli": f"כלי שורת הפקודה {(p.get('cli') or {}).get('bin', '')}", "opencode": "OpenCode", "auto": "לפי הבינה שנבחרה"}.get(p.get("kind"), "Claude Code")})
     mi = model_info(primary())
     return {"at": dt.datetime.now().isoformat(timespec="seconds"),
             "user": {"name": c.get("owner_name") or "הבעלים", "phone": "קבוצת הבקרה בווצאפ"},
@@ -2216,6 +2221,27 @@ def action(a):
         hb = kv("heartbeat")
         alive = bool(hb) and (now - dt.datetime.fromisoformat(hb)).total_seconds() < 120
         return {"ok": True, "agent_alive": alive}
+    if kind == "edit_mine":  # owner 14.11: the owner fixes a message he typed in the dashboard; the word fixes go to the dictionary
+        lid = str(a.get("id") or "")
+        text = (a.get("text") or "").strip()
+        if not lid.startswith("L") or not lid[1:].isdigit() or not text:
+            return {"error": "bad message"}
+        con = agent_db_rw()
+        try:
+            row = con.execute("SELECT chat, at, text FROM local_messages WHERE id = ? AND role = 'me'", (int(lid[1:]),)).fetchone()
+            if not row:
+                return {"error": "not found"}
+            con.execute("UPDATE local_messages SET text = ? WHERE id = ?", (text, int(lid[1:])))
+            con.commit()
+        finally:
+            con.close()
+        sys.path.insert(0, os.path.join(ROOT, "agent"))
+        try:
+            import dictlearn
+        except ImportError:
+            return {"ok": True, "learned": []}
+        added = dictlearn.add_pairs(os.path.join(ROOT, "agent", "home", "dictionary.md"), dictlearn.edit_pairs(row[2], text), "מעריכה בלוח")
+        return {"ok": True, "learned": [x.split("  #")[0] for x in added]}
     if kind == "stop":  # the agent watches for this file and stops the running Claude
         open(os.path.join(ROOT, "agent", "stop.request"), "w").write(a.get("chat") or "")
         return {"ok": True}

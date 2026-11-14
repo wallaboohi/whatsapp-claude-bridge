@@ -5443,22 +5443,7 @@ def event_listener():
             time.sleep(5)
 
 
-EDIT_WORD = re.compile(r"^[֐-׿A-Za-z'\"׳״-]{2,}$")
-
-
-def edit_pairs(old, new):
-    """Word swaps between the text as first received and the owner's edit: [(wrong, right)] for 1-3 word
-    replacements of real words (no numbers, no punctuation-only, not the same word). Pure (testable)."""
-    import difflib
-    a, b = (old or "").split(), (new or "").split()
-    out = []
-    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes():
-        if op != "replace" or not (1 <= i2 - i1 <= 3 and 1 <= j2 - j1 <= 3):
-            continue
-        w, r = " ".join(a[i1:i2]).strip(".,!?:;()"), " ".join(b[j1:j2]).strip(".,!?:;()")
-        if w != r and all(EDIT_WORD.match(x) for x in (w + " " + r).split()) and len(w) <= 40 and len(r) <= 40:
-            out.append((w, r))
-    return out
+from dictlearn import EDIT_WORD, add_pairs, edit_pairs  # noqa: E402,F401  (owner 14.11: shared with the dashboard)
 
 
 def learn_from_edit(chat, mid, new_text):
@@ -5475,12 +5460,8 @@ def learn_from_edit(chat, mid, new_text):
     if not pairs:
         log("edit: nothing to learn", mid)
         return
-    path = os.path.join(HOME, "dictionary.md")
-    have = open(path, encoding="utf-8").read() if os.path.exists(path) else ""
-    added = [f"{w} → {r}  # {dt.date.today():%d.%m.%Y} (מעריכה)" for w, r in pairs if f"{w} → {r}" not in have]
+    added = add_pairs(os.path.join(HOME, "dictionary.md"), pairs)
     if added:
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(("" if have.endswith("\n") or not have else "\n") + "\n".join(added) + "\n")
         log("dictionary learned from an edit:", "; ".join(added))
 
 
