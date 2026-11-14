@@ -933,6 +933,11 @@ def down_why_he(e):
     return {"billing": "אין יתרה", "rate": "נגמרה המכסה או עומס", "key": "המפתח נדחה", "unreachable": "אין חיבור"}.get(why, why or "תקלה")
 
 
+def local_last_resort(tried=()):
+    """Owner 14.11: when no cloud AI is available the answer still comes, from the local models on his computers (Ollama, either PC)."""
+    return "ollama" if "ollama" not in tried and provider_ready("ollama") else None
+
+
 def auto_pick(skip=()):
     """The first provider of the cost ladder that is ready (None when none is)."""
     for n in auto_ladder():
@@ -977,7 +982,7 @@ def _failover_step(e, tried):
             return False
         tried.append(active)
         auto_cool(active, e.minutes if isinstance(e, ProviderDown) else 120 if isinstance(e, AuthError) else 15, getattr(e, "why", ""))
-        nxt = auto_pick(tried)
+        nxt = auto_pick(tried) or local_last_resort(tried)
         if not nxt:
             return False
         _ctx.force_provider = nxt
@@ -995,7 +1000,7 @@ def _failover_step(e, tried):
         auto_cool(name, 120, "sign-in")
     elif name != "claude":
         auto_cool(name, 15, "limit")
-    nxt = auto_pick(tried + ["claude"] if forced else tried)
+    nxt = auto_pick(tried + ["claude"] if forced else tried) or local_last_resort(tried)
     if not nxt:
         return False
     if forced:

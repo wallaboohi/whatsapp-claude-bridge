@@ -1976,3 +1976,20 @@ def test_provider_per_conversation_and_failover_explains(agent, monkeypatch, tmp
         mod._ctx.failover_used = False
     mod.set_provider("", chat="G1@g.us")
     assert mod.active_provider("G1@g.us")[0] == "gemini"
+
+
+def test_failover_ends_on_the_local_models(agent, monkeypatch, tmp_path):
+    """Owner 14.11: no cloud AI available -> the local Ollama answers (last resort), with the reason."""
+    mod, _ = agent
+    monkeypatch.setattr(mod, "PROVIDER_FILE", str(tmp_path / "provider.json"))
+    monkeypatch.setattr(mod, "FAILOVER_FILE", str(tmp_path / "failover.json"))
+    mod.set_provider("groq")
+    monkeypatch.setattr(mod, "auto_pick", lambda skip=(): None)
+    monkeypatch.setattr(mod, "provider_ready", lambda n: n == "ollama")
+    monkeypatch.setattr(mod, "engine_ready", lambda e: False)
+    try:
+        assert mod._failover_step(mod.ProviderDown("groq", "rate", 15), []) is True
+        assert mod._ctx.force_provider == "ollama" and "Groq" in mod._ctx.failover_why
+    finally:
+        mod._ctx.force_provider = mod._ctx.force_engine = None
+        mod._ctx.failover_used = False
