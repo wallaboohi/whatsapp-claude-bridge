@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.3 — 2026-11-14
+- Cloudflare Workers AI מחובר: טוקן ב-secrets/cloudflare.key ומזהה חשבון ב-secrets/cloudflare.account; בדיקת חיבור דרך user/tokens/verify (בלי צריכת מכסה).
+- סולם /אוטו מהמהיר לאיטי: Claude, Cloudflare, Groq, Gemini, Codex, Copilot, OpenCode, Gemini CLI, OpenRouter חינמי, NVIDIA. בעיה שתוקנה: בלפטופ, כשמכסת Claude נגמרה, שאלה פשוטה חיכתה מעל 20 דקות בגלל מעבר איטי בין ספקים.
+- Cloudflare Workers AI connected (token verify endpoint); /auto ladder now runs fast to slow so a capped Claude no longer stalls on slow providers first.
+
 ## 1.1.2 — 2026-11-14
 - Agent-engine layer (agent/engine.json, /מנוע): Claude Code or Qwen Code (free, works against any OpenAI-protocol provider, local Ollama included, no Claude account). Failover when Claude's usage quota is used up (agent/failover.json, /גיבוי): the run moves to the first ready free provider of the cost ladder on the chosen engine instead of stopping the bridge; the answer's tag says engine, provider, where it runs and the failover.
 - Hosted AIs get the conversation and the WhatsApp tools just by connecting: the hand-off note and the last messages go in front of the prompt of every session-less run, the WhatsApp MCP server (read-only tools) is wired into Qwen Code's settings, and Claude is told what it missed after a failover.
