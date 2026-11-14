@@ -2718,11 +2718,20 @@ def template_after_first_word(name):
     return " ".join([w for w in (name_prefix(), words[0], "{model}", *words[1:]) if w])
 
 
-def group_label(model):
-    """The word for {model} in a group name: Claude's model in Hebrew; for any other provider its short name (never a model id: owner 14.11)."""
+def group_label(model, chat=None):
+    """The word for {model} in a group name: Claude's model in Hebrew; for any other provider its short name (never a model id: owner 14.11).
+    Owner 14.11: the name shows who really talks — in auto or after a Claude-quota failover, the provider that answered last
+    (kv ai_label, written after every answer), so the minute sync does not flip the name back and forth."""
     name, _ = active_provider()
-    if name == "auto":
-        name = getattr(_ctx, "provider_used", None) or auto_pick() or "claude"
+    used = getattr(_ctx, "provider_used", None)
+    if used and (name == "auto" or getattr(_ctx, "failover_used", False)):
+        name = used
+    elif name in ("auto", "claude"):
+        last, _, sig = (kv_get(K("ai_label", chat)) or "").partition("\t") if chat else ("", "", "")
+        if last and sig == str(active_provider()):  # recorded under the provider that is still chosen (a switch clears it)
+            return last
+        if name == "auto":
+            name = auto_pick() or "claude"
     if name != "claude":
         return (providers().get(name) or {}).get("short") or name
     return model_he(model)
@@ -2749,7 +2758,7 @@ def sync_group_name(chat, model):
                     tpl = new
                     kv_set(K("name_tpl", chat), tpl)
                     kv_set(K("name_set_at", chat), "0")
-            want = tpl.replace("{model}", group_label(model))[:100]
+            want = tpl.replace("{model}", group_label(model, chat))[:100]
             if kv_get(K("name_set", chat)) == want:
                 return
             last = kv_get(K("name_set_at", chat))
@@ -3459,6 +3468,10 @@ def run_command(row):
         streak = 0 if answer else int(kv_get(K("fail_streak", chat)) or 0) + 1
         kv_set(K("fail_streak", chat), str(streak))
         kv_set(K("last_model", chat), model)
+        if answer:  # owner 14.11: the group name follows the AI that really answered (auto / failover), not only the one chosen
+            used = getattr(_ctx, "provider_used", None) or active_provider()[0]
+            kv_set(K("ai_label", chat), f"{group_label(model)}\t{active_provider()}" if used != "claude" else "")
+            threading.Thread(target=sync_group_name, args=(chat, model), daemon=True).start()
         rec = None if stopped else recommend(text, model, streak)
         kv_set(K("last_recommend", chat), json.dumps({"model": rec[0], "why": rec[1], "at": dt.datetime.now().isoformat(timespec="seconds")}, ensure_ascii=False) if rec else "")
         out = answer or T["failed"]

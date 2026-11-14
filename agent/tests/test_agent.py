@@ -1907,6 +1907,20 @@ def test_group_name_never_keeps_a_model_id_and_english_is_translated(agent, monk
     assert mod.template_after_first_word(grown) == f"{pre} Claude {{model}} פרטי"
     assert mod.name_core(f"{pre} Claude NVIDIA פרטי") == "Claude פרטי" and mod.name_core("גשר חינמי ויוי") == "גשר חינמי ויוי"  # one word alone stays
     monkeypatch.setattr(mod, "providers", real_providers)
+    # the name follows the AI that really answered: a failover answer is kept until the owner switches provider (14.11)
+    chat = "1203@g.us"
+    monkeypatch.setattr(mod, "active_provider", lambda: ("claude", None))
+    mod._ctx.provider_used, mod._ctx.failover_used = "nvidia", True
+    assert mod.group_label("opus") == "NVIDIA"
+    mod.kv_set(mod.K("ai_label", chat), f"NVIDIA	{mod.active_provider()}")
+    mod._ctx.provider_used, mod._ctx.failover_used = None, False
+    assert mod.group_label("opus", chat) == "NVIDIA"  # the minute sync keeps it, no flip back to אופוס
+    monkeypatch.setattr(mod, "active_provider", lambda: ("groq", None))
+    assert mod.group_label("opus", chat) == "Groq"
+    monkeypatch.setattr(mod, "active_provider", lambda: ("auto", None))
+    monkeypatch.setattr(mod, "auto_pick", lambda *a: "claude")
+    assert mod.group_label("sonnet", chat) == "סונט"  # recorded under another choice: ignored
+    mod.kv_set(mod.K("ai_label", chat), "")
     monkeypatch.setattr(mod, "active_provider", lambda: ("ollama", "bridge-qwen3-4b:latest"))
     assert mod.group_label("bridge-qwen3-4b:latest") == "Ollama"
     monkeypatch.setattr(mod, "active_provider", lambda: ("claude", None))
