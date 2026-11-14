@@ -507,7 +507,8 @@ p.help { margin: 4px 0 0; }
 
 /* the AI host chip in the front (owner 13.11) */
 .ai-chip { cursor: pointer; font: inherit; font-size: .78rem; font-weight: 700; color: var(--brand); background: color-mix(in srgb, var(--brand) 12%, transparent); border-color: transparent; }
-.ai-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; max-width: 340px; }
+.ai-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; max-width: 380px; }
+.ai-list .note { flex-basis: 100%; margin: 6px 0 0; }
 .ai-opt.on { background: var(--brand); color: #fff; border-color: var(--brand); }
 .ai-opt:disabled { opacity: .45; }
 

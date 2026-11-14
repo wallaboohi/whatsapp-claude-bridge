@@ -53,9 +53,9 @@ def test_a_run_that_crosses_five_minutes_waits_for_the_owners_ok(agent, monkeypa
         assert db.execute("SELECT status FROM commands WHERE id = ?", (cid,)).fetchone()[0] == "pending"
     assert mod.kv_get(f"approved:{cid}") == "1" and mod.owner_command("כן", mod.PRIMARY) is None  # one approval, one run
     # the estimate: Claude is quick, a local 4B model on the laptop is not
-    monkeypatch.setattr(mod, "active_provider", lambda: ("claude", None))
+    monkeypatch.setattr(mod, "active_provider", lambda *a: ("claude", None))
     assert mod.estimate_run_seconds("שלום", "sonnet")[0] < mod.slow_confirm_seconds()
-    monkeypatch.setattr(mod, "active_provider", lambda: ("ollama", "bridge-qwen3-4b:latest"))
+    monkeypatch.setattr(mod, "active_provider", lambda *a: ("ollama", "bridge-qwen3-4b:latest"))
     monkeypatch.setattr(mod, "provider_hosts", lambda p: [{"url": "http://127.0.0.1:1", "label": "לפטופ"}])
     assert mod.estimate_run_seconds("שלום", "sonnet")[0] >= mod.slow_confirm_seconds()
 

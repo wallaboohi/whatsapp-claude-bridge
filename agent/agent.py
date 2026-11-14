@@ -786,18 +786,39 @@ def providers():
     return out
 
 
-def active_provider():
-    """(name, model) of the bridge's provider now; ('claude', None) by default."""
+def _provider_state():
     try:
         o = json.load(open(PROVIDER_FILE, encoding="utf-8"))
     except (OSError, ValueError):
         o = {}
+    return o if isinstance(o, dict) else {}
+
+
+def active_provider(chat=None):
+    """(name, model) of the provider that answers in this conversation now; ('claude', None) by default.
+    Owner 14.11: a conversation may have its own provider (provider.json "groups", chosen in the dashboard); else the computer's."""
+    o = _provider_state()
+    chat = chat or getattr(_ctx, "chat", None)
+    g = (o.get("groups") or {}).get(chat) if chat else None
+    if g and g.get("provider") in providers():
+        return g["provider"], g.get("model") or None
     name = o.get("provider") if o.get("provider") in providers() else "claude"
     return name, o.get("model") or None
 
 
-def set_provider(name, model=None):
-    write_json(PROVIDER_FILE, {"provider": name, "model": model or "", "at": dt.datetime.now().isoformat(timespec="seconds")})
+def set_provider(name, model=None, chat=None):
+    """The computer's provider, or with chat one conversation's own (name "" = back to the computer's). Other entries are kept."""
+    o = _provider_state()
+    now = dt.datetime.now().isoformat(timespec="seconds")
+    if chat:
+        gs = o.setdefault("groups", {})
+        if name:
+            gs[chat] = {"provider": name, "model": model or "", "at": now}
+        else:
+            gs.pop(chat, None)
+    else:
+        o.update({"provider": name, "model": model or "", "at": now})
+    write_json(PROVIDER_FILE, o)
 
 
 def provider_key(p):
@@ -897,6 +918,21 @@ def provider_ready(name):
     return bool(provider_key(p)) if p.get("key_file") else True
 
 
+def prov_short(name):
+    p = providers().get(name) or {}
+    return p.get("short") or (p.get("label") or name).split("·")[0].strip()
+
+
+def down_why_he(e):
+    """A short Hebrew reason for a provider failure (shown in the answer's first line)."""
+    if isinstance(e, LimitHit):
+        return "נגמרה המכסה"
+    if isinstance(e, AuthError):
+        return "המפתח או החיבור נדחו"
+    why = str(getattr(e, "why", "") or "")
+    return {"billing": "אין יתרה", "rate": "נגמרה המכסה או עומס", "key": "המפתח נדחה", "unreachable": "אין חיבור"}.get(why, why or "תקלה")
+
+
 def auto_pick(skip=()):
     """The first provider of the cost ladder that is ready (None when none is)."""
     for n in auto_ladder():
@@ -932,11 +968,24 @@ def _failover_step(e, tried):
             if tgt:
                 _ctx.force_engine, _ctx.force_provider = tgt
                 _ctx.failover_used = True
+                _ctx.failover_why = "מכסת Claude נגמרה" if isinstance(e, LimitHit) else "החיבור ל-Claude נכשל"
                 log("claude is capped: failing over to", tgt)
                 return True
         return False
-    if active != "auto" and not forced:
-        return False
+    if active != "auto" and not forced:  # owner 14.11: a chosen hosted AI that fails is replaced by the next ready one, never silence
+        if not limit_failover_cfg()["on_limit"]:
+            return False
+        tried.append(active)
+        auto_cool(active, e.minutes if isinstance(e, ProviderDown) else 120 if isinstance(e, AuthError) else 15, getattr(e, "why", ""))
+        nxt = auto_pick(tried)
+        if not nxt:
+            return False
+        _ctx.force_provider = nxt
+        _ctx.force_engine = "claude" if nxt == "claude" else (limit_failover_cfg()["engine"] if engine_ready(limit_failover_cfg()["engine"]) else "claude")
+        _ctx.failover_used = True
+        _ctx.failover_why = f"{prov_short(active)} לא עבד ({down_why_he(e)})"
+        log("failover:", active, "->", nxt, _ctx.failover_why)
+        return True
     if not name or name in tried:
         return False
     tried.append(name)
@@ -951,6 +1000,7 @@ def _failover_step(e, tried):
         return False
     if forced:
         _ctx.force_provider = nxt
+        _ctx.failover_why = f"{prov_short(name)} לא עבד ({down_why_he(e)})"
     log("auto:", name, "->", nxt)
     return True
 
@@ -1146,7 +1196,7 @@ def ai_tag(model=None):
     m = effective_model(model)
     kind, place = where_of(name, m)
     eng = getattr(_ctx, "engine_used", "claude")
-    extra = (f" · מנוע {(ENGINES.get(eng) or {}).get('short', eng)}" if eng != "claude" else "") + (" · 🔁 מכסת Claude נגמרה" if getattr(_ctx, "failover_used", False) else "")
+    extra = (f" · מנוע {(ENGINES.get(eng) or {}).get('short', eng)}" if eng != "claude" else "") + (f" · 🔁 {getattr(_ctx, 'failover_why', '') or 'מכסת Claude נגמרה'}, ולכן עונה {short}" if getattr(_ctx, "failover_used", False) else "")
     return f"🧠 {short}" + (f" · {model_he(m)}" if m else "") + (f" · 🏠 מקומי, {place}" if kind == "local" else " · ☁️ מרוחק (ענן)") + extra + "\n"
 
 
@@ -2229,7 +2279,7 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
             raise LimitHit(set_limit(reset))
     if (not res or res.get("is_error")) and AUTH_RE.search(result + "\n" + errtext):
         raise AuthError((result or errtext).strip()[:200])
-    if (not res or res.get("is_error")) and (active_provider()[0] == "auto" or getattr(_ctx, "force_provider", None)) and getattr(_ctx, "provider_used", None):
+    if (not res or res.get("is_error")) and (active_provider()[0] != "claude" or getattr(_ctx, "force_provider", None)) and getattr(_ctx, "provider_used", None):
         bad = classify_down(result + "\n" + errtext)
         if bad:
             raise ProviderDown(_ctx.provider_used, bad[0], bad[1])
@@ -2330,13 +2380,14 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
     budget_check = refuse when this conversation's cap or the total daily cap is used up (plugin / background runs)."""
     chat = chat or PRIMARY
     interactive = on_stage is not None  # the owner's commands; plugin / background runs skip quietly instead
-    _ctx.failover_used = False
+    _ctx.failover_used, _ctx.failover_why = False, ""
     lu = limit_until()
     if lu:
         tgt = failover_target()
         if tgt:  # owner 14.11: the quota is used up, the bridge goes on with the failover target
             _ctx.force_engine, _ctx.force_provider = tgt
             _ctx.failover_used = True
+            _ctx.failover_why = "מכסת Claude נגמרה"
             lu = None
         elif interactive:
             raise LimitHit(lu)
@@ -2725,13 +2776,13 @@ def group_label(model, chat=None):
     """The word for {model} in a group name: Claude's model in Hebrew; for any other provider its short name (never a model id: owner 14.11).
     Owner 14.11: the name shows who really talks — in auto or after a Claude-quota failover, the provider that answered last
     (kv ai_label, written after every answer), so the minute sync does not flip the name back and forth."""
-    name, _ = active_provider()
+    name, _ = active_provider(chat)
     used = getattr(_ctx, "provider_used", None)
     if used and (name == "auto" or getattr(_ctx, "failover_used", False)):
         name = used
     elif name in ("auto", "claude"):
         last, _, sig = (kv_get(K("ai_label", chat)) or "").partition("\t") if chat else ("", "", "")
-        if last and sig == str(active_provider()):  # recorded under the provider that is still chosen (a switch clears it)
+        if last and sig == str(active_provider(chat)):  # recorded under the provider that is still chosen (a switch clears it)
             return last
         if name == "auto":
             name = auto_pick() or "claude"

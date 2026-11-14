@@ -589,11 +589,20 @@ def _provider_file():
     return os.path.join(ROOT, "agent", "provider.json")
 
 
-def active_provider():
+def _provider_state():
     try:
         o = json.load(open(_provider_file(), encoding="utf-8"))
     except Exception:
         o = {}
+    return o if isinstance(o, dict) else {}
+
+
+def active_provider(chat=None):
+    """(name, model) answering in this conversation: its own choice (provider.json "groups", owner 14.11) or the computer's."""
+    o = _provider_state()
+    g = (o.get("groups") or {}).get(chat) if chat else None
+    if g and g.get("provider") in _providers():
+        return g["provider"], g.get("model") or ""
     name = o.get("provider") if o.get("provider") in _providers() else "claude"
     return name, o.get("model") or ""
 
@@ -705,8 +714,8 @@ def provider_check_cached(name, ttl=120):
     return res
 
 
-def legend():
-    """Everything the legend page draws, from the live state."""
+def legend(chat=None):
+    """Everything the legend page draws, from the live state. With chat: "active" = that conversation's AI (its own or the computer's)."""
     c = cfg()
     convs = conversations()
     groups = []
@@ -718,7 +727,9 @@ def legend():
                        "primary": jid == primary(), "guest": bool(v.get("guest")), "model": mi["current"],
                        "code": "agent/groups.json · " + (v.get("instructions") or "groups/*.md"),
                        "phone": "בקבוצה עצמה: /מודל · /סשן · /עצור · /תור"})
-    pname, pmodel = active_provider()
+    pname, pmodel = active_provider(chat if chat in convs else None)
+    gname, gmodel = active_provider()
+    own = bool(chat) and pname is not None and ((_provider_state().get("groups") or {}).get(chat) or {}).get("provider") in _providers()
     provs = []
     for k, p in _providers().items():
         chk = provider_check_cached(k)
@@ -739,6 +750,8 @@ def legend():
                       "code": "agent/model_override.json · models.json" if pname == "claude" else "agent/provider.json",
                       "phone": "/מודל <שם> (או /עצור <שם> באמצע עבודה)" if pname == "claude" else f"/ספק {pname} <מודל>"},
             "providers": provs,
+            "scope": {"chat": chat or "", "chat_name": (convs.get(chat) or {}).get("name") or "", "own": own,
+                      "computer": {"provider": gname, "short": (_providers().get(gname) or {}).get("short") or gname}},
             "provider_code": "agent/providers.json · agent/provider.json · secrets/<key>",
             "provider_phone": "/ספק · /ספק <שם> [מודל]"}
 
@@ -2034,8 +2047,21 @@ def action(a):
         mdl = a.get("model") or ""
         if mdl and chk["models"] and mdl not in chk["models"]:
             return {"error": "המודל לא נמצא אצל הספק"}
-        dump_json({"provider": name, "model": mdl, "at": dt.datetime.now().isoformat(timespec="seconds")}, _provider_file())
+        o, now = _provider_state(), dt.datetime.now().isoformat(timespec="seconds")
+        chat = a.get("chat") or ""
+        if chat:  # owner 14.11: this conversation only
+            if chat not in conversations():
+                return {"error": "unknown conversation"}
+            o.setdefault("groups", {})[chat] = {"provider": name, "model": mdl, "at": now}
+        else:
+            o.update({"provider": name, "model": mdl, "at": now})
+        dump_json(o, _provider_file())
         _CHK[name] = (time.time(), chk)
+        return {"ok": True}
+    if kind == "provider_clear":  # a conversation goes back to the computer's AI
+        o = _provider_state()
+        (o.get("groups") or {}).pop(a.get("chat") or "", None)
+        dump_json(o, _provider_file())
         return {"ok": True}
     if kind == "provider_key":  # legend: save a provider's key into secrets/ (never shown back; empty = remove)
         p = _providers().get(a.get("provider") or "")
@@ -2530,7 +2556,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"error": str(e)}, 500)
         if path == "/legend":
             try:
-                return self.send_json(legend())
+                return self.send_json(legend((qs.get("chat") or [""])[0] or None))
             except Exception as e:
                 return self.send_json({"error": str(e)}, 500)
         if path == "/system_map":

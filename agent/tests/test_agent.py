@@ -1856,7 +1856,7 @@ def test_classify_down_texts(agent):
 def test_auto_run_moves_to_the_next_provider(agent, monkeypatch):
     mod, _ = agent
     _keys(mod, monkeypatch, "gemini", "groq")
-    monkeypatch.setattr(mod, "active_provider", lambda: ("auto", None))
+    monkeypatch.setattr(mod, "active_provider", lambda *a: ("auto", None))
     used = []
 
     def fake(*a, **k):
@@ -1885,7 +1885,7 @@ def test_auto_provider_env_and_check(agent, monkeypatch):
     monkeypatch.setattr(mod, "auto_pick", lambda skip=(): "groq")
     env, model = mod.provider_env("auto")
     assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8799/p/groq" and model == "openai/gpt-oss-120b" and mod._ctx.provider_used == "groq"
-    monkeypatch.setattr(mod, "active_provider", lambda: ("auto", None))
+    monkeypatch.setattr(mod, "active_provider", lambda *a: ("auto", None))
     assert mod.ai_tag("opus").startswith("🧠 Groq")  # the tag names the provider that really ran
     monkeypatch.undo()
     c = mod.provider_check("auto")
@@ -1921,21 +1921,21 @@ def test_group_name_never_keeps_a_model_id_and_english_is_translated(agent, monk
     monkeypatch.setattr(mod, "providers", real_providers)
     # the name follows the AI that really answered: a failover answer is kept until the owner switches provider (14.11)
     chat = "1203@g.us"
-    monkeypatch.setattr(mod, "active_provider", lambda: ("claude", None))
+    monkeypatch.setattr(mod, "active_provider", lambda *a: ("claude", None))
     mod._ctx.provider_used, mod._ctx.failover_used = "nvidia", True
     assert mod.group_label("opus") == "NVIDIA"
     mod.kv_set(mod.K("ai_label", chat), f"NVIDIA	{mod.active_provider()}")
     mod._ctx.provider_used, mod._ctx.failover_used = None, False
     assert mod.group_label("opus", chat) == "NVIDIA"  # the minute sync keeps it, no flip back to אופוס
-    monkeypatch.setattr(mod, "active_provider", lambda: ("groq", None))
+    monkeypatch.setattr(mod, "active_provider", lambda *a: ("groq", None))
     assert mod.group_label("opus", chat) == "Groq"
-    monkeypatch.setattr(mod, "active_provider", lambda: ("auto", None))
+    monkeypatch.setattr(mod, "active_provider", lambda *a: ("auto", None))
     monkeypatch.setattr(mod, "auto_pick", lambda *a: "claude")
     assert mod.group_label("sonnet", chat) == "סונט"  # recorded under another choice: ignored
     mod.kv_set(mod.K("ai_label", chat), "")
-    monkeypatch.setattr(mod, "active_provider", lambda: ("ollama", "bridge-qwen3-4b:latest"))
+    monkeypatch.setattr(mod, "active_provider", lambda *a: ("ollama", "bridge-qwen3-4b:latest"))
     assert mod.group_label("bridge-qwen3-4b:latest") == "Ollama"
-    monkeypatch.setattr(mod, "active_provider", lambda: ("claude", None))
+    monkeypatch.setattr(mod, "active_provider", lambda *a: ("claude", None))
     assert mod.group_label("opus") == "אופוס"
     # English answers: translated, or a Hebrew warning; Hebrew and short texts pass untouched
     assert mod.hebrew_share("שלום, זו תשובה בעברית עם כמה מילים ועוד קצת טקסט כדי לעבור את הסף של שלושים אותיות") == 1.0 or True
@@ -1945,3 +1945,34 @@ def test_group_name_never_keeps_a_model_id_and_english_is_translated(agent, monk
     assert "תורגם אוטומטית" in mod.ensure_hebrew(eng)
     monkeypatch.setattr(mod, "claude", lambda *a, **k: None)
     assert mod.ensure_hebrew(eng).startswith("⚠️ הבינה ענתה באנגלית") and eng in mod.ensure_hebrew(eng)
+
+
+def test_provider_per_conversation_and_failover_explains(agent, monkeypatch, tmp_path):
+    """Owner 14.11: each conversation can have its own hosted AI (dashboard); a chosen AI that fails is replaced by the next ready one,
+    and the answer's first line says what happened."""
+    mod, _ = agent
+    monkeypatch.setattr(mod, "PROVIDER_FILE", str(tmp_path / "provider.json"))
+    monkeypatch.setattr(mod, "FAILOVER_FILE", str(tmp_path / "failover.json"))
+    mod.set_provider("claude")
+    mod.set_provider("groq", chat="G1@g.us")
+    assert mod.active_provider("G1@g.us")[0] == "groq" and mod.active_provider("G2@g.us")[0] == "claude"
+    mod.set_provider("gemini")  # the computer's choice keeps the conversation's own
+    assert mod.active_provider("G1@g.us")[0] == "groq" and mod.active_provider()[0] == "gemini"
+    mod._ctx.chat = "G1@g.us"
+    try:
+        assert mod.active_provider()[0] == "groq"
+        monkeypatch.setattr(mod, "auto_pick", lambda skip=(): "nvidia" if "groq" in skip else "groq")
+        monkeypatch.setattr(mod, "engine_ready", lambda e: False)
+        mod._ctx.force_provider = mod._ctx.force_engine = None
+        mod._ctx.failover_used = False
+        assert mod._failover_step(mod.ProviderDown("groq", "rate", 15), []) is True
+        assert mod._ctx.force_provider == "nvidia" and mod._ctx.force_engine == "claude" and mod._ctx.failover_used
+        assert "Groq" in mod._ctx.failover_why and "מכסה" in mod._ctx.failover_why
+        mod._ctx.provider_used = "nvidia"
+        tag = mod.ai_tag("opus")
+        assert tag.startswith("🧠 NVIDIA") and "🔁 Groq לא עבד" in tag and "ולכן עונה NVIDIA" in tag
+    finally:
+        mod._ctx.chat = mod._ctx.force_provider = mod._ctx.force_engine = mod._ctx.provider_used = None
+        mod._ctx.failover_used = False
+    mod.set_provider("", chat="G1@g.us")
+    assert mod.active_provider("G1@g.us")[0] == "gemini"

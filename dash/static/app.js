@@ -74,15 +74,26 @@ document.addEventListener("click", e => { if (!e.target.closest(".pop-wrap")) { 
 
 // ---- the bridge's AI host in the front (owner 13.11): who answers now, one click to switch (the same data as the legend)
 async function loadAi() {
+  // owner 14.11: each conversation can have its own AI; the popup switches the open conversation, or the whole computer
   try {
-    const lg = await (await fetch(base() + "/legend")).json();
-    const cur = lg.providers.find(p => p.active) || {};
-    $("aiBadge").textContent = (cur.where === "local" ? "🏠 " : "☁️ ") + (cur.short || cur.label || "—") + (cur.id && cur.id !== "claude" && lg.model.current ? " · " + lg.model.current : "");
-    $("aiList").innerHTML = lg.providers.map((p, i) => `<button class="btn small ai-opt${p.active ? " on" : ""}" data-i="${i}" ${p.ok || p.active ? "" : "disabled"} title="${esc(p.detail)}">${p.active ? "✅ " : ""}${p.where === "local" ? "🏠 " : "☁️ "}${esc(p.short || p.label)}${p.cost ? " · " + esc(p.cost) : ""}</button>`).join("");
+    const chat = curChat || "", lg = await (await fetch(base() + "/legend?chat=" + encodeURIComponent(chat))).json();
+    const sc = lg.scope || {}, cur = lg.providers.find(p => p.active) || {};
+    $("aiBadge").textContent = (cur.where === "local" ? "🏠 " : "☁️ ") + (cur.short || cur.label || "—") + (cur.id && cur.id !== "claude" && lg.model.current && !sc.own ? " · " + lg.model.current : "") + (sc.own ? " · " + L("לשיחה", "chat") : "");
+    const opts = (scopeChat) => lg.providers.map((p, i) => {
+      const on = scopeChat ? (sc.own && p.active) : p.id === (sc.computer || {}).provider;
+      return `<button class="btn small ai-opt${on ? " on" : ""}" data-i="${i}" data-chat="${scopeChat ? 1 : 0}" ${p.ok || on ? "" : "disabled"} title="${esc(p.detail)}">${on ? "✅ " : ""}${p.where === "local" ? "🏠 " : "☁️ "}${esc(p.short || p.label)}${p.cost ? " · " + esc(p.cost) : ""}</button>`; }).join("");
+    $("aiList").innerHTML = (chat && chat !== "local" ? `<p class="note tight">🗨️ ${L("רק לשיחה", "This conversation only")}: <b>${esc(sc.chat_name || chat)}</b>${sc.own ? "" : " · " + L("כרגע כמו המחשב", "now as the computer")}</p>` + opts(true) +
+        (sc.own ? `<button class="btn small ai-clear">↩️ ${L("חזור לבינה של המחשב", "Back to the computer's AI")} (${esc((sc.computer || {}).short || "")})</button>` : "") : "") +
+      `<p class="note tight">💻 ${L("לכל השיחות במחשב הזה", "Every conversation on this computer")}:</p>` + opts(false) +
+      `<p class="note tight">🔁 ${L("גיבוי: כשבינה לא עובדת (מכסה, מפתח, תקלה) הבאה בתור עונה, והתשובה אומרת מה קרה.", "Failover: when an AI fails the next one answers and says what happened.")}</p>`;
     document.querySelectorAll("#aiList .ai-opt").forEach(b => b.onclick = async () => {
-      const p = lg.providers[+b.dataset.i]; if (p.active) return;
-      await act({ do: "provider_set", provider: p.id, model: p.model || "" }, L("הבינה הוחלפה ל-", "AI switched to ") + (p.short || p.label)); loadAi();
+      const p = lg.providers[+b.dataset.i], forChat = b.dataset.chat === "1";
+      if (b.classList.contains("on")) return;
+      await act({ do: "provider_set", provider: p.id, model: p.model || "", chat: forChat ? chat : "" },
+        (forChat ? L("בשיחה הזו עונה עכשיו ", "This conversation now answered by ") : L("בכל המחשב עונה עכשיו ", "The computer now answered by ")) + (p.short || p.label)); loadAi();
     });
+    const cl = document.querySelector("#aiList .ai-clear");
+    if (cl) cl.onclick = async () => { await act({ do: "provider_clear", chat }, L("השיחה חזרה לבינה של המחשב", "Back to the computer's AI")); loadAi(); };
   } catch (e) { $("aiBadge").textContent = "🧠 —"; }
 }
 $("aiBtn").onclick = e => { e.stopPropagation(); const o = $("aiPop").hidden; if (o) loadAi(); $("aiPop").hidden = !o; $("aiBtn").setAttribute("aria-expanded", o); };
@@ -675,7 +686,7 @@ addEventListener("message", async e => {
 });
 $("tabs").addEventListener("click", e => {
   const t = e.target.closest(".tab"); if (!t) return;
-  curChat = t.dataset.chat; curPeer = t.dataset.peer === "" ? null : +t.dataset.peer;
+  curChat = t.dataset.chat; curPeer = t.dataset.peer === "" ? null : +t.dataset.peer; setTimeout(loadAi, 300);
   try { localStorage.setItem("wa-dash-chat", curChat); localStorage.setItem("wa-dash-peer", curPeer === null ? "" : String(curPeer)); } catch (er) {}
   const c = $("chat"); c._init = false; c.innerHTML = ""; load();
 });
