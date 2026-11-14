@@ -24,7 +24,7 @@
 | **הגשר** | Go · `whatsapp-bridge/` (whatsmeow) | חשבון ווצאפ מקושר. שומר כל הודעה ב-SQLite, מוריד מדיה, חושף REST, אוכף מדיניות שליחה (טיוטות) | `run-bridge.cmd` (לולאה: עולה מחדש 10 שנ' אחרי יציאה), משימת Task Scheduler "WhatsApp bridge" בכניסה |
 | **הסוכן** | Python · `agent/agent.py` | מאזין לקבוצת הבקרה, מריץ Claude Code על כל הודעה, מתמלל קוליות, תזכורות, גיבוי, מארח את הלוח על 8770 | `run-agent.cmd` (לולאה, 15 שנ'), משימה "WhatsApp agent" |
 | **לוח הבקרה** | `dash/` — `server.py` (HTTP) + `static/` (HTML/JS/CSS) | מצב, שיחה, טיוטות, עלות, מודל, תצוגה, עדכונים/שחרור | בתוך הסוכן (http://127.0.0.1:8770) **וגם** כאפליקציה `WhatsAppDash.exe` (pywebview, פורט חופשי, קבצי static ארוזים בתוך ה-exe) |
-| **שרת MCP** | Python · `whatsapp-mcp-server/` | כלים ל-Claude Code אינטראקטיבי: חיפוש, קריאה, שליחה (דרך הגשר), תמלולים, סקרים, טיוטות | נטען ע"י תוסף Claude Code (`.claude-plugin/`, סקיל `skills/whatsapp`) |
+| **שרת MCP** | Python · `whatsapp-mcp-server/` | כלים ל-Claude Code ולבינות המתארחות: חיפוש, קריאה, שליחה (דרך הגשר), תמלולים, סקרים, טיוטות וקריאת/שינוי שם קבוצה | נטען ע"י תוסף Claude Code (`.claude-plugin/`, סקיל `skills/whatsapp`) |
 | **כלים** | `tools/` | `wa_send.py` (שליחה + יומן), `wa_admin.py` (קריאה לכל endpoint מקובץ UTF-8), `wa_remind.py` (תזכורות), `wa_push.py` (התראת פוש לטלפון), `ocr.ps1` (Tesseract עב+אנג / OCR ווינדוס), `selftest.py` (21 בדיקות חיות), `setup.py` (אשף התקנה), `update.py` (עדכון עם חזרה), `release.py` (שחרור), `migrate_lid.py` | ידני / ע"י Claude |
 
 ## 2. הגשר (Go)

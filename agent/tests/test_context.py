@@ -8,7 +8,9 @@ from test_agent import agent  # noqa: F401
 def _fake_messages(mod, monkeypatch, rows):
     db = sqlite3.connect(":memory:", check_same_thread=False)
     db.execute("CREATE TABLE messages (id TEXT, chat_jid TEXT, sender TEXT, content TEXT, timestamp TEXT, is_from_me INTEGER)")
+    db.execute("CREATE TABLE chats (jid TEXT, name TEXT)")
     db.executemany("INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?)", rows)
+    db.executemany("INSERT INTO chats VALUES (?, ?)", [(chat, "קבוצת בדיקה") for chat in {r[1] for r in rows if r[1].endswith("@g.us")}])
     monkeypatch.setattr(mod, "mdb", lambda: db)
 
 
@@ -21,6 +23,8 @@ def test_a_fresh_session_gets_the_conversation_and_the_way_to_read_more(agent, m
                                       ("3", "other@g.us", "x", "הודעה מקבוצה אחרת", "2026-11-14 08:02:00", 0)])
     pack = mod.conversation_pack(c)
     assert "סיכום: דיברנו על המנוע החלופי" in pack and "[08:01] הבעלים: מה המצב של הגשר?" in pack and "[08:01] הבינה: 🤖" in pack
+    identity = mod.group_prompt(c)
+    assert f'קבוצת בדיקה" (מזהה: {c}' in identity and "get_group_info" in identity and "set_group_name" in identity
     assert "הודעה מקבוצה אחרת" not in pack  # only this conversation
     assert "list_messages" in pack and "אל תשלח הודעות" in pack
     assert pack.index("מה המצב של הגשר?") < pack.index("הגשר תקין")  # oldest first
@@ -40,6 +44,7 @@ def test_qwen_settings_give_read_only_whatsapp_tools_and_keep_the_owners_own_key
     wa = cur["mcpServers"]["whatsapp"]
     assert wa["args"] == ["main.py"] and "send_message" not in wa["includeTools"] and "send_file" not in wa["includeTools"] and "react_to_message" not in wa["includeTools"]
     assert {"list_messages", "search_all", "get_message_context", "list_chats", "get_status"} <= set(wa["includeTools"])
+    assert "get_group_info" in wa["includeTools"] and "set_group_name" not in wa["includeTools"]
     assert cur["security"]["auth"]["selectedType"] == "openai" and cur["telemetry"]["enabled"] is False
     assert mod.ensure_qwen_settings() is False  # unchanged: nothing is rewritten
 

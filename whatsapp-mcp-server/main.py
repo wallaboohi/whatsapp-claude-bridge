@@ -262,6 +262,18 @@ def get_status() -> Dict[str, Any]:
 
 
 @mcp.tool()
+def get_group_info(chat_jid: str) -> Dict[str, Any]:
+    """קרא מ-WhatsApp את שם הקבוצה, התיאור ומספר החברים. בשיחה הנוכחית השתמש במזהה הקבוצה שמופיע בהקשר."""
+    return extras.group_info(chat_jid)
+
+
+@mcp.tool()
+def set_group_name(chat_jid: str, name: str) -> Dict[str, Any]:
+    """שנה את שם קבוצת WhatsApp. יש להשתמש רק בעקבות בקשה מפורשת של הבעלים; נדרשת הרשאת מנהל בקבוצה."""
+    return extras.set_group_name(chat_jid, name)
+
+
+@mcp.tool()
 def search_all(query: str, limit: int = 30) -> List[Dict[str, Any]]:
     """Search text in all messages AND in transcripts of voice notes, newest first."""
     return extras.search(query, limit)

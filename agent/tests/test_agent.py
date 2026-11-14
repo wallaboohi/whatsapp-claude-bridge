@@ -275,7 +275,7 @@ def test_group_prompt_carries_instructions(multi, tmp_path, monkeypatch):
     json.dump(raw, open(mod.GROUPS_FILE, "w", encoding="utf-8"))
     gp = mod.group_prompt(DEV)
     assert "הוראות פיתוח מיוחדות" in gp and "handoff-dev.md" in gp
-    assert mod.group_prompt(mod.PRIMARY) is None
+    assert "get_group_info" in mod.group_prompt(mod.PRIMARY)
     (tmp_path / "groups" / "main.md").write_text("- לענות קצר", encoding="utf-8")
     assert "לענות קצר" in mod.group_prompt(mod.PRIMARY), "the control group has its own rules file too"
 

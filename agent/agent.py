@@ -1558,16 +1558,27 @@ def group_prompt(chat):
     """Extra system prompt: the bridge-wide rules (bridge_rules.md; not for guests) and the conversation's base-rules file
     (rules_rel) for every conversation; non-primary ones also get their name/purpose and hand-off file name. None when
     there is nothing to add."""
-    common = "" if guest_cfg(chat) else bridge_rules_prompt()
+    guest = guest_cfg(chat)
+    common = "" if guest else bridge_rules_prompt()
+    identity = ""
+    if chat and chat != LOCAL and chat.endswith("@g.us") and not guest:
+        try:
+            with mdb() as db:
+                row = db.execute("SELECT name FROM chats WHERE jid = ?", (chat,)).fetchone()
+            name = (row[0] or "").strip() if row else ""
+        except sqlite3.Error:
+            name = ""
+        label = f' "{name}"' if name else ""
+        identity = f"הקבוצה הנוכחית{label} (מזהה: {chat}). לשם העדכני השתמש בכלי get_group_info; שינוי שם רק לבקשה מפורשת, בכלי set_group_name."
     if not chat or chat == PRIMARY:
         try:
             own = open(os.path.join(HOME, rules_rel(PRIMARY)), encoding="utf-8").read().strip()
         except OSError:
             own = ""
-        out = "\n\n".join(x for x in (common, f"כללי בסיס לשיחה הזו ({rules_rel(PRIMARY)}):\n{own}" if own else "") if x)
+        out = "\n\n".join(x for x in (common, identity, f"כללי בסיס לשיחה הזו ({rules_rel(PRIMARY)}):\n{own}" if own else "") if x)
         return out or None
     g = load_groups().get(chat) or {}
-    parts = ([common] if common else []) + [f"שיחה: {g.get('name', chat)} (מטרה: {g.get('purpose', '')}). זו שיחה נפרדת — לכל שיחה סשן, הוראות ומודל משלה."]
+    parts = ([common] if common else []) + ([identity] if identity else []) + [f"שיחה: {g.get('name', chat)} (מטרה: {g.get('purpose', '')}). זו שיחה נפרדת — לכל שיחה סשן, הוראות ומודל משלה."]
     try:
         parts.append(open(os.path.join(HOME, rules_rel(chat, g)), encoding="utf-8").read().strip())
     except OSError:
@@ -2182,6 +2193,7 @@ def engine_endpoint(name, model=None):
 
 
 WA_READ_TOOLS = ["list_messages", "list_chats", "get_chat", "get_direct_chat_by_contact", "get_contact_chats", "get_last_interaction", "get_message_context",
+                 "get_group_info",
                  "search_contacts", "search_all", "list_transcripts", "list_polls", "list_drafts", "get_status", "download_media"]
 
 

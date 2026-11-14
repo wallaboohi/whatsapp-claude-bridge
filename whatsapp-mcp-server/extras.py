@@ -32,6 +32,29 @@ def status() -> Dict[str, Any]:
         return {"error": str(e)}
 
 
+def group_info(chat_jid: str) -> Dict[str, Any]:
+    return _group_request("group_info", {"jid": chat_jid})
+
+
+def set_group_name(chat_jid: str, name: str) -> Dict[str, Any]:
+    chat_jid = chat_jid.strip()
+    name = name.strip()
+    if not chat_jid.endswith("@g.us") or not chat_jid[:-5]:
+        return {"success": False, "error": "נדרש מזהה של קבוצת WhatsApp"}
+    if not name or len(name) > 100:
+        return {"success": False, "error": "שם הקבוצה חייב להכיל 1–100 תווים"}
+    return _group_request("set_group", {"jid": chat_jid, "name": name})
+
+
+def _group_request(endpoint: str, payload: Dict[str, str]) -> Dict[str, Any]:
+    try:
+        response = requests.post(f"{WHATSAPP_API_BASE_URL}/{endpoint}", json=payload, headers=_auth(), timeout=40)
+        response.raise_for_status()
+        return response.json()
+    except (requests.RequestException, ValueError) as e:
+        return {"success": False, "error": str(e)}
+
+
 def transcripts(query: Optional[str], chat_jid: Optional[str], limit: int) -> List[Dict[str, Any]]:
     sql, args = "SELECT id, chat_jid, sender, ts, text FROM transcripts WHERE 1=1", []
     if query:
