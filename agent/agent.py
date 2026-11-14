@@ -1020,6 +1020,16 @@ def _failover_step(e, tried):
     return True
 
 
+def reachable(url, timeout=3):
+    """True when something listens at the URL's host:port (a TCP connect, no request: costs no free quota)."""
+    try:
+        u = urllib.parse.urlsplit(url)
+        socket.create_connection((u.hostname, u.port or (443 if u.scheme == "https" else 80)), timeout=timeout).close()
+        return True
+    except OSError:
+        return False
+
+
 def provider_env(name=None, model=None):
     """(env for the claude process or None = the normal sign-in, model to pass or None = the bridge's own choice)."""
     if name is None:
@@ -1033,10 +1043,14 @@ def provider_env(name=None, model=None):
     if p.get("kind") == "anthropic":
         m = model or p.get("model") or ""
         h = provider_host(p, m)
-        env = dict(os.environ, ANTHROPIC_BASE_URL=(h or {}).get("url") or p.get("base_url") or p["hosts"][0]["url"],
-                   ANTHROPIC_AUTH_TOKEN=p.get("token") or provider_key(p),
+        url = (h or {}).get("url") or p.get("base_url") or p["hosts"][0]["url"]
+        if not reachable(url):  # owner 14.11: a dead address fails at once (not after minutes of retries), so the next AI answers
+            raise ProviderDown(name, "unreachable", 5)
+        env = dict(os.environ, ANTHROPIC_BASE_URL=url, ANTHROPIC_AUTH_TOKEN=p.get("token") or provider_key(p),
                    ANTHROPIC_API_KEY="", ANTHROPIC_CUSTOM_MODEL_OPTION=m, ANTHROPIC_CUSTOM_MODEL_OPTION_NAME=m,
-                   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1")
+                   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1",
+                   # owner 14.11: few retries on a hosted AI (Claude Code's default is many, minutes on a dead or capped one): failover is faster
+                   CLAUDE_CODE_MAX_RETRIES=str(CFG.get("hosted_max_retries", 2)), API_TIMEOUT_MS=str(CFG.get("hosted_timeout_ms", 180000)))
         return env, m or None
     return None, None
 
