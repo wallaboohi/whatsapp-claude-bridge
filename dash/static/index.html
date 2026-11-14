@@ -27,6 +27,21 @@
       </div>
     </div>
     <div class="pop-wrap">
+      <button class="schip ai-chip" id="mdlBtn" aria-expanded="false" aria-controls="mdlPop" title="המודל שעונה בשיחה הפתוחה; הרשימה משתנה לפי הבינה המארחת" data-en-title="The model answering in the open chat; the list follows the hosted AI"><span id="mdlBadge">🎛️ …</span> ▾</button>
+      <div class="pop" id="mdlPop" hidden>
+          <section class="model-box in-pop" id="modelBox" aria-labelledby="h-model">
+            <div class="card-head"><h2 id="h-model" data-en="Claude model">מודל Claude</h2></div>
+            <p class="note tight" id="modelNow"></p>
+            <select id="pmSel" class="btn sel" hidden aria-label="מודל של הבינה המארחת" data-en-aria="Model of the hosted AI"></select>
+            <select id="modelSel" class="btn sel" aria-label="בחירת מודל" data-en-aria="Choose model"></select>
+            <p class="note tight" id="modelTip"></p>
+            <p class="note tight" id="modelRec"></p>
+            <button type="button" class="mb-usage" id="mbUsage" title="פירוט שבועי וחודשי" data-en-title="Weekly and monthly detail"></button>
+            <div class="mb-detail" id="mbDetail" hidden></div>
+          </section>
+      </div>
+    </div>
+    <div class="pop-wrap">
       <button class="schip mode-chip" id="modeBtn" aria-expanded="false" aria-controls="modePop"><span id="modeBadge">📝 טיוטות בלבד</span> ▾</button>
       <div class="pop" id="modePop" hidden>
         <p class="note tight" id="modeNote"></p>
@@ -108,23 +123,6 @@
           <span class="meter" role="progressbar" aria-label="ניצול תקציב יומי" id="kCostMeter"><span id="kCostBar"></span></span></button>
       </div>
       <div class="chat-row">
-        <div class="chat-top">
-          <section class="model-box" id="modelBox" aria-labelledby="h-model">
-            <div class="card-head"><h2 id="h-model" data-en="Claude model">מודל Claude</h2><button class="mb-toggle" id="mbToggle" aria-expanded="true" title="מזער / הרחב" data-en-title="Minimize / expand">▾ מזער</button></div>
-            <p class="note tight" id="modelNow"></p>
-            <select id="modelSel" class="btn sel" aria-label="בחירת מודל" data-en-aria="Choose model"></select>
-            <p class="note tight" id="modelTip"></p>
-            <p class="note tight" id="modelRec"></p>
-            <button type="button" class="mb-usage" id="mbUsage" title="פירוט שבועי וחודשי" data-en-title="Weekly and monthly detail"></button>
-            <div class="mb-detail" id="mbDetail" hidden></div>
-          </section>
-          <section class="model-box ai-box" id="aiBox" aria-labelledby="h-ai">
-            <div class="card-head"><h2 id="h-ai" data-en="Hosted AI">בינה מארחת</h2><button class="mb-toggle" id="aiToggle" aria-expanded="true" title="מזער / הרחב" data-en-title="Minimize / expand">▾ מזער</button></div>
-            <p class="note tight" id="aiNow"></p>
-            <select id="aiSel" class="btn sel" aria-label="בחירת בינה לשיחה הזו" data-en-aria="Choose the AI for this conversation"></select>
-            <p class="note tight" id="aiState"></p>
-          </section>
-        </div>
         <div class="chat" id="chat" tabindex="0" aria-live="polite"></div>
       </div>
       <div class="queue-line" id="queueLine" hidden></div>
@@ -155,11 +153,11 @@
         <div class="card-head"><h2 id="h-status" data-en="Status">מצב</h2><span class="chip warn-chip" id="pausedChip" hidden>⏸</span></div>
         <button type="button" class="mach-line" id="machLine" title="פתח הגדרות ← מחשבים וחיבור" data-en-title="Open Settings → Computers"></button>
         <p class="note tight" id="ctlMeta"></p>
-        <div class="row tight">
-          <button class="btn small" data-detail="queue" data-en="📋 Queue">📋 תור פקודות</button>
-          <button class="btn small" data-detail="sched" data-en="🕗 Scheduled">🕗 מתוזמן</button>
-          <button class="btn small" data-settings="general" data-en="⚙️ Settings">⚙️ הגדרות</button>
-          <button class="btn small" data-settings="auto" data-en="🤖 Automations">🤖 אוטומציות</button>
+        <div class="status-btns">
+          <button class="btn sbtn" data-detail="queue"><span class="si">📋</span><span data-en="Queue">תור פקודות</span></button>
+          <button class="btn sbtn" data-detail="sched"><span class="si">🕗</span><span data-en="Scheduled">מתוזמן</span></button>
+          <button class="btn sbtn" data-settings="general"><span class="si">⚙️</span><span data-en="Settings">הגדרות</span></button>
+          <button class="btn sbtn" data-settings="auto"><span class="si">🤖</span><span data-en="Automations">אוטומציות</span></button>
         </div>
       </section>
     </aside>

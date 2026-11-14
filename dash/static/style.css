@@ -537,3 +537,13 @@ p.help { margin: 4px 0 0; }
 /* owner 14.11: queue line above the input; stop button inside the live bubble */
 .queue-line { font-size: .82rem; font-weight: 600; color: var(--brand); padding: 4px 8px; }
 .bubble.status .live-stop { margin-inline-start: 6px; padding: 1px 8px; font-size: .75rem; }
+
+/* owner 14.11 13:58: the model box in the 🎛️ popup of the top bar; bigger, clearer buttons in the status card */
+#mdlPop { width: 320px; }
+.model-box.in-pop { width: auto; border: 0; padding: 0; position: relative; }
+.status-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.status-btns .sbtn { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 10px 6px; font-weight: 700; font-size: .9rem;
+  border: 2px solid var(--line); border-radius: 12px; background: var(--surface-2); box-shadow: var(--shadow); }
+.status-btns .sbtn .si { font-size: 1.6rem; line-height: 1; }
+.status-btns .sbtn:hover { border-color: var(--brand); transform: translateY(-1px); }
+.mach-line { font-size: 1rem; }

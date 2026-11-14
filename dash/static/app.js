@@ -70,7 +70,7 @@ translateStatic();
 
 // ---- header popover (sending to others) ----
 $("modeBtn").onclick = e => { e.stopPropagation(); const o = $("modePop").hidden; $("modePop").hidden = !o; $("modeBtn").setAttribute("aria-expanded", o); };
-document.addEventListener("click", e => { if (!e.target.closest(".pop-wrap")) { $("modePop").hidden = true; $("modeBtn").setAttribute("aria-expanded", false); $("aiPop").hidden = true; $("aiBtn").setAttribute("aria-expanded", false); } });
+document.addEventListener("click", e => { if (!e.target.closest(".pop-wrap")) { $("modePop").hidden = true; $("modeBtn").setAttribute("aria-expanded", false); $("aiPop").hidden = true; $("aiBtn").setAttribute("aria-expanded", false); $("mdlPop").hidden = true; $("mdlBtn").setAttribute("aria-expanded", false); } });
 
 // ---- the bridge's AI host in the front (owner 13.11): who answers now, one click to switch (the same data as the legend)
 async function loadAi() {
@@ -78,9 +78,10 @@ async function loadAi() {
   try {
     const chat = curChat || "", lg = await (await fetch(base() + "/legend?chat=" + encodeURIComponent(chat))).json();
     const sc = lg.scope || {}, cur = lg.providers.find(p => p.active) || {};
-    try { drawAiBox(lg, chat); } catch (e) {}
+    try { drawModelPop(lg, chat); } catch (e) {}
     $("aiBadge").textContent = (cur.where === "local" ? "🏠 " : "☁️ ") + (cur.short || cur.label || "—") + (cur.id && cur.id !== "claude" && lg.model.current && !sc.own ? " · " + lg.model.current : "") + (sc.own ? " · " + L("לשיחה", "chat") : "");
-    const opts = (scopeChat) => lg.providers.map((p, i) => {
+    const order = lg.providers.map((p, i) => i).sort((x, y) => (lg.providers[y].ok ? 1 : 0) - (lg.providers[x].ok ? 1 : 0));  // owner 14.11: available first
+    const opts = (scopeChat) => order.map(i => { const p = lg.providers[i];
       const on = scopeChat ? (sc.own && p.active) : p.id === (sc.computer || {}).provider;
       return `<button class="btn small ai-opt${on ? " on" : ""}" data-i="${i}" data-chat="${scopeChat ? 1 : 0}" ${p.ok || on ? "" : "disabled"} title="${esc(p.detail)}">${on ? "✅ " : ""}${p.where === "local" ? "🏠 " : "☁️ "}${esc(p.short || p.label)}${p.cost ? " · " + esc(p.cost) : ""}</button>`; }).join("");
     $("aiList").innerHTML = (chat && chat !== "local" ? `<p class="note tight">🗨️ ${L("רק לשיחה", "This conversation only")}: <b>${esc(sc.chat_name || chat)}</b>${sc.own ? "" : " · " + L("כרגע כמו המחשב", "now as the computer")}</p>` + opts(true) +
@@ -123,6 +124,8 @@ async function loadAi() {
   } catch (e) { $("aiBadge").textContent = "🧠 —"; }
 }
 $("aiBtn").onclick = e => { e.stopPropagation(); const o = $("aiPop").hidden; if (o) loadAi(); $("aiPop").hidden = !o; $("aiBtn").setAttribute("aria-expanded", o); };
+$("mdlBtn").onclick = e => { e.stopPropagation(); const o = $("mdlPop").hidden; if (o) loadAi(); $("mdlPop").hidden = !o; $("mdlBtn").setAttribute("aria-expanded", o); };
+$("mdlPop").onclick = e => e.stopPropagation();
 $("aiLegendBtn").onclick = () => { $("aiPop").hidden = true; $("legendBtn").click(); };
 loadAi(); setInterval(loadAi, 60000);
 
@@ -634,7 +637,8 @@ function render(d) {
   }
   sel.onfocus = () => sel.dataset.busy = "1"; sel.onblur = () => delete sel.dataset.busy;
   sel.onchange = () => { $("modelTip").textContent = (guide[sel.value] || {}).tip || ""; sel.title = tipOf(sel.value); delete sel.dataset.busy;
-    act({ do: "model", chat: d.chat, model: sel.value, hours: 0 }, L("המודל הוחלף", "Model changed")); };
+    act({ do: "model", chat: d.chat, model: sel.value, hours: 0 }, L("המודל הוחלף", "Model changed")); if ($("pmSel").hidden) $("mdlBadge").textContent = "🎛️ " + sel.selectedOptions[0].text; };
+  if ($("pmSel").hidden && sel.selectedOptions[0]) $("mdlBadge").textContent = "🎛️ " + sel.selectedOptions[0].text;
   const cg = (d.groups || []).find(g => g.jid === d.chat) || {};
   $("modelNow").innerHTML = `<strong>${esc(cg.name || "")}</strong><br>` + $("modelNow").innerHTML;
   const rc = mi.recommend;
@@ -934,10 +938,7 @@ This cannot be undone.`))) return;
 });
 
 // ---- model box: minimize (remembered); chat card height = window below its top, so the input box is always visible ----
-try { if (localStorage.getItem("wa-dash-mb-min") === "1") $("modelBox").classList.add("min"); } catch (e) {}
-const mbLabel = () => { const m = $("modelBox").classList.contains("min"); $("mbToggle").textContent = m ? L("▸ הרחב", "▸ Expand") : L("▾ מזער", "▾ Minimize"); $("mbToggle").setAttribute("aria-expanded", !m); };
-$("mbToggle").onclick = () => { $("modelBox").classList.toggle("min"); try { localStorage.setItem("wa-dash-mb-min", $("modelBox").classList.contains("min") ? "1" : "0"); } catch (e) {} mbLabel(); };
-mbLabel();
+// owner 14.11 13:58: the model box lives in the 🎛️ popup of the top bar (no minimize needed)
 // owner 14.11: a short two-tone sound when an answer arrives (🔔 next to the input, remembered)
 try { $("soundChk").checked = localStorage.getItem("wa-dash-sound") !== "0"; } catch (e) { $("soundChk").checked = true; }
 $("soundChk").onchange = () => { try { localStorage.setItem("wa-dash-sound", $("soundChk").checked ? "1" : "0"); } catch (e) {} };
@@ -949,26 +950,20 @@ function ding() {
       o.start(ac.currentTime + t); o.stop(ac.currentTime + t + .2); });
   } catch (e) {}
 }
-// owner 14.11: the hosted-AI box beside the model box: who answers in this conversation, switch it here (the same as the 🧠 chip)
-try { if (localStorage.getItem("wa-dash-ai-min") === "1") $("aiBox").classList.add("min"); } catch (e) {}
-const aiLabel = () => { const m = $("aiBox").classList.contains("min"); $("aiToggle").textContent = m ? L("▸ הרחב", "▸ Expand") : L("▾ מזער", "▾ Minimize"); $("aiToggle").setAttribute("aria-expanded", !m); };
-$("aiToggle").onclick = () => { $("aiBox").classList.toggle("min"); try { localStorage.setItem("wa-dash-ai-min", $("aiBox").classList.contains("min") ? "1" : "0"); } catch (e) {} aiLabel(); };
-aiLabel();
-function drawAiBox(lg, chat) {
-  const sc = lg.scope || {}, cur = lg.providers.find(p => p.active) || {}, comp = sc.computer || {};
-  $("aiNow").textContent = `${cur.where === "local" ? "🏠" : "☁️"} ${cur.short || cur.label || "—"}` + (sc.own ? L(" · נבחר לשיחה הזו", " · chosen for this chat") : L(` · כמו המחשב`, " · as the computer"));
-  $("aiState").textContent = (cur.ok ? "✅ " : "⚪ ") + (cur.detail || "");
-  const sel = $("aiSel");
-  sel.innerHTML = `<option value="">${L("כמו המחשב", "As the computer")} (${esc(comp.short || "")})</option>` +
-    lg.providers.map(p => `<option value="${esc(p.id)}" ${sc.own && p.active ? "selected" : ""} ${p.ok || (sc.own && p.active) ? "" : "disabled"}>${p.ok ? "" : "⚪ "}${p.where === "local" ? "🏠" : "☁️"} ${esc(p.short || p.label)}${p.cost ? " · " + esc(p.cost) : ""}</option>`).join("");
-  if (!sc.own) sel.value = "";
-  sel.disabled = !chat || chat === "local";
-  sel.onchange = async () => {
-    const v = sel.value, p = lg.providers.find(x => x.id === v) || {};
-    await act(v ? { do: "provider_set", provider: v, model: p.model || "", chat } : { do: "provider_clear", chat },
-      v ? L("בשיחה הזו עונה עכשיו ", "This chat is now answered by ") + (p.short || p.label) : L("השיחה חזרה לבינה של המחשב", "Back to the computer's AI"));
-    loadAi();
-  };
+function drawModelPop(lg, chat) {
+  // owner 14.11 13:58: the 🎛️ icon: Claude's models when Claude hosts this chat, otherwise the hosted AI's own models
+  const sc = lg.scope || {}, cur = lg.providers.find(p => p.active) || {};
+  const claude = !cur.id || cur.id === "claude";
+  $("modelSel").hidden = !claude; $("pmSel").hidden = claude;
+  if (claude) { $("mdlBadge").textContent = "🎛️ " + ($("modelSel").selectedOptions[0] || {}).text || "🎛️ Claude"; return; }
+  const models = (cur.models || []).slice(0, 80), now = cur.model || "";
+  $("mdlBadge").textContent = "🎛️ " + (now ? now.split("/").pop().replace(/:free$/, "") : (cur.short || ""));
+  const sel = $("pmSel");
+  if (sel.dataset.busy) return;
+  sel.innerHTML = (models.length ? models : [now]).filter(Boolean).map(m => `<option value="${esc(m)}" ${m === now ? "selected" : ""}>${esc(m)}</option>`).join("") || `<option>${L("ברירת המחדל של הספק", "Provider default")}</option>`;
+  sel.onfocus = () => sel.dataset.busy = "1"; sel.onblur = () => delete sel.dataset.busy;
+  sel.onchange = async () => { delete sel.dataset.busy;
+    await act({ do: "provider_set", provider: cur.id, model: sel.value, chat: sc.own && chat ? chat : "" }, L("המודל הוחלף ל-", "Model switched to ") + sel.value); loadAi(); };
 }
 function fitChat() {
   const card = document.querySelector(".chat-card"); if (!card) return;
