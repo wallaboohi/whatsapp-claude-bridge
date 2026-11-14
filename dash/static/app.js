@@ -22,7 +22,7 @@ const LOCALE = () => lang === "en" ? "en-GB" : "he-IL";
 // static texts carry data-en="..."; their Hebrew original is remembered on first run
 function translateStatic() {
   document.documentElement.lang = lang; document.documentElement.dir = lang === "en" ? "ltr" : "rtl";
-  document.title = L("ווצאפ ↔ Claude", "WhatsApp ↔ Claude");
+  document.title = L("YB גשר AI לווצאפ", "YB AI Bridge for WhatsApp");
   document.querySelectorAll("[data-en]").forEach(el => { if (el._he === undefined) el._he = el.textContent; el.textContent = lang === "en" ? el.dataset.en : el._he; });
   const attr = (sel, name, key) => document.querySelectorAll(sel).forEach(el => { const k = "_he_" + name; if (el[k] === undefined) el[k] = el.getAttribute(name) || ""; el.setAttribute(name, lang === "en" ? el.dataset[key] : el[k]); });
   attr("[data-en-ph]", "placeholder", "enPh"); attr("[data-en-title]", "title", "enTitle"); attr("[data-en-aria]", "aria-label", "enAria");

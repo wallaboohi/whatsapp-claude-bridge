@@ -1,4 +1,4 @@
-"""WhatsApp agent: the always-on companion of the whatsapp-bridge (the WhatsApp ↔ Claude tool).
+"""WhatsApp agent: the always-on companion of the whatsapp-bridge (the YB AI Bridge for WhatsApp).
 
 Runs as one background process (started at logon by Task Scheduler):
   * the owner's messages in his control group (text, voice, images, documents) are answered by a headless Claude Code
@@ -655,11 +655,50 @@ def report_restart():
     except Exception:
         info = {}
     wait_bridge(300)
-    forced = get_override()
-    reply(f"✅ עליתי מחדש ({dt.datetime.now():%H:%M}) · {machine_tag()}. "
-          f"סשן: {'נקי לכל הודעה' if CFG.get('fresh_sessions') else 'רציף'} · "
-          f"מודל: {forced or 'אוטו'}\n{restart_usage()}"
+    reply(f"✅ עליתי מחדש ({dt.datetime.now():%H:%M}) · {machine_tag()}\n"
+          f"⏱ מנותק היום: {hm(down_today_min())} · מחובר מ-00:00: {hm(connected_today_min())}\n"
+          f"🔌 כרגע מחובר ל: {connected_ais_text()}"
           + (f"\nסיבה: {restart_reason_he(info['reason'])}" if info.get("reason") else ""))
+
+
+AI_HE = {"claude": "קלוד", "codex": "קודקס", "copilot": "קופילוט", "gemini": "גמיני", "gemini_cli": "גמיני", "ollama": "אולמה מקומי",
+         "groq": "Groq", "cloudflare": "Cloudflare", "nvidia": "NVIDIA", "openrouter_free": "OpenRouter", "opencode": "OpenCode"}
+
+
+def hm(minutes):
+    """Owner 14.11: a duration as '2 שע׳ 5 דק׳' / '12 דק׳'."""
+    m = int(max(0, minutes))
+    return (f"{m // 60} שע׳ " if m >= 60 else "") + f"{m % 60} דק׳"
+
+
+def down_today_min():
+    """Minutes WhatsApp was down today, as recorded by report_reconnect (kv down_min:<date>)."""
+    try:
+        return int(kv_get("down_min:" + dt.date.today().isoformat()) or 0)
+    except ValueError:
+        return 0
+
+
+def connected_today_min():
+    """Minutes since 00:00 minus the recorded downtime."""
+    now = dt.datetime.now()
+    return max(0, int((now - now.replace(hour=0, minute=0, second=0, microsecond=0)).total_seconds() // 60) - down_today_min())
+
+
+def connected_ais_text(limit=5):
+    """The hosted AIs that are ready now, short and in Hebrew ('קופילוט, גמיני, קודקס, אולמה מקומי ועוד 2')."""
+    names = []
+    for n in list(auto_ladder()) + ["ollama"]:
+        try:
+            ok = provider_ready(n)
+        except Exception:
+            ok = False
+        label = AI_HE.get(n) or (providers().get(n) or {}).get("short") or n
+        if ok and label not in names:
+            names.append(label)
+    if not names:
+        return "אין"
+    return ", ".join(names[:limit]) + (f" ועוד {len(names) - limit}" if len(names) > limit else "")
 
 
 def restart_reason_he(reason):
@@ -5713,6 +5752,7 @@ def report_reconnect(down_since, now, alerted, settle=None):
     time.sleep(CFG.get("reconnect_settle_seconds", 45) if settle is None else settle)
     start, end = outage_window(down_since, now)
     mins = max(1, int((end - start).total_seconds() // 60))
+    kv_set("down_min:" + dt.date.today().isoformat(), str(down_today_min() + mins))  # owner 14.11: the restart line shows today's downtime
     missed = []
     try:
         missed = missed_owner_messages(start - dt.timedelta(minutes=2), dt.datetime.now())
@@ -6546,11 +6586,8 @@ def adb_keeper():
 
 
 def _adb_tell(text):
-    _ctx.chat = PRIMARY
-    try:
-        reply(text)
-    finally:
-        _ctx.chat = None
+    """Owner 14.11: no WhatsApp messages about the phone's adb going down or coming back: the keeper heals quietly and only logs."""
+    log("adb (not sent to WhatsApp):", text)
 
 
 def run_job(job, mark):

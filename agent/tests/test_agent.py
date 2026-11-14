@@ -2131,3 +2131,17 @@ def test_ensure_cli_mcp_gives_every_agent_cli_the_bridge_whatsapp_tools(agent, m
     assert g["theme"] == "dark" and g["mcpServers"]["whatsapp"]["args"][0].endswith("main.py")
     assert "whatsapp" in json.load(open(home / ".copilot" / "mcp-config.json", encoding="utf-8"))["mcpServers"]
     assert json.load(open(home / ".config" / "opencode" / "opencode.json", encoding="utf-8"))["mcp"]["whatsapp"]["enabled"] is True
+
+
+def test_restart_line_is_short_and_adb_is_silent(agent, monkeypatch):
+    mod, _ = agent
+    assert mod.hm(125) == "2 שע׳ 5 דק׳" and mod.hm(7) == "7 דק׳"
+    mod.kv_set("down_min:" + mod.dt.date.today().isoformat(), "9")
+    assert mod.down_today_min() == 9 and mod.connected_today_min() >= 0
+    monkeypatch.setattr(mod, "auto_ladder", lambda: ["codex", "gemini", "nvidia", "groq", "cloudflare", "opencode", "copilot"])
+    monkeypatch.setattr(mod, "provider_ready", lambda n: True)
+    assert mod.connected_ais_text().startswith("קודקס, גמיני") and "ועוד" in mod.connected_ais_text()
+    sent = []
+    monkeypatch.setattr(mod, "reply", lambda *a, **k: sent.append(a))
+    mod._adb_tell("📱 ה-adb לטלפון נפל")
+    assert sent == []  # owner 14.11: nothing about adb reaches WhatsApp

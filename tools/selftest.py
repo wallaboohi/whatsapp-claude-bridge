@@ -1,4 +1,4 @@
-"""Full self-test of the WhatsApp ↔ Claude tool. Prints a Hebrew report (✔ / ✖ per stage).
+"""Full self-test of the YB AI Bridge for WhatsApp. Prints a Hebrew report (✔ / ✖ per stage).
 
   uv run python -X utf8 tools/selftest.py          # all checks (sends a few test messages to the control group)
   uv run python -X utf8 tools/selftest.py --quiet  # no messages sent
@@ -223,7 +223,7 @@ def t_exe():
 
 
 if __name__ == "__main__":
-    print("🧪 בדיקה עצמית — כלי ווצאפ ↔ Claude\n")
+    print("🧪 בדיקה עצמית — YB גשר AI לווצאפ\n")
     print("— גשר —")
     check("חיבור לווצאפ", t_status)
     check("הגנת סיסמה", t_auth)

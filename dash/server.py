@@ -1,4 +1,4 @@
-"""Dashboard backend of the WhatsApp ↔ Claude tool.
+"""Dashboard backend of the YB AI Bridge for WhatsApp.
 
 Standalone: reads the tool's local databases directly (read-only) and talks to the bridge when it is up, so the
 dashboard works without the agent, without Claude and without internet. Served by the desktop app (WhatsAppDash.exe)

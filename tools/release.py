@@ -1,4 +1,4 @@
-"""Release a new version of the WhatsApp ↔ Claude tool (maintainer).
+"""Release a new version of the YB AI Bridge for WhatsApp (maintainer).
 
   release.cmd 1.1.0 "מה השתנה / what changed"            run all checks, commit, tag and push → GitHub builds and publishes
   release.cmd 1.1.0 "…" --dry-run                         everything except commit/tag/push

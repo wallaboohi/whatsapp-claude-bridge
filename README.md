@@ -1,4 +1,4 @@
-# WhatsApp ↔ Claude Bridge
+# YB AI Bridge for WhatsApp
 
 **Talk to Claude from WhatsApp, and let Claude read and manage your WhatsApp — safely.**
 An enhanced fork of [lharries/whatsapp-mcp](https://github.com/lharries/whatsapp-mcp) for Windows: a hardened WhatsApp bridge,

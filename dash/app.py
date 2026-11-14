@@ -1,4 +1,4 @@
-"""WhatsAppDash — desktop app of the WhatsApp ↔ Claude tool (built into WhatsAppDash.exe with PyInstaller).
+"""WhatsAppDash — desktop app of the YB AI Bridge for WhatsApp (built into WhatsAppDash.exe with PyInstaller).
 
 Opens the dashboard in its own window (Edge WebView2), with a tray icon showing the connection state.
 Works offline and without the agent: the dashboard reads the tool's local databases directly.
@@ -82,7 +82,7 @@ def tray(window):
 
     window.events.closing += on_closing
 
-    icon = pystray.Icon("WhatsAppDash", icon_img((150, 150, 150)), "ווצאפ ↔ Claude",
+    icon = pystray.Icon("WhatsAppDash", icon_img((150, 150, 150)), "YB גשר AI לווצאפ",
                         menu=pystray.Menu(pystray.MenuItem("פתח לוח בקרה", show, default=True), pystray.MenuItem("יציאה", quit_app)))
     icon.run_detached()
 
@@ -91,7 +91,7 @@ def tray(window):
             st = server.bridge("/status")
             ok = not st.get("error") and st.get("connected")
             icon.icon = icon_img((69, 196, 122) if ok else (255, 107, 94))
-            icon.title = "ווצאפ ↔ Claude — " + ("מחובר" if ok else "מנותק")
+            icon.title = "YB גשר AI לווצאפ — " + ("מחובר" if ok else "מנותק")
             time.sleep(30)
 
     threading.Thread(target=refresh, daemon=True).start()
@@ -134,7 +134,7 @@ def main():
             url = "http://127.0.0.1:8770/"
     except Exception:
         pass  # agent down: the app's own copy still works offline
-    window = webview.create_window(f"ווצאפ ↔ Claude · לוח בקרה {server.VERSION}{' · ' + server.BUILD if server.BUILD else ''}", url,
+    window = webview.create_window(f"YB גשר AI לווצאפ · לוח בקרה {server.VERSION}{' · ' + server.BUILD if server.BUILD else ''}", url,
                                    width=1360, height=900, min_size=(760, 600), text_select=True)
     listen_for_show(window)
     allow_mic_camera(window)

@@ -1,4 +1,4 @@
-"""Setup wizard for the WhatsApp ↔ Claude tool (Windows). Run `setup.cmd` from the tool root.
+"""Setup wizard for the YB AI Bridge for WhatsApp (Windows). Run `setup.cmd` from the tool root.
 
 Steps: bridge binary → WhatsApp pairing (QR) → control group → config files → dependencies → MCP registration →
 logon tasks → dashboard app → self-test. Safe to re-run: finished steps are skipped.
@@ -57,7 +57,7 @@ def bridge_running():
 def main():
     global lang
     lang = "en" if input("Language / שפה — (h)ebrew / (e)nglish [h]: ").strip().lower().startswith("e") else "he"
-    say("התקנת כלי ווצאפ ↔ Claude", "Installing the WhatsApp ↔ Claude tool")
+    say("התקנת YB גשר AI לווצאפ", "Installing the YB AI Bridge for WhatsApp")
 
     step(1, "גשר ווצאפ", "WhatsApp bridge")
     exe = os.path.join(BRIDGE, "whatsapp-bridge.exe")

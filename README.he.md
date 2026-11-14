@@ -1,4 +1,4 @@
-# גשר ווצאפ ↔ Claude
+# YB גשר AI לווצאפ
 
 **לדבר עם Claude מתוך ווצאפ, ולתת ל-Claude לקרוא ולנהל את הווצאפ שלך — בבטחה.**
 גרסה משודרגת של [lharries/whatsapp-mcp](https://github.com/lharries/whatsapp-mcp) ל-Windows: גשר ווצאפ מחוזק, סוכן שרץ תמיד,

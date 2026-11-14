@@ -9,6 +9,6 @@ Copy-Item -Force "$root\releases\$($latest.file)" "$dir\WhatsAppDash.exe"
 $sh = New-Object -ComObject WScript.Shell
 foreach ($p in @([Environment]::GetFolderPath("Desktop"), (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"))) {
     $l = $sh.CreateShortcut((Join-Path $p "ווצאפ Claude - לוח בקרה.lnk"))
-    $l.TargetPath = "$dir\WhatsAppDash.exe"; $l.WorkingDirectory = $dir; $l.Description = "לוח הבקרה של כלי ווצאפ ↔ Claude"; $l.Save()
+    $l.TargetPath = "$dir\WhatsAppDash.exe"; $l.WorkingDirectory = $dir; $l.Description = "לוח הבקרה של YB גשר AI לווצאפ"; $l.Save()
 }
 Write-Output "installed $($latest.version) -> $dir"

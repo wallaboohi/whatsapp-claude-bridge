@@ -1,4 +1,4 @@
-"""Update an installed WhatsApp ↔ Claude tool to the latest release, with automatic rollback.
+"""Update an installed YB AI Bridge for WhatsApp to the latest release, with automatic rollback.
 
   update.cmd                 update to the latest GitHub release (asks nothing)
   update.cmd --check         only report whether an update exists (JSON on the last line)
