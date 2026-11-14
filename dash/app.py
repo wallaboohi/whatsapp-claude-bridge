@@ -127,7 +127,14 @@ def main():
     if already_running():
         return
     port = server.start_free_port()
-    window = webview.create_window(f"ווצאפ ↔ Claude · לוח בקרה {server.VERSION}{' · ' + server.BUILD if server.BUILD else ''}", f"http://127.0.0.1:{port}/",
+    url = f"http://127.0.0.1:{port}/"
+    try:  # owner 14.11: the agent serves the dashboard from the tool's live code; prefer it, so every fix reaches the window without a new app
+        import urllib.request
+        if urllib.request.urlopen("http://127.0.0.1:8770/brief", timeout=3).status == 200:
+            url = "http://127.0.0.1:8770/"
+    except Exception:
+        pass  # agent down: the app's own copy still works offline
+    window = webview.create_window(f"ווצאפ ↔ Claude · לוח בקרה {server.VERSION}{' · ' + server.BUILD if server.BUILD else ''}", url,
                                    width=1360, height=900, min_size=(760, 600), text_select=True)
     listen_for_show(window)
     allow_mic_camera(window)
