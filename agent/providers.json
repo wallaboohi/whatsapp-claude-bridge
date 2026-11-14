@@ -131,6 +131,7 @@
   ],
   "ladder": [
    "claude",
+   "opencode",
    "gemini",
    "groq",
    "nvidia",
@@ -181,5 +182,26 @@
    "קלאודפלייר"
   ],
   "how": "חשבון Cloudflare חינמי: dash.cloudflare.com ← AI ← Workers AI. צריך שני דברים: מזהה חשבון (Account ID) שנשמר ב-secrets/cloudflare.account, וטוקן API עם הרשאת Workers AI שנשמר ב-secrets/cloudflare.key. כתובת ה-API מתיעוד Cloudflare; המכסה החינמית (כ-10,000 נוירונים ליום) ממקור משני; שמות המודלים ברשימה לא נבדקו ללא חשבון."
+ },
+ "opencode": {
+  "label": "OpenCode · מודלים חינמיים (Zen)",
+  "short": "OpenCode",
+  "kind": "opencode",
+  "model": "opencode/deepseek-v4.1-flash-free",
+  "models": [
+   "opencode/deepseek-v4.1-flash-free",
+   "opencode/minimax-m3.1-flash-free",
+   "opencode/glm-5.3-flash-free",
+   "opencode/big-pickle",
+   "opencode/nemotron-3.5-super-vl-free",
+   "opencode/longcat-2.5-free"
+  ],
+  "aliases": [
+   "opencode",
+   "אופנקוד"
+  ],
+  "cost": "חינם",
+  "where": "remote",
+  "how": "מנוע הקוד OpenCode שמותקן במחשב (האפליקציה כוללת opencode-cli.exe). מודלי opencode/*-free חינמיים בלי הרשמה (OpenCode Zen); גם ollama/* מקומי. התחברות לשירותים נוספים (למשל GitHub Copilot): opencode auth login. נבדק 14.11: קרא קובץ והחזיר תשובה תוך 4 שניות."
  }
 }

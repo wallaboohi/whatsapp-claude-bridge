@@ -85,13 +85,38 @@ async function loadAi() {
     $("aiList").innerHTML = (chat && chat !== "local" ? `<p class="note tight">🗨️ ${L("רק לשיחה", "This conversation only")}: <b>${esc(sc.chat_name || chat)}</b>${sc.own ? "" : " · " + L("כרגע כמו המחשב", "now as the computer")}</p>` + opts(true) +
         (sc.own ? `<button class="btn small ai-clear">↩️ ${L("חזור לבינה של המחשב", "Back to the computer's AI")} (${esc((sc.computer || {}).short || "")})</button>` : "") : "") +
       `<p class="note tight">💻 ${L("לכל השיחות במחשב הזה", "Every conversation on this computer")}:</p>` + opts(false) +
-      `<p class="note tight">🔁 ${L("גיבוי: כשבינה לא עובדת (מכסה, מפתח, תקלה) הבאה בתור עונה, והתשובה אומרת מה קרה.", "Failover: when an AI fails the next one answers and says what happened.")}</p>`;
+      `<p class="note tight">🔁 ${L("גיבוי: כשבינה לא עובדת (מכסה, מפתח, תקלה) הבאה בתור עונה, והתשובה אומרת מה קרה.", "Failover: when an AI fails the next one answers and says what happened.")}</p>` +
+      // owner 14.11: see each AI's state and (re)connect it himself: check now, paste a key, sign Claude in again
+      `<details class="ai-conn"><summary>🔌 ${L("מצב וחיבור של כל בינה", "State and connection of each AI")}</summary>` +
+      lg.providers.filter(p => p.id !== "auto").map((p, i) => `<div class="ai-row" data-id="${esc(p.id)}"><span class="st">${p.ok ? "✅" : "⚪"}</span> <b>${esc(p.short || p.label)}</b> <span class="det">${esc(p.detail || "")}</span>
+        <span class="acts"><button class="btn small chk">🔄 ${L("בדוק", "Check")}</button>${p.key_file ? `<button class="btn small key">🔑 ${p.has_key ? L("חדש מפתח", "Renew key") : L("הוסף מפתח", "Add key")}</button>` : ""}${p.id === "claude" ? `<button class="btn small login">🔐 ${L("התחבר מחדש", "Sign in again")}</button>` : ""}</span>
+        <div class="keybox" hidden><input type="password" placeholder="${L("הדבק כאן את המפתח (לא יוצג שוב)", "Paste the key (never shown again)")}"> <button class="btn small primary save">${L("שמור ובדוק", "Save & check")}</button></div>
+        <div class="loginbox" hidden></div></div>`).join("") + `</details>`;
     document.querySelectorAll("#aiList .ai-opt").forEach(b => b.onclick = async () => {
       const p = lg.providers[+b.dataset.i], forChat = b.dataset.chat === "1";
       if (b.classList.contains("on")) return;
       await act({ do: "provider_set", provider: p.id, model: p.model || "", chat: forChat ? chat : "" },
         (forChat ? L("בשיחה הזו עונה עכשיו ", "This conversation now answered by ") : L("בכל המחשב עונה עכשיו ", "The computer now answered by ")) + (p.short || p.label)); loadAi();
     });
+    document.querySelectorAll("#aiList .ai-row").forEach(row => {
+      const id = row.dataset.id, det = row.querySelector(".det"), st = row.querySelector(".st");
+      const show = r => { st.textContent = r.ok ? "✅" : "⚪"; det.textContent = r.detail || r.error || ""; };
+      row.querySelector(".chk").onclick = async e => { e.stopPropagation(); det.textContent = L("בודק…", "checking…"); show(await act({ do: "provider_check", provider: id })); };
+      const kb = row.querySelector(".key");
+      if (kb) kb.onclick = e => { e.stopPropagation(); row.querySelector(".keybox").hidden = !row.querySelector(".keybox").hidden; };
+      const sv = row.querySelector(".save");
+      if (sv) sv.onclick = async e => { e.stopPropagation(); const inp = row.querySelector(".keybox input"); if (!inp.value.trim()) return; det.textContent = L("שומר ובודק…", "saving…");
+        const r = await act({ do: "provider_key", provider: id, key: inp.value }); inp.value = ""; row.querySelector(".keybox").hidden = true;
+        show(r.error ? r : await act({ do: "provider_check", provider: id })); };
+      const lb = row.querySelector(".login");
+      if (lb) lb.onclick = async e => { e.stopPropagation(); const box = row.querySelector(".loginbox"); box.hidden = false; box.textContent = L("פותח התחברות…", "starting sign-in…");
+        const r = await act({ do: "claude_login_start" });
+        if (r.error) { box.textContent = "⚠️ " + r.error; return; }
+        box.innerHTML = `<a href="${esc(r.url)}" target="_blank" rel="noopener">1. ${L("פתח את קישור ההתחברות", "Open the sign-in link")}</a><br>2. ${L("הדבק את הקוד שהתקבל:", "Paste the code you got:")} <input class="code"> <button class="btn small primary go">${L("סיים", "Finish")}</button>`;
+        box.querySelector(".go").onclick = async ev => { ev.stopPropagation(); const c = await act({ do: "claude_login_code", code: box.querySelector(".code").value });
+          box.textContent = c.error ? "⚠️ " + c.error : "✅ " + L("מחובר", "signed in"); show(await act({ do: "provider_check", provider: id })); }; };
+    });
+    $("aiPop").onclick = e => e.stopPropagation();  // typing a key / code inside the popup must not close it
     const cl = document.querySelector("#aiList .ai-clear");
     if (cl) cl.onclick = async () => { await act({ do: "provider_clear", chat }, L("השיחה חזרה לבינה של המחשב", "Back to the computer's AI")); loadAi(); };
   } catch (e) { $("aiBadge").textContent = "🧠 —"; }

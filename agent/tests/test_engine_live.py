@@ -68,3 +68,29 @@ def test_a_broken_chosen_ai_is_replaced_and_the_answer_says_why(agent, monkeypat
         assert "🔁 Broken לא עבד" in mod.ai_tag("opus")
     finally:
         mod._ctx.chat = None
+
+
+def test_opencode_answers_a_conversation_with_tools(agent, monkeypatch, tmp_path):
+    """Owner 14.11: OpenCode (installed as an app) is a free engine+provider: a real run reads a file and answers in Hebrew."""
+    mod, _ = agent
+    oc = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "ai.opencode.desktop", "resources", "opencode-cli.exe")
+    if not os.path.isfile(oc):
+        pytest.skip("OpenCode is not installed")
+    monkeypatch.setattr(mod, "opencode_bin", lambda: oc)
+    monkeypatch.setattr(mod, "ENGINE_FILE", str(tmp_path / "engine.json"))
+    monkeypatch.setattr(mod, "FAILOVER_FILE", str(tmp_path / "failover.json"))
+    mod.CFG.setdefault("language", "he")
+    os.makedirs(mod.HOME, exist_ok=True)
+    open(os.path.join(mod.HOME, "note.txt"), "w", encoding="utf-8").write("The secret code is ZEBRA-4471\n")
+    mod.set_provider("opencode", chat=mod.PRIMARY)
+    mod._ctx.chat = mod.PRIMARY
+    stages = []
+    try:
+        out = mod.claude("קרא את הקובץ note.txt שבתיקייה הנוכחית (" + mod.HOME + ") וכתוב מה כתוב בו.", session=False, timeout=300,
+                         chat=mod.PRIMARY, on_stage=lambda *a: stages.append(a))
+        assert out and "ZEBRA-4471" in out, (mod.HOME, mod._ctx.engine_used, getattr(mod._ctx, "provider_used", None), out[:300])
+        assert mod._ctx.engine_used == "opencode" and mod._ctx.provider_used == "opencode"
+        assert any("קורא" in str(s) for s in stages), stages
+        assert mod.ai_tag().startswith("🧠 OpenCode")
+    finally:
+        mod._ctx.chat = None

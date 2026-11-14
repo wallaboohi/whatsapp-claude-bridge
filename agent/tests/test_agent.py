@@ -33,6 +33,7 @@ def agent(tmp_path, monkeypatch):
                         ("PROVIDER_FILE", "provider.json")):
         monkeypatch.setattr(mod, name, str(tmp_path / fname))
     mod.adb().close()
+    monkeypatch.setattr(mod, "opencode_bin", lambda: None)  # tests never depend on whether OpenCode is installed on this PC
     return mod, db
 
 
@@ -1993,3 +1994,23 @@ def test_failover_ends_on_the_local_models(agent, monkeypatch, tmp_path):
     finally:
         mod._ctx.force_provider = mod._ctx.force_engine = None
         mod._ctx.failover_used = False
+
+
+def test_opencode_events_become_an_answer_and_live_steps(agent):
+    """Owner 14.11: OpenCode as an engine: its JSON events give the live steps (tool use) and the answer (the last step's text)."""
+    mod, _ = agent
+    oc = {"text": [], "sid": "", "err": "", "tin": 0, "tout": 0}
+    evs = [{"type": "step_start", "sessionID": "S1", "part": {}},
+           {"type": "text", "sessionID": "S1", "part": {"text": "I will read it"}},
+           {"type": "tool_use", "sessionID": "S1", "part": {"tool": "read", "state": {"input": {"path": "note.txt"}}}},
+           {"type": "step_finish", "sessionID": "S1", "part": {"tokens": {"input": 100, "output": 5}}},
+           {"type": "step_start", "sessionID": "S1", "part": {}},
+           {"type": "text", "sessionID": "S1", "part": {"text": "ZEBRA-4471"}},
+           {"type": "step_finish", "sessionID": "S1", "part": {"tokens": {"input": 50, "output": 3}}}]
+    out = [mod._opencode_event(e, oc) for e in evs]
+    tool = [e for e in out if e][0]
+    assert tool["message"]["content"][0]["name"] == "Read" and mod._stage_of(tool) == "📖 קורא קבצים"
+    assert oc["text"] == ["ZEBRA-4471"] and oc["sid"] == "S1" and oc["tin"] == 150
+    oc2 = {"text": [], "sid": "", "err": "", "tin": 0, "tout": 0}
+    mod._opencode_event({"type": "error", "error": {"message": "Model unavailable"}}, oc2)
+    assert oc2["err"] == "Model unavailable"

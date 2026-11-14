@@ -29,7 +29,7 @@ body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 
 
-.top { position: sticky; top: 0; z-index: 5; display: flex; gap: 12px; align-items: center; padding: 6px 10px;
+.top { position: sticky; top: 0; z-index: 15; display: flex; gap: 12px; align-items: center; padding: 6px 10px;
   background: color-mix(in srgb, var(--bg) 90%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
 .brand { display: flex; gap: 10px; align-items: center; flex: none; }
 .logo { width: 30px; height: 30px; }
@@ -518,3 +518,13 @@ p.help { margin: 4px 0 0; }
 .bubble .rcpt-running { animation: rcptPulse 1.6s ease-in-out infinite; }
 .bubble .rcpt-waiting_limit, .bubble .rcpt-waiting_approval, .bubble .rcpt-interrupted { color: #b45309; }
 @keyframes rcptPulse { 50% { opacity: .45; } }
+
+/* owner 14.11: state and connection of each AI inside the 🧠 popup */
+.ai-conn { flex-basis: 100%; margin-top: 6px; }
+.ai-conn summary { cursor: pointer; font-weight: 600; }
+.ai-row { border-top: 1px solid var(--line); padding: 5px 0; font-size: .85rem; }
+.ai-row .det { color: var(--muted); }
+.ai-row .acts { display: inline-flex; gap: 4px; margin-inline-start: 4px; }
+.ai-row .keybox, .ai-row .loginbox { margin-top: 4px; }
+.ai-row input { max-width: 200px; }
+#aiPop { width: 400px; max-height: 80vh; overflow: auto; }  /* owner 14.11: above the chat cards, scrolls when long */

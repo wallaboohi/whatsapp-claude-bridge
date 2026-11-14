@@ -915,6 +915,8 @@ def provider_ready(name):
         return False
     if p.get("kind") == "claude":
         return limit_raw() is None
+    if p.get("kind") == "opencode":
+        return bool(opencode_bin())
     return bool(provider_key(p)) if p.get("key_file") else True
 
 
@@ -1040,6 +1042,10 @@ def provider_env(name=None, model=None):
     p = providers().get(name) or {}
     if p.get("kind") == "anthropic-key":
         return dict(os.environ, ANTHROPIC_API_KEY=provider_key(p)), model
+    if p.get("kind") == "opencode":  # owner 14.11: OpenCode runs its own models (free Zen ones, Ollama); its own engine
+        if not opencode_bin():
+            raise ProviderDown(name, "unreachable", 30)
+        return dict(os.environ), model or p.get("model") or None
     if p.get("kind") == "anthropic":
         m = model or p.get("model") or ""
         h = provider_host(p, m)
@@ -2023,10 +2029,22 @@ def stop_applies(target, chat, active):
 ENGINE_FILE = os.path.join(HERE, "engine.json")
 FAILOVER_FILE = os.path.join(HERE, "failover.json")
 ENGINES = {"claude": {"label": "Claude Code", "short": "Claude Code", "cmd": "claude", "note": "המנוע המקורי: הכלים, ההרשאות והסשנים של הגשר"},
-           "qwen": {"label": "Qwen Code", "short": "Qwen Code", "cmd": "qwen", "note": "מנוע חופשי של Qwen: עובד עם כל ספק בפורמט OpenAI, גם מקומי (Ollama), בלי חשבון Claude"}}
+           "qwen": {"label": "Qwen Code", "short": "Qwen Code", "cmd": "qwen", "note": "מנוע חופשי של Qwen: עובד עם כל ספק בפורמט OpenAI, גם מקומי (Ollama), בלי חשבון Claude"},
+           "opencode": {"label": "OpenCode", "short": "OpenCode", "cmd": "opencode", "note": "מנוע הקוד OpenCode (מותקן במחשב): מודלים חינמיים משלו (OpenCode Zen) ו-Ollama, בלי חשבון; נבחר דרך הספק opencode"}}
+
+
+def opencode_bin():
+    """OpenCode's command-line program: on PATH, config opencode_path, or inside the desktop app (owner 14.11: installed as an app)."""
+    for c in (CFG.get("opencode_path"), shutil.which("opencode"),
+              os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "ai.opencode.desktop", "resources", "opencode-cli.exe")):
+        if c and os.path.isfile(c):
+            return c
+    return None
 
 
 def engine_ready(name):
+    if name == "opencode":
+        return bool(opencode_bin())
     return bool(shutil.which((ENGINES.get(name) or {}).get("cmd") or ""))
 
 
@@ -2168,6 +2186,34 @@ def qwen_cmd_env(name, model, append):
     return cmd, env, m
 
 
+OC_TOOLS = {"read": "Read", "edit": "Edit", "write": "Write", "patch": "Edit", "grep": "Grep", "glob": "Glob", "list": "Glob", "bash": "Bash",
+            "webfetch": "WebFetch", "websearch": "WebSearch", "task": "Agent", "todowrite": "TodoWrite"}
+
+
+def _opencode_event(ev, oc):
+    """One `opencode run --format json` event -> a Claude Code stream event (tool use for the live steps), or None; the answer text, session,
+    tokens and error are gathered in oc. Only the text of the last step is the answer (earlier steps are narration before tools)."""
+    t, part = ev.get("type"), ev.get("part") or {}
+    oc["sid"] = ev.get("sessionID") or oc["sid"]
+    if t == "step_start":
+        oc["text"] = []
+    elif t == "text" and part.get("text"):
+        oc["text"].append(part["text"])
+    elif t == "step_finish":
+        tk = part.get("tokens") or {}
+        oc["tin"] += int(tk.get("input") or 0)
+        oc["tout"] += int(tk.get("output") or 0)
+    elif t == "error":
+        oc["err"] = str((ev.get("error") or {}).get("message") or ev.get("error") or "error")
+    elif t == "tool_use":
+        name = part.get("tool") or ""
+        inp = dict((part.get("state") or {}).get("input") or {})
+        if "path" in inp and "file_path" not in inp:
+            inp["file_path"] = inp["path"]
+        return {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": OC_TOOLS.get(name, name), "input": inp}]}}
+    return None
+
+
 def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat=None, tools=None, max_budget=None, stoppable=None, fork=False):
     """One headless Claude Code run; the prompt goes in on stdin (no command-line length limit, no cmd.exe quoting).
     tools="" = a restricted run: no tools and no MCP servers at all (for classifying other people's text)."""
@@ -2182,6 +2228,8 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
         eng = "claude"  # guests and restricted runs keep Claude Code's isolation; an engine that is not installed falls back
     _ctx.engine_used = eng
     penv, pmodel = provider_env()  # owner 13.11: another provider behind the same engine (same tools and permissions)
+    if (providers().get(getattr(_ctx, "provider_used", None)) or {}).get("kind") == "opencode" and not guest and tools != "":
+        eng = _ctx.engine_used = "opencode"
     if eng == "qwen" and penv is None:  # Qwen Code cannot use the Claude subscription: it needs a provider with an OpenAI endpoint
         alt = failover_target()
         if not alt:
@@ -2211,6 +2259,11 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
             cmd += ["--chrome"]  # owner 09.11: Claude in Chrome (needs the extension signed in with this PC's Claude account)
         if resume:
             cmd += ["--resume", resume] + (["--fork-session"] if fork else [])  # a side question reads the context but never changes the session
+    elif eng == "opencode":
+        cmd = [opencode_bin(), "run", "--auto", "--format", "json", "--archived"] + (["-m", model] if model else [])
+        qwen_env = penv
+        resume = None
+        prompt = ((append + "\n\n") if append else "") + conversation_pack(chat or PRIMARY) + "\n\n---\nההודעה הנוכחית (ענה עליה):\n" + prompt
     else:
         cmd, qwen_env, model = qwen_cmd_env(getattr(_ctx, "provider_used", None) or active_provider()[0], model, append)
         resume = None  # Qwen Code keeps its own sessions: a Claude session id means nothing to it
@@ -2267,12 +2320,17 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
                 time.sleep(1)
         threading.Thread(target=watch_stop, daemon=True).start()
     res = {}
+    oc = {"text": [], "sid": "", "err": "", "tin": 0, "tout": 0} if eng == "opencode" else None
     try:
         for line in proc.stdout:
             try:
                 ev = json.loads(line)
             except ValueError:
                 continue
+            if oc is not None:  # OpenCode's events -> the Claude Code shape the rest of the run reads
+                ev = _opencode_event(ev, oc)
+                if not ev:
+                    continue
             if ev.get("type") == "result":
                 res = ev
             elif on_stage:
@@ -2284,6 +2342,9 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
                             det = _detail_of(part.get("name", ""), part.get("input") or {})
                     on_stage(st, det)
         proc.wait()
+        if oc is not None and (oc["text"] or oc["err"]):
+            res = {"type": "result", "result": "\n".join(oc["text"]).strip() or oc["err"], "is_error": not oc["text"], "session_id": oc["sid"],
+                   "usage": {"input_tokens": oc["tin"], "output_tokens": oc["tout"]}, "total_cost_usd": 0}
     finally:
         if killer:
             killer.cancel()

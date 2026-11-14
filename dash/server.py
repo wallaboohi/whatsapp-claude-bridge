@@ -661,10 +661,28 @@ def provider_check(name):
         allp = _providers()
         rows = [f"{allp[n].get('short') or n} ({allp[n].get('cost') or ''})" for n in (p.get("ladder") or []) if n in allp and n != "auto"]
         return {"ok": True, "detail": "מהזול ליקר: " + " ← ".join(rows), "models": []}
-    if p.get("kind") == "claude":
-        acc = cfg().get("claude_account") or ""
-        return {"ok": True, "detail": "המנוי של המחשב" + (f" · {acc}" if acc else ""),
-                "models": [k for k in json.load(open(os.path.join(ROOT, "agent", "models.json"), encoding="utf-8")) if k != "auto"]}
+    if p.get("kind") == "claude":  # owner 14.11: the real sign-in and the quota, so he can see it and renew it himself
+        models = [k for k in json.load(open(os.path.join(ROOT, "agent", "models.json"), encoding="utf-8")) if k != "auto"]
+        try:
+            acc = claude_account_info()
+        except Exception:
+            acc = {}
+        lim = kv("limit_until") or ""
+        capped = bool(lim) and lim > dt.datetime.now().isoformat(timespec="seconds")
+        if not acc.get("logged_in"):
+            return {"ok": False, "detail": "לא מחובר: לחץ \"התחבר מחדש\"", "models": models, "login": True}
+        return {"ok": not capped, "detail": f"מחובר · {acc.get('email') or ''}" + (f" · {acc['plan']}" if acc.get("plan") else "")
+                + (f" · ⏸️ המכסה נגמרה עד {lim[11:16]}" if capped else ""), "models": models, "login": True}
+    if p.get("kind") == "opencode":  # the OpenCode program on this computer and its models (free Zen + Ollama); no request is spent
+        exe = cfg().get("opencode_path") or shutil.which("opencode") or os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "ai.opencode.desktop", "resources", "opencode-cli.exe")
+        if not exe or not os.path.isfile(exe):
+            return {"ok": False, "detail": "OpenCode לא מותקן במחשב הזה", "models": []}
+        try:
+            r = subprocess.run([exe, "models"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=40, creationflags=_NOWIN)
+            models = [x.strip() for x in r.stdout.splitlines() if "/" in x and not x.strip().startswith("ollama/")]
+        except Exception as e:
+            return {"ok": False, "detail": "OpenCode לא עונה: " + str(e)[:60], "models": []}
+        return {"ok": bool(models), "detail": f"מותקן · {len(models)} מודלים (חינמיים: {sum(1 for m in models if 'free' in m)})", "models": models}
     if p.get("kind") == "anthropic-key":
         k = _provider_key(p)
         return {"ok": bool(k), "detail": "מפתח שמור" if k else "חסר מפתח", "models": ["opus", "sonnet", "haiku"]}
@@ -2142,7 +2160,9 @@ def action(a):
     if kind == "claude_login_code":
         return claude_login_code(a.get("code"))
     if kind == "provider_check":
-        return provider_check(a.get("provider") or "")
+        r = provider_check(a.get("provider") or "")
+        _CHK[a.get("provider") or ""] = (time.time(), r)  # the chip / legend show the fresh result
+        return r
     if kind == "model":
         m = a.get("model", "auto")
         set_model(a.get("chat"), m, a.get("hours") or 0)
@@ -2500,7 +2520,6 @@ def action(a):
             return {"error": (r.stderr or r.stdout or "tts failed")[-300:]}
         return {"ok": True, "url": "/lf/" + name}
     if kind == "tool_update_check":
-        import time
         cache = os.path.join(ROOT, "agent", "update_check.json")
         if not a.get("force") and os.path.exists(cache) and time.time() - os.path.getmtime(cache) < 6 * 3600:
             return json.load(open(cache, encoding="utf-8"))
