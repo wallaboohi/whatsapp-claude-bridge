@@ -535,7 +535,7 @@ p.help { margin: 4px 0 0; }
 #aiPop { width: 400px; max-height: 80vh; overflow: auto; }  /* owner 14.11: above the chat cards, scrolls when long */
 
 /* owner 14.11: queue line above the input; stop button inside the live bubble */
-.queue-line { font-size: .82rem; font-weight: 600; color: var(--brand); padding: 4px 8px; }
+
 .bubble.status .live-stop { margin-inline-start: 6px; padding: 1px 8px; font-size: .75rem; }
 
 /* owner 14.11 13:58: the model box in the 🎛️ popup of the top bar; bigger, clearer buttons in the status card */
@@ -547,3 +547,18 @@ p.help { margin: 4px 0 0; }
 .status-btns .sbtn .si { font-size: 1.6rem; line-height: 1; }
 .status-btns .sbtn:hover { border-color: var(--brand); transform: translateY(-1px); }
 .mach-line { font-size: 1rem; }
+
+/* owner 14.11 14:18: the working line is big and highlighted; its icon follows the current activity */
+.queue-line { display: flex; align-items: center; gap: 10px; margin: 6px 0; padding: 8px 14px; border-radius: 12px; background: var(--ok-bg, #e6f6ec);
+  border: 2px solid var(--brand); font-size: 1.12rem; font-weight: 700; color: var(--text); }
+.queue-line .ql-ico { font-size: 1.9rem; line-height: 1; }
+.queue-line .ql-ico.live { animation: qlPulse 1.4s ease-in-out infinite; }
+.queue-line small { font-weight: 500; color: var(--muted); font-size: .85rem; }
+@keyframes qlPulse { 50% { transform: scale(1.18); } }
+@media (prefers-reduced-motion: reduce) { .queue-line .ql-ico.live { animation: none; } }
+/* map and control center in the top bar: clear, always reachable */
+.big-chip { font-size: 1rem; font-weight: 700; padding: 6px 12px; }
+.big-chip .bi { font-size: 1.3rem; }
+/* available AIs stand out; unavailable ones are pale and cannot be chosen */
+.ai-list .ai-opt:not(:disabled) { font-weight: 700; border: 2px solid var(--brand); }
+.ai-list .ai-opt:disabled { opacity: .3; filter: grayscale(1); cursor: not-allowed; }

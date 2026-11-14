@@ -609,7 +609,12 @@ function render(d) {
   // owner 14.11: how many of his messages wait, right above the input; a sound when a new answer arrives
   const mine = conv.filter(m => !m.tool && m.cmd), waiting = mine.filter(m => m.cmd.st === "pending").length, working = mine.some(m => m.cmd.st === "running");
   $("queueLine").hidden = !(waiting || working);
-  $("queueLine").textContent = (working ? L("🧠 עובד על ההודעה שלך", "🧠 working on your message") : "") + (waiting ? (working ? " · " : "") + L(`📥 ${waiting} הודעות בתור`, `📥 ${waiting} queued`) : "");
+  // owner 14.11: big and highlighted; the icon follows what is being done now (the same icons as the live steps: 📖 ✏️ 🔎 🌐 ⬛ 🧠)
+  const lastStep = (steps.length ? steps[steps.length - 1].text : "") || "";
+  const icon = working ? ((lastStep.match(/^\p{Extended_Pictographic}️?/u) || ["🧠"])[0]) : "📥";
+  $("queueLine").innerHTML = `<span class="ql-ico${working ? " live" : ""}">${icon}</span><span class="ql-txt">` +
+    (working ? L("עובד על ההודעה שלך", "Working on your message") + (lastStep ? ` <small>· ${esc(lastStep.replace(/^\p{Extended_Pictographic}️?\s*/u, "").slice(0, 70))}</small>` : "") : "") +
+    (waiting ? (working ? " · " : "") + L(`${waiting} הודעות בתור`, `${waiting} queued`) : "") + `</span>`;
   const lastTool = conv.filter(m => m.tool && !isStatus(m)).map(m => String(m.id)).pop() || "";
   if (chat._lastTool !== undefined && lastTool && lastTool !== chat._lastTool && chat._chat === curChat && $("soundChk").checked) ding();
   chat._lastTool = lastTool; chat._chat = curChat;

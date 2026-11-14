@@ -18,12 +18,14 @@
   </div>
   <div class="sys-chips" id="sysChips" aria-label="מצב המערכת" data-en-aria="System status"></div>
   <div class="top-actions">
+    <button class="schip big-chip" id="mapBtn" title="מפת המערכת: מחשבים, מנוע, שיחות, מאגרים וחיבורים. כל שכבה לחיצה וניתנת לשינוי" data-en-title="System map: every layer clickable"><span class="bi">🗺️</span> <span data-en="Map">מפה</span></button>
+    <button class="schip big-chip" id="legendBtn" title="מרכז השליטה: רואים את המצב של כל שכבה (קבוצות ⇄ גשר ⇄ מנוע ⇄ בינה ⇄ ספק) ומשנים אותו בלחיצה" data-en-title="Control center: see and change every layer"><span class="bi">🧭</span> <span data-en="Control center">מרכז שליטה</span></button>
     <div class="pop-wrap">
       <button class="schip ai-chip" id="aiBtn" aria-expanded="false" aria-controls="aiPop" title="איזו בינה עונה עכשיו, ומעבר בלחיצה"><span id="aiBadge">🧠 …</span> ▾</button>
       <div class="pop" id="aiPop" hidden>
         <p class="note tight">איזו בינה עונה. לחיצה מחליפה מההודעה הבאה:</p>
         <div class="ai-list" id="aiList"></div>
-        <div class="row tight"><button class="btn small" id="aiLegendBtn">🧭 מקרא מלא, מפתחות וספק חדש</button></div>
+        <div class="row tight"><button class="btn small" id="aiLegendBtn">🧭 מרכז השליטה: מפתחות וספק חדש</button></div>
       </div>
     </div>
     <div class="pop-wrap">
@@ -108,8 +110,6 @@
         <input type="text" id="renameInp" maxlength="100" aria-label="שם חדש לקבוצה" data-en-aria="New group name" hidden>
         <span class="chip" id="pendingChip" hidden></span>
         <button class="today-btn" id="rulesBtn" title="כללי הבסיס של השיחה הזו" data-en-title="This conversation's base rules"><span>📜</span><span data-en="Base rules">כללי בסיס</span><span class="today-sum" id="rulesSum"></span></button>
-        <button class="today-btn" id="mapBtn" title="מפת המערכת: מחשבים, מנוע, שיחות, מאגרים וחיבורים" data-en-title="System map"><span>🗺️</span><span data-en="Map">מפה</span></button>
-        <button class="today-btn" id="legendBtn" title="מקרא הגשר: קבוצות ⇄ גשר ⇄ מודל ⇄ ספק, כל צומת לחיץ" data-en-title="Bridge legend"><span>🧭</span><span data-en="Legend">מקרא</span></button>
         <button class="today-btn" id="todayBtn" aria-expanded="false" aria-controls="todayPanel">
           <span class="today-ico">📊</span><span data-en="Today's activity">פעילות היום</span><span class="today-sum" id="todaySum"></span><span class="caret" aria-hidden="true">▾</span>
         </button>

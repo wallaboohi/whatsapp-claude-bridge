@@ -776,7 +776,8 @@ def legend(chat=None):
     mi = model_info(primary())
     return {"at": dt.datetime.now().isoformat(timespec="seconds"),
             "user": {"name": c.get("owner_name") or "הבעלים", "phone": "קבוצת הבקרה בווצאפ"},
-            "bridge": {"machine": c.get("host_label") or socket.gethostname(), "code": "agent/agent.py · whatsapp-bridge/",
+            "bridge": {"machine": c.get("host_label") or socket.gethostname(), "releaser": bool(c.get("auto_release")),
+                       "release_time": c.get("auto_release_time") or "23:30", "code": "agent/agent.py · whatsapp-bridge/",
                        "phone": "/ספק · /מודל · /תקרה · /הפעל מחדש"},
             "groups": groups,
             "model": {"current": mi["current"] if pname == "claude" else (pmodel or (_providers().get(pname) or {}).get("model") or ""),
