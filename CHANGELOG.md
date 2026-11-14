@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.6 — 2026-11-14
+- תיקון Cloudflare Workers AI: תור שבו הבינה קראה לכלי נדחה (400) כי שרת התרגום שלח content ריק (null); עכשיו נשלחת מחרוזת ריקה (upstream.string_content).
+- הסבר שגיאות בעברית: מה קרה, איפה, למה, מה הגשר עושה ומה אפשר לעשות, עם שורה טכנית קצרה; שגיאת 400 מוכרת כתקלה בספק והגשר עובר לבינה הבאה.
+- Fixes Cloudflare tool-call turns (400 oneOf), adds a Hebrew error explainer and classifies 400 as a provider problem.
+
 ## 1.1.5 — 2026-11-14
 - שינויי יקיר שהיו ממתינים בעץ: מודל ברירת המחדל של Gemini הוא gemini-flash-lite-latest, ותיקונים בלוח (מפה, מקרא, app.js).
 - כולל Cloudflare Workers AI וסולם /אוטו מהמהיר לאיטי (מ-1.1.3 ו-1.1.4).
