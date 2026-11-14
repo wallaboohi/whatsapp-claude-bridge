@@ -867,6 +867,9 @@ BILLING_RE = re.compile(r"(?i)(insufficient (balance|funds|credit)|no credits|cr
 RATE_RE = re.compile(r"(?i)(\b429\b|rate.?limit|quota|too many requests|overloaded|\b50[234]\b|resource.?exhausted|\b413\b|request too large|tokens per minute|\b410\b)")
 DENIED_RE = re.compile(r"(?i)(\b40[13]\b|unauthori[sz]ed|invalid api key|authentication)")
 DOWN_RE = re.compile(r"(?i)(connection refused|econnrefused|enotfound|fetch failed|timed out|unreachable|socket hang up)")
+REJECT_RE = re.compile(r"(?i)(\b400\b|bad input|bad request|invalid request|oneof at)")  # the provider refused the request itself (owner 14.11: Cloudflare 400)
+LOGIN_RE = re.compile(r"(?i)(oauth (session|token) expired|failed to authenticate|please run /login|not logged in)")
+ERROR_ANSWER_RE = re.compile(r"(?is)^\s*(API Error\b|Failed to authenticate|Error:|HTTP Error)")
 
 
 class ProviderDown(Exception):
@@ -886,7 +889,34 @@ def classify_down(text):
         return "key", 120
     if DOWN_RE.search(text):
         return "unreachable", 5
+    if REJECT_RE.search(text):
+        return "rejected", 30
     return None
+
+
+# Owner 14.11: what a provider error means, in plain Hebrew: (what happened, what the bridge does, what the owner can do)
+ERROR_HE = {
+    "billing": ("היתרה בחשבון אצל הספק נגמרה או שיש בעיית חיוב", "מדלג עליו שלוש שעות ועובר לבינה הבאה בסולם", "לבדוק יתרה וחיוב בחשבון של הספק"),
+    "rate": ("הספק מגביל כמה בקשות או טוקנים מותר לשלוח בדקה או ביום, או שהוא עמוס כרגע", "מדלג עליו 15 דקות ועובר לבינה הבאה בסולם", "לחכות, או לבחור בינה אחרת עם /מודל חינמי"),
+    "key": ("הספק דחה את המפתח (אין הרשאה)", "מדלג עליו שעתיים ועובר לבינה הבאה בסולם", "לבדוק או להחליף את המפתח של הספק"),
+    "unreachable": ("אי אפשר להתחבר לספק: הוא לא עונה, או שאין חיבור לרשת", "מדלג עליו 5 דקות ועובר לבינה הבאה בסולם", "לבדוק חיבור לאינטרנט"),
+    "rejected": ("הספק קיבל את הבקשה ודחה אותה כי הפורמט שלה לא מתאים לו (שגיאה 400). זו תקלה בגשר או בשרת התרגום ולא משהו שעשית", "מדלג עליו חצי שעה ועובר לבינה הבאה בסולם", "לספר לי כאן שזה קרה, כדי שאתקן את ההתאמה לספק הזה"),
+    "login": ("ההתחברות של Claude בחשבון של המחשב הזה פגה ולא התחדשה", "אין בינה ש-Claude יכול להשיב בשמה עד שתתחבר מחדש; הגשר עובר לבינה אחרת אם יש", "להתחבר מחדש ל-Claude במחשב הזה (הפקודה /login)"),
+}
+
+
+def explain_error(text, provider=None):
+    """The owner's Hebrew explanation of a provider error text: what happened, where, why, what the bridge does, what he can do, and the
+    raw technical line at the end (shortened)."""
+    raw = re.sub(r"\s+", " ", text or "").strip()
+    reason = "login" if LOGIN_RE.search(raw) else (classify_down(raw) or ("", 0))[0]
+    what, does, todo = ERROR_HE.get(reason, ("הבינה החזירה שגיאה שאני לא מכיר", "מנסה בינה אחרת אם יש", "לשלוח לי את הפרטים הטכניים למטה"))
+    name = provider or getattr(_ctx, "provider_used", None) or ""
+    p = providers().get(name) or {}
+    where = (p.get("short") or name or "הבינה") + (" · ☁️ ענן" if p.get("where") == "remote" else "")
+    code = re.search(r"\b([45]\d\d)\b", raw)
+    return (f"⚠️ *לא הצלחתי לענות לך הפעם.*\n*מה קרה:* {what}.\n*איפה:* {where}.\n*מה הגשר עושה:* {does}.\n*מה אפשר לעשות:* {todo}.\n"
+            f"_פרטים טכניים{(' (קוד ' + code.group(1) + ')') if code else ''}: {raw[:160]}_")
 
 
 def auto_ladder():
@@ -1222,6 +1252,8 @@ def hebrew_share(text):
 def ensure_hebrew(text, chat=None):
     """Owner 14.11: a message that is mostly Latin letters is translated to Hebrew by a ready provider before it is sent; when that is not
     possible the owner gets a Hebrew warning above the original instead of silent English."""
+    if ERROR_ANSWER_RE.match(text or ""):  # a provider error shown as an answer: explain it in Hebrew instead of dumping JSON
+        return explain_error(text)
     if hebrew_share(text) >= 0.35:
         return text
     active = active_provider()[0]

@@ -2049,3 +2049,15 @@ def test_cloudflare_verify_logs_in_with_the_token_endpoint(agent, monkeypatch, t
     r = mod.cloudflare_verify(p, "tok")
     assert r["ok"] and seen["url"].endswith("/user/tokens/verify") and seen["auth"] == "Bearer tok"
     assert "tok" not in r["detail"]  # the token is never printed
+
+
+def test_explain_error_is_plain_hebrew_and_400_is_a_provider_problem(agent):
+    mod, _ = agent
+    raw = 'API Error: 400 {"errors": [{"message": "AiError: Bad input: Error: oneOf at / not met"}]}'
+    assert mod.classify_down(raw) == ("rejected", 30)  # no longer delivered as if it were an answer
+    out = mod.ensure_hebrew(raw)
+    assert out.startswith("⚠️ *לא הצלחתי לענות לך הפעם.*") and "*מה קרה:*" in out and "*מה אפשר לעשות:*" in out and "קוד 400" in out
+    assert "Failed to authenticate: OAuth session expired" in mod.explain_error("Failed to authenticate: OAuth session expired and could not be refreshed")
+    assert "ההתחברות של Claude" in mod.explain_error("Failed to authenticate: OAuth session expired")
+    assert "היתרה" in mod.explain_error("API Error: 402 insufficient balance", "gemini")
+    assert mod.ensure_hebrew("שלום, הכול בסדר") == "שלום, הכול בסדר"
