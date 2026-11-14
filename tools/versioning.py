@@ -1,11 +1,14 @@
-"""The bridge's version-numbering rules, in ONE place (owner 14.11).
+"""The bridge's version-numbering LAW, in ONE place (owner 14.11 13:58). Nobody changes it: not an AI, not a command, not a flag.
 
-The rule (as the project started it): one number per release, one patch at a time (1.1.1 -> 1.1.2 -> 1.1.3 ...). Never skip a number, never
-step back, never reuse a number that already has a tag, and the dashboard app carries the same number as the tool. A different number needs
-the owner's explicit approval, given through the bridge (`/גרסה אשר X.Y.Z` in WhatsApp) — an AI cannot change how the bridge numbers itself.
+THE LAW: every release gets the next number, and only that number. A release may hold many fixes and features.
+  - The last part goes up by one: X.Y.1, X.Y.2 ... X.Y.10.
+  - After X.Y.10 the next release is X.(Y+1).0, and then X.(Y+1).1 ... X.(Y+1).10 again (as the project did: 1.0.x -> 1.1.0).
+  - Never skip, never step back, never reuse a number that already has a tag (even if its build failed).
+  - The dashboard app always carries the tool's number.
+There are no exceptions and no approvals: the next number is computed, never chosen.
 
-  tools/release.py and tools/release_dash.py ask this module before they touch any version file.
-  uv run --no-project python tools/versioning.py next | current | check X.Y.Z | approve X.Y.Z
+  tools/release.py, tools/release_dash.py and the agent's nightly auto_release all take the number from here.
+  uv run --no-project python tools/versioning.py next | current | check X.Y.Z
 """
 import datetime as dt
 import json
@@ -15,7 +18,6 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-APPROVAL = os.path.join(ROOT, "agent", "version_approval.json")
 VER_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
 
@@ -53,16 +55,17 @@ def current():
     return known()[-1] if known() else "1.0.0"
 
 
+PATCH_MAX = 10  # owner 14.11: X.Y.1 ... X.Y.10, then X.(Y+1).0
+
+
 def next_version():
     a, b, c = _t(current())
-    return f"{a}.{b}.{c + 1}"
+    return f"{a}.{b + 1}.0" if c >= PATCH_MAX else f"{a}.{b}.{c + 1}"
 
 
 def approved():
-    try:
-        return json.load(open(APPROVAL, encoding="utf-8")).get("version")
-    except (OSError, ValueError):
-        return None
+    """No exceptions exist (owner 14.11): kept only so older callers do not break."""
+    return None
 
 
 def check(ver):
@@ -73,10 +76,10 @@ def check(ver):
         return f"הגרסה {ver} כבר קיבלה תג ופורסמה (או נכשלה בבנייה): אי אפשר להשתמש בה שוב. הגרסה הבאה היא {next_version()}"
     if _t(ver) <= _t(current()):
         return f"הגרסה {ver} לא גבוהה מהנוכחית ({current()}). הגרסה הבאה היא {next_version()}"
-    if ver == next_version() or ver == approved():
+    if ver == next_version():
         return ""
-    return (f"חוק הגשר: תיקון אחד בכל שחרור. אחרי {current()} באה {next_version()}, לא {ver}. "
-            f"חריגה דורשת אישור של יקיר בווצאפ: /גרסה אשר {ver}")
+    return (f"חוק הגרסאות של הגשר: אחרי {current()} באה {next_version()}, ורק היא (X.Y.1 עד X.Y.10, ואחריה X.Y+1.0). "
+            f"{ver} נדחתה. לחוק אין חריגות.")
 
 
 def check_dash(ver):
@@ -86,19 +89,13 @@ def check_dash(ver):
 
 
 def approve(ver):
-    if not VER_RE.match(ver or "") or _t(ver) <= _t(current()):
-        return False
-    json.dump({"version": ver, "at": dt.datetime.now().isoformat(timespec="seconds"), "by": "owner (/גרסה אשר)"}, open(APPROVAL, "w", encoding="utf-8"))
-    return True
+    """No exceptions exist (owner 14.11): always refused."""
+    return False
 
 
 def consume(ver):
-    """After a release: an approval is good for one release only."""
-    if approved() == ver:
-        try:
-            os.remove(APPROVAL)
-        except OSError:
-            pass
+    """Nothing to consume: there are no approvals any more."""
+    return None
 
 
 if __name__ == "__main__":
@@ -111,7 +108,5 @@ if __name__ == "__main__":
         why = check(sys.argv[2])
         print(why or "ok")
         sys.exit(1 if why else 0)
-    elif cmd == "approve":
-        sys.exit(0 if approve(sys.argv[2]) else 1)
     else:
-        sys.exit("usage: versioning.py next | current | check X.Y.Z | approve X.Y.Z")
+        sys.exit("usage: versioning.py next | current | check X.Y.Z")

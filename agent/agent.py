@@ -625,9 +625,7 @@ def auto_release():
     if not subjects:
         log("auto_release: nothing new since", last)
         return
-    cur = open(os.path.join(ROOT, "VERSION")).read().strip()
-    a, b, c = (int(x) for x in cur.split("."))
-    ver = f"{a}.{b}.{c + 1}"
+    ver = versioning_mod().next_version()  # owner 14.11: the number comes only from the law in tools/versioning.py
     notes = os.path.join(HERE, "release-notes.tmp")
     with open(notes, "w", encoding="utf-8") as f:
         f.write("\n".join("- " + s[:160] for s in subjects[:20]) + "\n")
@@ -3322,13 +3320,13 @@ def owner_command(text, chat=None):
     if re.match(r"^/\s*(חשבונות|חשבון|accounts)\s*$", text.strip()):  # owner 14.11: who is on which account, on which AI
         return accounts_text()
     m = re.match(r"^/\s*(גרסה|version)(?:\s+אשר\s+(\d+\.\d+\.\d+))?\s*$", text.strip())
-    if m:  # owner 14.11: the version rules live in tools/versioning.py; an exception needs this approval
+    if m:  # owner 14.11 13:58: the version law lives in tools/versioning.py and has no exceptions
         v = versioning_mod()
+        law = ("החוק (קבוע, בלי חריגות): כל שחרור מקבל את המספר הבא, ושחרור יכול להכיל הרבה תיקונים. "
+               "X.Y.1 עד X.Y.10, ואחריה X.Y+1.0. לא מדלגים, לא חוזרים אחורה, לא משתמשים שוב בתג; האפליקציה נושאת את אותו מספר.")
         if m.group(2):
-            return f"✅ אושרה חריגה חד-פעמית: שחרור {m.group(2)}" if v.approve(m.group(2)) else f"⚠️ אי אפשר לאשר {m.group(2)}: לא גבוהה מהנוכחית ({v.current()})"
-        return (f"🔖 גרסה נוכחית: {v.current()} · הבאה לפי החוק: *{v.next_version()}*\n"
-                "החוק: תיקון אחד בכל שחרור, בלי לדלג ובלי להשתמש שוב בתג שפורסם; האפליקציה נושאת את אותו מספר.\n"
-                "חריגה: /גרסה אשר X.Y.Z")
+            return f"⛔ אין חריגות לחוק הגרסאות. אחרי {v.current()} באה {v.next_version()}.\n{law}"
+        return f"🔖 גרסה נוכחית: {v.current()} · הבאה לפי החוק: *{v.next_version()}*\n{law}"
     m = re.match(r"^/\s*(ספק|provider)(?:\s+(\S+))?(?:\s+(\S+))?\s*$", text.strip())
     if m:  # owner 13.11: the bridge's AI provider (the same as the provider node of the legend in the dashboard)
         if not m.group(2):
