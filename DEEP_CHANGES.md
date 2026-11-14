@@ -4,16 +4,16 @@
 
 ## 0. נקודת הגיבוי (נוצרה 14.11.2026 13:40)
 - **בגיט:** התג `backup-2026-11-14-pre-deep-change` מצביע על הקומיט `72cd2a2`, ונשמר ב-hub. באותו רגע שני המחשבים (נייח YB-PC-HW ולפטופ 4-MINE) היו על `72cd2a2` = `hub/main`. השחרור האחרון שפורסם: `v1.1.2`.
-- **קבצי גיבוי בכל מחשב:** `C:\Users\walla\WhatsApp-Backup\code\2026-11-14_1340_pre-deep-change\`
+- **קבצי גיבוי בכל מחשב:** `%USERPROFILE%\WhatsApp-Backup\code\2026-11-14_1340_pre-deep-change\`
   - `whatsapp-mcp-all.bundle`: כל המאגר, כל הענפים והתגים (`git bundle verify` עבר בשני המחשבים).
   - `personal-config-home-secrets.zip`: מה שלא נמצא בגיט: `agent/*.json` (הגדרות, ספקים, קבוצות), `agent/home` (כללים, מילון, handoff), `secrets/`, `whatsapp-bridge/store/*.json` (מדיניות שליחה). המסדים (`messages.db`, `agent.db`) מגובים בגיבוי הלילי הרגיל.
-- **חזרה לנקודה:** `git -C C:/Users/walla/whatsapp-mcp checkout main && git reset --hard backup-2026-11-14-pre-deep-change`. זו פעולה הרסנית: רק באישור מפורש של יקיר. אם המאגר נפגע: `git clone <bundle> whatsapp-mcp-restore`.
+- **חזרה לנקודה:** `git -C ~/whatsapp-mcp checkout main && git reset --hard backup-2026-11-14-pre-deep-change`. זו פעולה הרסנית: רק באישור מפורש של יקיר. אם המאגר נפגע: `git clone <bundle> whatsapp-mcp-restore`.
 
 ## 1. ⚠️ השחרור הלילי: הסכנה הכי גדולה בשינוי עומק
 - **המקור:** `agent/agent.py` → `auto_release()`. בכל לילה ב-23:30, המחשב שמוגדר `auto_release: true` ב-`agent/config.json` מפרסם ל-GitHub כל מה שיש ב-`hub/main` כגרסת תיקון הבאה (`tools/release.py`: בדיקות, סריקה, תג, דחיפה). ב-23:50 העדכון האוטומטי מתקין אותה בכל המחשבים.
 - **המשמעות:** שינוי עומק שנדחף ל-`main` באמצע העבודה יפורסם ויותקן הלילה, גם אם הוא לא גמור.
 - **הכלל:** שינוי עומק מתבצע **בענף נפרד** (למשל `deep/<נושא>`), שנדחף ל-hub: `git push hub deep/<נושא>`. מיזוג ל-`main` רק אחרי שהכול עובד ונבדק, ורק באישור יקיר. `auto_release` משחרר רק את `main` (הוא בודק את `HEAD` של המחשב שמשחרר, והמחשב הזה חייב להישאר על `main`).
-- **המחשב שמשחרר הוא הנייח (YB-PC-HW)** (יקיר 14.11 14:18; `"auto_release": true` ב-`agent/config.json` שלו, ובלפטופ `false`). `_hub_sync()` ממזג את `hub/main` לתוך הענף שפתוח כרגע ומשחרר אותו. לכן בנייח, בתיקייה `C:\Users\walla\whatsapp-mcp`, **לא עוברים לענף של שינוי העומק**. עובדים בעותק נפרד: `git worktree add ../whatsapp-mcp-deep deep/<נושא>`. בתיקייה הזו גם אסור להשאיר שינויים לא שמורים בקבצי הכלי: השחרור הלילי מסרב לרוץ כשיש כאלה.
+- **המחשב שמשחרר הוא הנייח (YB-PC-HW)** (יקיר 14.11 14:18; `"auto_release": true` ב-`agent/config.json` שלו, ובלפטופ `false`). `_hub_sync()` ממזג את `hub/main` לתוך הענף שפתוח כרגע ומשחרר אותו. לכן בנייח, בתיקייה `%USERPROFILE%\whatsapp-mcp`, **לא עוברים לענף של שינוי העומק**. עובדים בעותק נפרד: `git worktree add ../whatsapp-mcp-deep deep/<נושא>`. בתיקייה הזו גם אסור להשאיר שינויים לא שמורים בקבצי הכלי: השחרור הלילי מסרב לרוץ כשיש כאלה.
 - לא מכבים את `auto_release` בלי אישור יקיר.
 
 ## 2. גרסאות: אסור לקבוע מספר בעצמך
@@ -26,8 +26,8 @@
 
 ## 3. סנכרון בין שני המחשבים
 - **המקור:** `agent/home/CLAUDE.md`, "פיתוח הכלי — מאגר קוד משותף".
-- מקור האמת: ה-remote `hub` (`C:/Users/walla/whatsapp-mcp-hub.git` בלפטופ; בנייח דרך ssh `4-MINE`).
-- לפני כל שינוי: `git -C C:/Users/walla/whatsapp-mcp pull --ff-only`. אם זה לא fast-forward: עצור ושאל את יקיר. לא ממזגים בכוח.
+- מקור האמת: ה-remote `hub` (`~/whatsapp-mcp-hub.git` בלפטופ; בנייח דרך ssh `4-MINE`).
+- לפני כל שינוי: `git -C ~/whatsapp-mcp pull --ff-only`. אם זה לא fast-forward: עצור ושאל את יקיר. לא ממזגים בכוח.
 - אחרי כל קומיט: `git push hub <ענף>`. ב-`main`: `git push hub HEAD:main`, ואז `git pull --ff-only` גם במחשב השני.
 - לא בונים את אותו פיצ'ר בשני המחשבים: לפני שמתחילים, `git log hub/main -10` ו-`TODO.md`.
 - `git add` רק לקבצים ששינית. לא `git add .` ולא תיקיות שלמות (`AGENTS.md`).
