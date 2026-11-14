@@ -287,7 +287,7 @@ function drawOutbox(scroll) {
   const chat = $("chat"); chat.querySelectorAll(".bubble.outbox").forEach(x => x.remove());
   const shown = new Set((last && last.conversation || []).filter(m => !m.tool).map(m => (m.content || "").trim()));
   outbox = outbox.filter(x => !(x.state === "sent" && shown.has(x.text)) && Date.now() - Date.parse(x.at) < 5 * 60000);
-  outbox.filter(x => x.chat === curChat).forEach(x => chat.insertAdjacentHTML("beforeend", `<div class="bubble me outbox ${x.state}"><span class="who">${L("אתה", "You")}</span>${esc(x.text)}<span class="meta">${x.state === "sending" ? L("⏳ שולח…", "⏳ sending…") : L("✓ נשלח", "✓ sent")}</span></div>`));
+  outbox.filter(x => x.chat === curChat).forEach(x => chat.insertAdjacentHTML("beforeend", `<div class="bubble me outbox ${x.state}"><span class="who">${L("אתה", "You")}</span>${esc(x.text)}<span class="meta">${x.state === "sending" ? L("⏳ שולח…", "⏳ sending…") : L("📥 התקבל · נכנס לתור", "📥 received · queued")}</span></div>`));
   if (scroll) chat.scrollTop = chat.scrollHeight;
 }
 
@@ -536,6 +536,15 @@ function render(d) {
   const statusHtml = (m, i) => (i !== lastStatus || !steps.length)
     ? `<div class="bubble tool status old"><span class="st-head">${wa(m.content)}</span><span class="meta">${fmt(m.timestamp)}</span></div>`
     : `<div class="bubble tool status">${statusBody()}<span class="meta">${fmt(m.timestamp)}</span></div>`;
+  // owner 14.11: every message of his says the agent got it and where it stands, so he never wonders if it was received
+  const receipt = m => {
+    const c = m.cmd; if (!c || m.tool) return "";
+    const R = { pending: c.ahead ? L(`📥 התקבל · בתור, ${c.ahead} לפניה`, `📥 received · queued, ${c.ahead} ahead`) : L("📥 התקבל · מתחיל", "📥 received · starting"),
+      running: L("🧠 התקבל · עובד על זה…", "🧠 received · working on it…"), waiting_limit: L("⏸️ התקבל · ממתין למכסה", "⏸️ received · waiting for quota"),
+      waiting_approval: L("✋ התקבל · ממתין לאישור שלך", "✋ received · waiting for your OK"), done: L("✓✓ נענה", "✓✓ answered"),
+      cancelled: L("✖ בוטל", "✖ cancelled"), interrupted: L("⚠️ נקטע", "⚠️ interrupted") };
+    return `<span class="rcpt rcpt-${esc(c.st)}">${R[c.st] || esc(c.st)}</span> · `;
+  };
   const bubbleHtml = m => {
     const txt = m.content || (m.media_type ? "[" + (MT[m.media_type] || m.media_type) + "]" : "");
     const long = (txt.length > 700 || txt.split("\n").length > 14) && !expanded.has(String(m.id));
@@ -543,7 +552,7 @@ function render(d) {
     const canFold = txt.length > 700 || txt.split("\n").length > 14;
     return `<div class="bubble ${m.tool ? "tool" : "me"}" data-k="${esc(m.id)}"${m.is_from_me && !String(m.id).startsWith("L") ? ` data-wa="${esc(m.id)}"` : ""}><span class="who">${m.tool ? L("🤖 הכלי", "🤖 Tool") : L("אתה", "You")}${m.src === "pc" ? `<span class="pc-tag" title="${L("נכתב בלוח הבקרה במחשב", "typed in the dashboard on the PC")}">💻</span>` : ""}</span>` +
       `<div class="bt${long ? " fold" : ""}">${wa(txt)}</div>${canFold ? `<button class="more" type="button">${long ? L("הצג עוד ▾", "Show more ▾") : L("הצג פחות ▴", "Show less ▴")}</button>` : ""}` +
-      `${files ? `<div class="files">${files}</div>` : ""}<span class="meta">${fmt(m.timestamp)}</span></div>`;
+      `${files ? `<div class="files">${files}</div>` : ""}<span class="meta">${receipt(m)}${fmt(m.timestamp)}</span></div>`;
   };
   let html = conv.map((m, i) => isStatus(m) ? statusHtml(m, i) : bubbleHtml(m)).join("");
   // a PC-only run has no WhatsApp status message: show its steps as a bubble at the end of the conversation

@@ -2596,10 +2596,13 @@ def enqueue_command(msg_id, text, when, chat=None):
         threading.Thread(target=side_answer, args=(chat, sm.group(1).strip(), msg_id), daemon=True).start()
         return
     with adb() as db:
-        db.execute("INSERT INTO commands (msg_id, text, at, chat_jid, source, sync) VALUES (?, ?, ?, ?, 'wa', 0)", (msg_id, text, when, chat))
+        cid = db.execute("INSERT INTO commands (msg_id, text, at, chat_jid, source, sync) VALUES (?, ?, ?, ?, 'wa', 0)", (msg_id, text, when, chat)).lastrowid
+        ahead = db.execute("SELECT COUNT(*) FROM commands WHERE id < ? AND status IN ('pending', 'running')", (cid,)).fetchone()[0]
     _ctx.chat, _ctx.src, _ctx.sync = chat, "wa", 0
     try:
-        react(msg_id, "👀")  # immediate "got it"
+        react(msg_id, "👀" if not ahead else "⏳")  # immediate "got it"
+        if ahead and CFG.get("queue_receipt", True):  # owner 14.11: behind other work, say so in words, so he knows it was received
+            reply(f"📥 קיבלתי. בתור לפניה: {ahead}. אענה כשאגיע אליה.", quoted=msg_id)
     finally:
         _ctx.chat = None
     _command_signal.set()

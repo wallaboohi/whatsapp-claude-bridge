@@ -510,3 +510,10 @@ p.help { margin: 4px 0 0; }
 .ai-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; max-width: 340px; }
 .ai-opt.on { background: var(--brand); color: #fff; border-color: var(--brand); }
 .ai-opt:disabled { opacity: .45; }
+
+/* owner 14.11: receipt under each of his messages (received / queued / working / answered) */
+.bubble .rcpt { font-weight: 600; }
+.bubble .rcpt-running, .bubble .rcpt-pending { color: var(--brand); }
+.bubble .rcpt-running { animation: rcptPulse 1.6s ease-in-out infinite; }
+.bubble .rcpt-waiting_limit, .bubble .rcpt-waiting_approval, .bubble .rcpt-interrupted { color: #b45309; }
+@keyframes rcptPulse { 50% { opacity: .45; } }

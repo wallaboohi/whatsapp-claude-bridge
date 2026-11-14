@@ -974,7 +974,33 @@ def conversation_of(chat, c, p):
         msgs.append({"id": f"L{r['id']}", "timestamp": str(r["at"]).replace("T", " "), "is_from_me": 1, "content": r["text"],
                      "media_type": "", "tool": r["role"] == "tool", "src": "pc", "files": files})
     msgs.sort(key=lambda m: str(m["timestamp"])[:19])
-    return msgs[-80:]
+    msgs = msgs[-80:]
+    try:
+        mark_received(chat, msgs, p)
+    except Exception as e:
+        print("receipts failed", e, file=sys.stderr)
+    return msgs
+
+
+def mark_received(chat, msgs, p):
+    """Owner 14.11: every message of his shows that the agent got it and where it stands (in the queue / working / answered),
+    so he never wonders whether it was received. Matched to its command: WhatsApp by message id, dashboard by the second it was typed."""
+    cmds = rows(p["agent"], "SELECT id, msg_id, status, source FROM commands WHERE chat_jid = ? ORDER BY id DESC LIMIT 120", (chat,))
+    if not cmds:
+        return
+    open_ids = [r["id"] for r in rows(p["agent"], "SELECT id FROM commands WHERE status IN ('pending', 'running', 'waiting_limit', 'waiting_approval') ORDER BY id")]
+    by_key = {}
+    for r in cmds:
+        k = r["msg_id"] or ""
+        if k.startswith("pc-") and k[3:].isdigit():
+            k = "pc@" + dt.datetime.fromtimestamp(int(k[3:]) / 1000).isoformat(timespec="seconds").replace("T", " ")
+        by_key.setdefault(k, r)
+    for m in msgs:
+        if m.get("tool"):
+            continue
+        r = by_key.get("pc@" + str(m["timestamp"])[:19]) if m.get("src") == "pc" else by_key.get(str(m["id"]))
+        if r:
+            m["cmd"] = {"st": r["status"], "ahead": sum(1 for i in open_ids if i < r["id"])}
 
 
 _schema_ok = False

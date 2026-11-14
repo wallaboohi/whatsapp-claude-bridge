@@ -68,6 +68,18 @@ def test_owner_commands_are_durable(agent, monkeypatch):
         assert db.execute("SELECT status FROM commands WHERE msg_id = 'M1'").fetchone()[0] == "pending"
 
 
+def test_queued_message_gets_a_receipt(agent, monkeypatch):
+    """Owner 14.11: a message behind other work is answered at once with "received, N ahead"; the first one only gets 👀."""
+    mod, _ = agent
+    reacts, said = [], []
+    monkeypatch.setattr(mod, "react", lambda mid, e: reacts.append((mid, e)))
+    monkeypatch.setattr(mod, "reply", lambda text, quoted=None: said.append((text, quoted)))
+    mod.enqueue_command("R1", "first", "2026-11-14 12:00")
+    mod.enqueue_command("R2", "second", "2026-11-14 12:01")
+    assert reacts == [("R1", "👀"), ("R2", "⏳")]
+    assert len(said) == 1 and "בתור לפניה: 1" in said[0][0] and said[0][1] == "R2"
+
+
 def test_strings_exist_in_both_languages(agent):
     mod, _ = agent
     src = open(os.path.join(HERE, "agent.py"), encoding="utf-8").read()
