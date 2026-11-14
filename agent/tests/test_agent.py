@@ -338,6 +338,7 @@ def test_scheduled_job_waits_for_the_limit(agent, monkeypatch):
     sent, ran = [], []
     monkeypatch.setattr(mod, "send", lambda chat, text, media=None, quoted=None: sent.append(text) or True)
     monkeypatch.setattr(mod, "send_outbox", lambda *a: None)
+    monkeypatch.setattr(mod, "failover_target", lambda: None)  # nobody else can answer: the job waits for the quota (with a failover target it would run)
     mod.kv_set("limit_until", (mod.dt.datetime.now() + mod.dt.timedelta(minutes=30)).isoformat(timespec="seconds"))
     mod.run_job({"name": "דוח לילה", "prompt": "x"}, "🌙")
     assert any("מכסת השימוש" in t for t in sent) and not any("נכשלה" in t for t in sent)
@@ -540,6 +541,7 @@ def test_limit_hit_during_a_run_parks_the_command(agent, monkeypatch):
 def test_background_runs_skip_quietly_during_the_limit(agent, monkeypatch):
     mod, _ = agent
     import pytest as _pt
+    monkeypatch.setattr(mod, "failover_target", lambda: None)  # nobody else can answer: background runs skip quietly
     mod.kv_set("limit_until", (mod.dt.datetime.now() + mod.dt.timedelta(minutes=5)).isoformat(timespec="seconds"))
 
     def boom(*a, **k):
@@ -1594,9 +1596,10 @@ def test_edit_pairs_learns_word_swaps(agent):
     assert mod.edit_pairs("אותו דבר", "אותו דבר") == []
 
 
-def test_bridge_rules_in_every_conversation(agent, monkeypatch):
+def test_bridge_rules_in_every_conversation(agent, monkeypatch, tmp_path):
     """Owner 11.11: the bridge-wide rules (home/bridge_rules.md) reach every conversation's prompt."""
     agent, _ = agent
+    monkeypatch.setattr(agent, "HOME", str(tmp_path))  # owner 14.11: never write the sample rule into the real agent/home (it became a rule in every prompt)
     os.makedirs(agent.HOME, exist_ok=True)  # home/ is personal and not in git: a clean checkout (CI) has no such folder
     with open(os.path.join(agent.HOME, agent.BRIDGE_RULES), "w", encoding="utf-8") as f:
         f.write("- כלל לדוגמה")

@@ -40,12 +40,28 @@ svg.wires path { fill: none; stroke: var(--muted); stroke-opacity: .45; stroke-w
 .ai button:hover { border-color: var(--brand); }
 .ai .box { font-size: .76rem; margin-top: 6px; background: var(--surface-2); border-radius: 8px; padding: 6px 8px; }
 .ai .box a { color: var(--brand); word-break: break-all; }
+.layers { display: flex; gap: 10px; flex-wrap: wrap; padding: 6px 20px 0; }
+.lcard { font: inherit; text-align: right; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 8px 12px; cursor: pointer; min-width: 150px; color: var(--text); }
+.lcard:hover { border-color: var(--brand); outline: 2px solid color-mix(in srgb, var(--brand) 25%, transparent); }
+.lcard b { display: block; font-size: .85rem; } .lcard span { font-size: .76rem; color: var(--muted); } .lcard i { font-style: normal; font-size: .72rem; color: var(--brand); display: block; margin-top: 2px; }
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 20; display: flex; align-items: flex-start; justify-content: center; padding: 28px 12px; overflow: auto; }
+.modal[hidden] { display: none; }
+.mbox { background: var(--surface); border-radius: 14px; padding: 16px 18px; width: min(680px, 96vw); box-shadow: 0 10px 40px rgba(0,0,0,.3); position: relative; }
+.mbox h3 { margin: 0 0 8px; } .mclose { position: absolute; inset-inline-start: 12px; top: 12px; font: inherit; border: 1px solid var(--line); background: var(--surface-2); border-radius: 8px; cursor: pointer; padding: 2px 9px; color: var(--text); }
+.sec { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin: 8px 0; font-size: .82rem; }
+.sec .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
+.sec select, .sec input[type=text] { font: inherit; font-size: .8rem; padding: 3px 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); color: var(--text); min-width: 0; }
+.sec button { font: inherit; font-size: .78rem; padding: 3px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); cursor: pointer; }
+.sec button.primary { background: var(--brand); color: #fff; border-color: var(--brand); }
+.sec .msg { font-size: .78rem; margin-top: 6px; min-height: 1em; } .sec .hint { color: var(--muted); font-size: .76rem; }
 </style>
 </head>
 <body>
 <div class="top"><h2>🗺️ מפת המערכת</h2><span class="note" id="at"></span></div>
 <p class="legend">המנוע (יכולות, שיטות וכלים) נשמר בגשר ומשותף לשני המחשבים · המידע של כל פרויקט נשמר בשיחה שלו · לחיצה על שיחה פותחת אותה, על 📜 את כללי הבסיס, על מאגר את התיקייה.</p>
+<div class="layers" id="layers"></div>
 <div class="map" id="map"><svg class="wires" id="wires"></svg></div>
+<div class="modal" id="modal" hidden><div class="mbox"><button class="mclose" id="mclose">✕</button><h3 id="mtitle"></h3><div id="mbody"></div></div></div>
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -58,6 +74,7 @@ async function draw() {
   const m = await (await fetch("/system_map")).json();
   if (m.error) { $("map").insertAdjacentHTML("beforeend", `<p>${esc(m.error)}</p>`); return; }
   $("at").textContent = "עודכן " + new Date(m.at).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" });
+  MAP = m; layersRow(m);
   const machines = m.machines.map((x, i) => `
     <div class="node machine ${x.self ? "self" : ""}" data-wire="m${i}">
       <b>${x.self ? "🖥️" : "💻"} ${esc(x.name)}</b>${dot(x.online ? "ok" : "bad")}
@@ -93,6 +110,92 @@ async function draw() {
   wires(m);
 }
 
+
+let MAP = null;
+const LAYERS = [["channels", "👤", "ערוצים וקבוצות"], ["bridge", "🌉", "הגשר"], ["engine", "⚙️", "מנוע הסוכן"], ["provider", "🧠", "מודל וספק"], ["account", "🔑", "חשבון Claude"]];
+function layersRow(m) {  // owner 14.11: one card per layer of the bridge; a click opens a window to replace that layer
+  const me = m.machines[0] || {}, a = me.ai || {}, e = a.engine || {}, c = a.claude || {};
+  const val = {
+    channels: `${m.machines.reduce((n, x) => n + x.conversations.length, 0)} שיחות ב-${m.machines.length} מחשבים`,
+    bridge: m.machines.map(x => `${x.name}: ${x.bridge_version || "?"}`).join(" · "),
+    engine: (e.labels || {})[e.engine] || "Claude Code",
+    provider: `${a.where === "local" ? "🏠" : "☁️"} ${a.short || "—"}${a.model ? " · " + a.model : ""}`,
+    account: c.email || "לא ידוע",
+  };
+  $("layers").innerHTML = LAYERS.map(([k, ic, t]) => `<button class="lcard" data-layer="${k}"><b>${ic} ${t}</b><span>${esc(val[k])}</span><i>החלפה ◂</i></button>`).join("");
+  document.querySelectorAll(".lcard").forEach(b => b.onclick = () => openLayer(b.dataset.layer));
+}
+function closeLayer() { $("modal").hidden = true; }
+function openLayer(kind) {
+  const m = MAP, t = LAYERS.find(l => l[0] === kind);
+  $("mtitle").textContent = t[1] + " " + t[2];
+  let h = "";
+  if (kind === "channels") {
+    h = `<p class="hint">הקבוצות והשיחות שהגשר עונה בהן, בכל מחשב. לחיצה פותחת אותן בלוח; חיבור, ניתוק ושינוי שם דרך המקרא.</p>` +
+      m.machines.map(x => `<div class="sec"><b>${x.self ? "🖥️" : "💻"} ${esc(x.name)}</b>${x.conversations.map(c => `<div class="row"><span>💬 ${esc(c.name)} <small>· ${esc(PURPOSE[c.purpose] || c.purpose)}</small></span></div>`).join("") || " · אין שיחות"}</div>`).join("") +
+      `<div class="row"><button class="primary" onclick="location.href='legend.html'">פתח את המקרא (שינוי קבוצות)</button></div>`;
+  } else if (kind === "bridge") {
+    h = `<p class="hint">הגשר (Go) מחבר את ווצאפ; הסוכן (Python) מריץ את השיחות. הפעלה מחדש של כל אחד בנפרד, בכל מחשב.</p>` +
+      m.machines.map((x, i) => `<div class="sec" data-i="${i}"><b>${x.self ? "🖥️" : "💻"} ${esc(x.name)}</b> · גשר ${esc(x.bridge_version || "?")} ${dot(x.bridge ? "ok" : "bad")} · סוכן ${dot(x.agent ? "ok" : "bad")} · לוח ${esc(x.dash_version)} · קוד ${esc(x.git)}
+        <div class="row"><button data-act="restart_agent">הפעל מחדש את הסוכן</button><button data-act="restart_bridge">הפעל מחדש את הגשר</button></div><div class="msg"></div></div>`).join("");
+  } else if (kind === "engine") {
+    h = `<p class="hint">המנוע הוא התוכנה שמריצה את השיחה ואת הכלים. Claude Code הוא המקורי; Qwen Code חופשי, עובד עם כל ספק בפורמט OpenAI (גם מקומי) וללא חשבון Claude. כשמכסת Claude נגמרת הגשר עובר אוטומטית לבינה אחרת, לפי ההגדרה למטה.</p>` +
+      m.machines.map((x, i) => { const e = (x.ai || {}).engine || {}, fo = e.failover || {}, lb = e.labels || {}, rd = e.ready || {};
+        const opts = sel => Object.keys(lb).map(k => `<option value="${k}" ${k === sel ? "selected" : ""} ${rd[k] ? "" : "disabled"}>${esc(lb[k])}${rd[k] ? "" : " (לא מותקן)"}</option>`).join("");
+        return `<div class="sec" data-i="${i}"><b>${x.self ? "🖥️" : "💻"} ${esc(x.name)}</b> · מנוע נוכחי: <b>${esc(lb[e.engine] || "Claude Code")}</b>
+          <div class="row"><select class="eng">${opts(e.engine)}</select><button class="primary" data-act="engine_set">החלף מנוע</button></div>
+          <div class="row"><label><input type="checkbox" class="fo-on" ${fo.on_limit === false ? "" : "checked"}> כשמכסת Claude נגמרת: עבור אוטומטית</label>
+          <span>במנוע</span><select class="fo-eng">${opts(fo.engine)}</select><button data-act="failover_set">שמור</button></div><div class="msg"></div></div>`; }).join("");
+  } else if (kind === "provider") {
+    const provs = (m.ai || {}).providers || [];
+    h = `<p class="hint">הספק הוא מי שמריץ את המודל (🏠 מקומי על המחשבים שלך, ☁️ אצל הספק). מפתחות וספקים חדשים: במקרא.</p>` +
+      m.machines.map((x, i) => { const a = x.ai || {};
+        return `<div class="sec" data-i="${i}"><b>${x.self ? "🖥️" : "💻"} ${esc(x.name)}</b> · פעיל: ${a.where === "local" ? "🏠" : "☁️"} <b>${esc(a.short || "—")}</b> ${esc(a.model || "")}
+          <div class="row"><select class="prov">${provs.map(p => `<option value="${esc(p.id)}" ${p.id === a.provider ? "selected" : ""}>${p.where === "local" ? "🏠" : "☁️"} ${esc(p.label)}${p.ready ? "" : " (לא זמין)"}</option>`).join("")}</select>
+          <select class="mdl"><option value="">מודל ברירת מחדל</option></select><button class="primary" data-act="provider_set">החלף</button></div><div class="msg"></div></div>`; }).join("") +
+      `<div class="row"><button onclick="location.href='legend.html'">מקרא הגשר: מפתחות וספק חדש</button></div>`;
+  } else if (kind === "account") {
+    h = `<p class="hint">חשבון ה-Claude שכל מחשב מחובר אליו. החלפה: קישור התחברות, ואז מדביקים את הקוד.</p>` +
+      m.machines.map((x, i) => { const c = (x.ai || {}).claude || {};
+        return `<div class="sec" data-i="${i}"><b>${x.self ? "🖥️" : "💻"} ${esc(x.name)}</b> · 🔑 ${c.email ? `<b>${esc(c.email)}</b> · ${esc(c.plan || "")}${c.org ? " · " + esc(c.org) : ""}` : "לא ידוע"}
+          <div class="row"><button class="primary" data-act="claude_login_start">החלף חשבון Claude</button></div><div class="msg"></div></div>`; }).join("");
+  }
+  $("mbody").innerHTML = h;
+  $("modal").hidden = false;
+  wireModal(kind);
+}
+function wireModal(kind) {
+  const provs = (MAP.ai || {}).providers || [];
+  document.querySelectorAll("#mbody .sec[data-i]").forEach(sec => {
+    const i = +sec.dataset.i, msg = sec.querySelector(".msg"), say = h => { msg.innerHTML = h; };
+    const prov = sec.querySelector(".prov");
+    if (prov) {  // the models of the chosen provider
+      const fill = () => { const p = provs.find(x => x.id === prov.value) || {}; sec.querySelector(".mdl").innerHTML = `<option value="">מודל ברירת מחדל</option>` + (p.models || []).map(mm => `<option value="${esc(mm)}">${esc(mm)}</option>`).join(""); };
+      prov.onchange = fill; fill();
+    }
+    sec.querySelectorAll("[data-act]").forEach(b => b.onclick = async () => {
+      const act = b.dataset.act;
+      if ((act === "restart_agent" || act === "restart_bridge") && !confirm(act === "restart_bridge" ? "להפעיל מחדש את הגשר? ווצאפ יתחבר מחדש תוך כמה שניות." : "להפעיל מחדש את הסוכן אחרי התשובה שהוא עובד עליה?")) return;
+      if (act === "claude_login_start") {
+        if (!confirm("להתחבר ל-Claude עם חשבון אחר במחשב הזה? זה משפיע על כל השיחות שרצות עליו.")) return;
+        say("מכין קישור התחברות…"); const r = await machineAct(i, { do: "claude_login_start" });
+        if (r.error) return say("⚠️ " + esc(r.error));
+        say(`1. פתח את הקישור והתחבר עם החשבון הרצוי:<br><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.url.slice(0, 70))}…</a><br>2. הדבק כאן את הקוד שמוצג:<div class="row"><input type="text" class="code" dir="ltr"><button class="send">אשר</button></div>`);
+        msg.querySelector(".send").onclick = async () => { say("בודק…"); const r2 = await machineAct(i, { do: "claude_login_code", code: msg.querySelector(".code").value });
+          say(r2.error ? "⚠️ " + esc(r2.error) : `✅ מחובר עכשיו: <b>${esc(r2.account.email)}</b> · ${esc(r2.account.plan)}`); if (!r2.error) setTimeout(draw, 2500); };
+        return;
+      }
+      const body = { do: act };
+      if (act === "engine_set") body.engine = sec.querySelector(".eng").value;
+      if (act === "failover_set") { body.on_limit = sec.querySelector(".fo-on").checked; body.engine = sec.querySelector(".fo-eng").value; }
+      if (act === "provider_set") { body.provider = sec.querySelector(".prov").value; body.model = sec.querySelector(".mdl").value; }
+      say("מבצע…"); const r = await machineAct(i, body);
+      say(r.error ? "⚠️ " + esc(r.error) : "✅ בוצע" + (act === "provider_set" || act === "engine_set" ? ", תקף מההודעה הבאה" : "")); if (!r.error) setTimeout(draw, 1800);
+    });
+  });
+}
+$("mclose").onclick = closeLayer;
+$("modal").onclick = e => { if (e.target.id === "modal") closeLayer(); };
 const peerBase = i => i === 0 ? "" : "/peer/" + (i - 1);  // the first machine is this one
 async function machineAct(i, body) {
   try { return await (await fetch(peerBase(i) + "/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json(); }

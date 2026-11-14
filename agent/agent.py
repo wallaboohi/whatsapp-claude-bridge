@@ -906,26 +906,53 @@ def auto_pick(skip=()):
 
 
 def _run_auto(*a, **k):
-    """_run_claude; with provider "auto", a limit / billing / key / connection error moves on to the next provider of the ladder."""
+    """_run_claude; with provider "auto", a limit / billing / key / connection error moves on to the next provider of the ladder. Owner 14.11:
+    when Claude's own quota is used up (whatever provider is set) the run moves to the failover target (a free provider, on the engine chosen
+    for that case) instead of stopping the bridge."""
     tried = []
-    while True:
-        try:
-            return _run_claude(*a, **k)
-        except (ProviderDown, LimitHit, AuthError) as e:
-            name = getattr(_ctx, "provider_used", None)
-            if active_provider()[0] != "auto" or not name or name in tried:
-                raise
-            tried.append(name)
-            if isinstance(e, ProviderDown):
-                auto_cool(name, e.minutes, e.why)
-            elif isinstance(e, AuthError):
-                auto_cool(name, 120, "sign-in")
-            elif name != "claude":
-                auto_cool(name, 15, "limit")
-            nxt = auto_pick(tried)
-            if not nxt:
-                raise
-            log("auto:", name, "->", nxt)
+    try:
+        while True:
+            try:
+                return _run_claude(*a, **k)
+            except (ProviderDown, LimitHit, AuthError) as e:
+                if not _failover_step(e, tried):
+                    raise
+    finally:
+        _ctx.force_provider = _ctx.force_engine = None
+
+
+def _failover_step(e, tried):
+    """True when the failed run should be repeated on another provider (the choice is kept in _ctx.force_*)."""
+    active = active_provider()[0]
+    forced = getattr(_ctx, "force_provider", None)
+    name = getattr(_ctx, "provider_used", None)
+    if active == "claude" and not forced:  # Claude's own quota / sign-in failed: the failover target
+        if isinstance(e, (LimitHit, AuthError)) and limit_failover_cfg()["on_limit"]:
+            tgt = failover_target()
+            if tgt:
+                _ctx.force_engine, _ctx.force_provider = tgt
+                _ctx.failover_used = True
+                log("claude is capped: failing over to", tgt)
+                return True
+        return False
+    if active != "auto" and not forced:
+        return False
+    if not name or name in tried:
+        return False
+    tried.append(name)
+    if isinstance(e, ProviderDown):
+        auto_cool(name, e.minutes, e.why)
+    elif isinstance(e, AuthError):
+        auto_cool(name, 120, "sign-in")
+    elif name != "claude":
+        auto_cool(name, 15, "limit")
+    nxt = auto_pick(tried + ["claude"] if forced else tried)
+    if not nxt:
+        return False
+    if forced:
+        _ctx.force_provider = nxt
+    log("auto:", name, "->", nxt)
+    return True
 
 
 def provider_env(name=None, model=None):
@@ -1112,13 +1139,15 @@ def ai_tag(model=None):
     if not CFG.get("show_ai_tag", True):
         return ""
     name, _ = active_provider()
-    if name == "auto":
+    if name == "auto" or getattr(_ctx, "failover_used", False):
         name = getattr(_ctx, "provider_used", None) or auto_pick() or "claude"
     p = providers().get(name) or {}
     short = p.get("short") or (p.get("label") or name).split("·")[0].strip()
     m = effective_model(model)
     kind, place = where_of(name, m)
-    return f"🧠 {short}" + (f" · {model_he(m)}" if m else "") + (f" · 🏠 מקומי, {place}" if kind == "local" else " · ☁️ מרוחק (ענן)") + "\n"
+    eng = getattr(_ctx, "engine_used", "claude")
+    extra = (f" · מנוע {(ENGINES.get(eng) or {}).get('short', eng)}" if eng != "claude" else "") + (" · 🔁 מכסת Claude נגמרה" if getattr(_ctx, "failover_used", False) else "")
+    return f"🧠 {short}" + (f" · {model_he(m)}" if m else "") + (f" · 🏠 מקומי, {place}" if kind == "local" else " · ☁️ מרוחק (ענן)") + extra + "\n"
 
 
 SPEED_HINT = {"claude": "⚡ שניות עד דקה (מנוי)", "gemini": "⚡ שניות · מכסה יומית נמוכה", "groq": "⚡ שניות · עד 8,000 טוקנים לדקה: לשיחות קצרות",
@@ -1247,6 +1276,21 @@ def slow_reply(chat, word):
             return "✅ מאשר, מתחיל לעבוד."
         db.execute("UPDATE commands SET status = 'done' WHERE id = ?", (int(pid),))
     return "🛑 בוטל. לא התחלתי."
+
+
+def engines_text():
+    """Owner 14.11: the agent engines (what runs the conversation) and the failover settings."""
+    cur = active_engine()
+    fc = limit_failover_cfg()
+    lines = ["*⚙️ מנוע הסוכן של הגשר*", "(מנוע = התוכנה שמריצה את השיחה והכלים; מודל וספק הם שכבות נפרדות)", ""]
+    for k, e in ENGINES.items():
+        lines.append(f"{'👉 ' if k == cur else ''}*{e['label']}* ({k}) {'✅ מותקן' if engine_ready(k) else '⚪ לא מותקן'} — {e['note']}")
+    tgt = failover_target()
+    lines += ["", f"🔁 כשמכסת Claude נגמרת: {'עוברים אוטומטית' if fc['on_limit'] else 'מחכים למכסה (כבוי)'}"
+              + (f" · מנוע {ENGINES[fc['engine']]['label']}" if fc["on_limit"] else "")
+              + (f" · היעד עכשיו: {(providers().get(tgt[1]) or {}).get('short') or tgt[1]}" if tgt else " · אין כרגע יעד זמין"),
+              "", "החלפה: /מנוע qwen · /מנוע claude · מעבר בנגמרת המכסה: /גיבוי כן, /גיבוי לא, /גיבוי qwen, /גיבוי claude"]
+    return "\n".join(lines)
 
 
 def accounts_text():
@@ -1897,6 +1941,97 @@ def stop_applies(target, chat, active):
     return chat == PRIMARY or len(active) <= 1
 
 
+ENGINE_FILE = os.path.join(HERE, "engine.json")
+FAILOVER_FILE = os.path.join(HERE, "failover.json")
+ENGINES = {"claude": {"label": "Claude Code", "short": "Claude Code", "cmd": "claude", "note": "המנוע המקורי: הכלים, ההרשאות והסשנים של הגשר"},
+           "qwen": {"label": "Qwen Code", "short": "Qwen Code", "cmd": "qwen", "note": "מנוע חופשי של Qwen: עובד עם כל ספק בפורמט OpenAI, גם מקומי (Ollama), בלי חשבון Claude"}}
+
+
+def engine_ready(name):
+    return bool(shutil.which((ENGINES.get(name) or {}).get("cmd") or ""))
+
+
+def active_engine():
+    """The agent engine that runs the bridge's conversations ("claude" = Claude Code, "qwen" = Qwen Code). Owner 14.11: replaceable, so the
+    bridge does not depend on Claude's usage quota."""
+    try:
+        e = json.load(open(ENGINE_FILE, encoding="utf-8")).get("engine")
+    except (OSError, ValueError):
+        e = None
+    return e if e in ENGINES else "claude"
+
+
+def set_engine(name):
+    write_json(ENGINE_FILE, {"engine": name, "at": dt.datetime.now().isoformat(timespec="seconds")})
+
+
+def limit_failover_cfg():
+    """What happens when Claude's usage quota is used up: {"on_limit": True, "engine": "qwen" | "claude"} (agent/failover.json)."""
+    try:
+        d = json.load(open(FAILOVER_FILE, encoding="utf-8"))
+    except (OSError, ValueError):
+        d = {}
+    return {"on_limit": d.get("on_limit", True), "engine": d.get("engine") if d.get("engine") in ENGINES else "qwen"}
+
+
+def set_failover(on_limit=None, engine=None):
+    cur = limit_failover_cfg()
+    if on_limit is not None:
+        cur["on_limit"] = bool(on_limit)
+    if engine in ENGINES:
+        cur["engine"] = engine
+    write_json(FAILOVER_FILE, cur)
+    return cur
+
+
+def failover_target():
+    """(engine, provider) to run on while Claude's quota is used up, or None: the first ready non-Claude provider of the ladder (the local
+    Ollama as the last resort), on the engine the owner chose for that case (Qwen Code when installed)."""
+    fc = limit_failover_cfg()
+    if not fc["on_limit"]:
+        return None
+    prov = auto_pick(skip=("claude",)) or ("ollama" if provider_ready("ollama") else None)
+    if not prov:
+        return None
+    eng = fc["engine"] if engine_ready(fc["engine"]) else "claude"
+    return eng, prov
+
+
+def engine_endpoint(name, model=None):
+    """(base_url, api_key, model) of a provider's OpenAI-compatible endpoint, for engines that speak OpenAI directly (no translator needed)."""
+    p = providers().get(name) or {}
+    m = model or p.get("model") or ""
+    if p.get("hosts"):  # Ollama: the computer that serves the model now
+        h = provider_host(p, m) or (provider_hosts(p) or [{}])[0]
+        return (h.get("url") or "http://127.0.0.1:11434").rstrip("/") + "/v1", "ollama", m
+    if p.get("free_list") == "openrouter":
+        return "https://openrouter.ai/api/v1", provider_key(p), m
+    up = p.get("upstream") or {}
+    if up.get("base"):
+        base = up["base"]
+        if "{account_id}" in base:
+            try:
+                acc = open(os.path.join(SECRETS_DIR, up.get("account_file") or ""), encoding="utf-8").read().strip()
+            except OSError:
+                acc = ""
+            base = base.replace("{account_id}", acc or "MISSING-ACCOUNT-ID")
+        return base, provider_key(p), m
+    return None
+
+
+def qwen_cmd_env(name, model, append):
+    """The Qwen Code command and environment for provider `name`; RuntimeError when that provider has no OpenAI-compatible endpoint (Claude)."""
+    ep = engine_endpoint(name, model)
+    if not ep:
+        raise RuntimeError(f"המנוע Qwen Code לא יכול לרוץ על הספק {name}: אין לו כתובת בפורמט OpenAI")
+    base, key, m = ep
+    cmd = [shutil.which("qwen") or "qwen", "-y", "-o", "stream-json", "-m", m]
+    if append:
+        cmd += ["--append-system-prompt", append]
+    env = dict(os.environ, OPENAI_API_KEY=key or "none", OPENAI_BASE_URL=base, OPENAI_MODEL=m, QWEN_CODE_SUPPRESS_YOLO_WARNING="1")
+    return cmd, env, m
+
+
 def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat=None, tools=None, max_budget=None, stoppable=None, fork=False):
     """One headless Claude Code run; the prompt goes in on stdin (no command-line length limit, no cmd.exe quoting).
     tools="" = a restricted run: no tools and no MCP servers at all (for classifying other people's text)."""
@@ -1906,34 +2041,49 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
     guest = guest_cfg(chat)
     if guest:  # isolated guest group: never the owner's tools, connectors or browser; owner 13.11: no permission prompt may block its allowed tools (web search was refused headless)
         mode = guest.get("permission_mode") or "bypassPermissions"
+    eng = getattr(_ctx, "force_engine", None) or active_engine()
+    if guest or tools == "" or not engine_ready(eng):
+        eng = "claude"  # guests and restricted runs keep Claude Code's isolation; an engine that is not installed falls back
+    _ctx.engine_used = eng
     penv, pmodel = provider_env()  # owner 13.11: another provider behind the same engine (same tools and permissions)
+    if eng == "qwen" and penv is None:  # Qwen Code cannot use the Claude subscription: it needs a provider with an OpenAI endpoint
+        alt = failover_target()
+        if not alt:
+            raise RuntimeError("אין ספק זמין למנוע Qwen Code")
+        _ctx.force_provider = alt[1]
+        penv, pmodel = provider_env()
     if penv is not None:  # owner 14.11: nothing English reaches the owner
         append = ((append or "") + "\n\nחשוב מאוד: ענה תמיד בעברית בלבד, בעברית ברורה וטבעית (קוד, שמות קבצים וכתובות נשארים כמות שהם). אל תכתוב באנגלית.").strip()
     if penv is not None and pmodel:
         model = pmodel
-    cmd = [shutil.which("claude") or "claude", "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", mode]
-    if model:
-        cmd += ["--model", model]
-    if append:
-        cmd += ["--append-system-prompt", append]
-    if guest:
-        cmd += ["--restricted", "--safe-mode", "--strict-mcp-config", "--tools", GUEST_TOOLS if tools is None else tools]
-    elif tools is not None:
-        cmd += ["--tools", tools, "--strict-mcp-config"]  # --tools alone still loads MCP connector tools (e.g. Gmail send)
-    elif CFG.get("strict_mcp"):
-        cmd += ["--strict-mcp-config"]  # skip the heavy connector tool lists (Gmail, Shopify...) to cut tokens
-    if max_budget:
-        cmd += ["--max-budget-usd", f"{float(max_budget):.2f}"]
-    if CFG.get("chrome") and tools is None and not guest and penv is None:
-        cmd += ["--chrome"]  # owner 09.11: Claude in Chrome (needs the extension signed in with this PC's Claude account)
-    if resume:
-        cmd += ["--resume", resume] + (["--fork-session"] if fork else [])  # a side question reads the context but never changes the session
+    qwen_env = None
+    if eng == "claude":
+        cmd = [shutil.which("claude") or "claude", "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", mode]
+        if model:
+            cmd += ["--model", model]
+        if append:
+            cmd += ["--append-system-prompt", append]
+        if guest:
+            cmd += ["--restricted", "--safe-mode", "--strict-mcp-config", "--tools", GUEST_TOOLS if tools is None else tools]
+        elif tools is not None:
+            cmd += ["--tools", tools, "--strict-mcp-config"]  # --tools alone still loads MCP connector tools (e.g. Gmail send)
+        elif CFG.get("strict_mcp"):
+            cmd += ["--strict-mcp-config"]  # skip the heavy connector tool lists (Gmail, Shopify...) to cut tokens
+        if max_budget:
+            cmd += ["--max-budget-usd", f"{float(max_budget):.2f}"]
+        if CFG.get("chrome") and tools is None and not guest and penv is None:
+            cmd += ["--chrome"]  # owner 09.11: Claude in Chrome (needs the extension signed in with this PC's Claude account)
+        if resume:
+            cmd += ["--resume", resume] + (["--fork-session"] if fork else [])  # a side question reads the context but never changes the session
+    else:
+        cmd, qwen_env, model = qwen_cmd_env(getattr(_ctx, "provider_used", None) or active_provider()[0], model, append)
+        resume = None  # Qwen Code keeps its own sessions: a Claude session id means nothing to it
     chat = chat or PRIMARY
     if stoppable is None:
         stoppable = on_stage is not None  # only the owner's interactive runs; plugin / hand-off runs never eat a stop request
     t0 = time.time()
     proc = subprocess.Popen(cmd, cwd=guest_home(guest) if guest else HOME, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, encoding="utf-8", errors="replace", env=penv)
+                            text=True, encoding="utf-8", errors="replace", env=qwen_env or penv)
     errbuf = []
 
     def read_err():  # stderr carries the sign-in expiry warning and limit / login errors
@@ -2017,7 +2167,7 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
             raise LimitHit(set_limit(reset))
     if (not res or res.get("is_error")) and AUTH_RE.search(result + "\n" + errtext):
         raise AuthError((result or errtext).strip()[:200])
-    if (not res or res.get("is_error")) and active_provider()[0] == "auto" and getattr(_ctx, "provider_used", None):
+    if (not res or res.get("is_error")) and (active_provider()[0] == "auto" or getattr(_ctx, "force_provider", None)) and getattr(_ctx, "provider_used", None):
         bad = classify_down(result + "\n" + errtext)
         if bad:
             raise ProviderDown(_ctx.provider_used, bad[0], bad[1])
@@ -2118,12 +2268,19 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
     budget_check = refuse when this conversation's cap or the total daily cap is used up (plugin / background runs)."""
     chat = chat or PRIMARY
     interactive = on_stage is not None  # the owner's commands; plugin / background runs skip quietly instead
+    _ctx.failover_used = False
     lu = limit_until()
     if lu:
-        if interactive:
+        tgt = failover_target()
+        if tgt:  # owner 14.11: the quota is used up, the bridge goes on with the failover target
+            _ctx.force_engine, _ctx.force_provider = tgt
+            _ctx.failover_used = True
+            lu = None
+        elif interactive:
             raise LimitHit(lu)
-        log("claude skipped (usage limit until", lu.strftime("%H:%M") + ") for", chat)
-        return None
+        else:
+            log("claude skipped (usage limit until", lu.strftime("%H:%M") + ") for", chat)
+            return None
     if budget_check:
         why = over_budget(chat)
         if why:
@@ -2148,7 +2305,7 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
     except Exception as e:
         log("claude failed", e)
         return None
-    if session and res.get("session_id"):
+    if session and res.get("session_id") and getattr(_ctx, "engine_used", "claude") == "claude" and not getattr(_ctx, "failover_used", False):
         if res["session_id"] != kv_get(K("session_id", chat)):
             kv_set(K("session_started", chat), dt.datetime.now().isoformat())
             kv_set(K("session_runs", chat), "0")
@@ -2809,6 +2966,29 @@ def owner_command(text, chat=None):
     m = re.match(r"^/\s*(?:מודל|מודלים)\s+(?:חינמי|חינמיים)(?:\s+(\d+))?\s*$", text.strip())
     if m:  # owner 14.11: the numbered list of free models (local / remote, where it runs, how fast) and the pick by number
         return free_menu_pick(chat or PRIMARY, int(m.group(1))) if m.group(1) else free_menu_text(chat or PRIMARY)
+    m = re.match(r"^/\s*(מנוע|engine)(?:\s+(\S+))?\s*$", text.strip(), re.I)
+    if m:  # owner 14.11: which agent engine runs the bridge (Claude Code or Qwen Code)
+        if not m.group(2):
+            return engines_text()
+        e = {"קלוד": "claude", "claude": "claude", "qwen": "qwen", "קוון": "qwen"}.get(m.group(2).lower())
+        if not e:
+            return "לא מכיר את המנוע הזה.\n\n" + engines_text()
+        if not engine_ready(e):
+            return f"⚪ המנוע {ENGINES[e]['label']} לא מותקן במחשב הזה. לא הוחלף."
+        set_engine(e)
+        return f"✅ מנוע הגשר: *{ENGINES[e]['label']}*. כל השיחות עוברות עליו מההודעה הבאה. חזרה: /מנוע claude"
+    m = re.match(r"^/\s*(גיבוי|failover)(?:\s+(\S+))?\s*$", text.strip(), re.I)
+    if m:  # owner 14.11: what happens when Claude's usage quota is used up
+        w = (m.group(2) or "").lower()
+        if w in ("כן", "on"):
+            set_failover(on_limit=True)
+        elif w in ("לא", "off"):
+            set_failover(on_limit=False)
+        elif w in ENGINES or w in ("קלוד", "קוון"):
+            set_failover(engine={"קלוד": "claude", "קוון": "qwen"}.get(w, w))
+        elif w:
+            return "לא הבנתי. " + engines_text()
+        return engines_text()
     if re.match(r"^/\s*(חשבונות|חשבון|accounts)\s*$", text.strip()):  # owner 14.11: who is on which account, on which AI
         return accounts_text()
     m = re.match(r"^/\s*(גרסה|version)(?:\s+אשר\s+(\d+\.\d+\.\d+))?\s*$", text.strip())

@@ -145,7 +145,7 @@
   "base_url": "http://127.0.0.1:8799/p/nvidia",
   "token": "local-proxy",
   "key_file": "nvidia.key",
-  "model": "meta/llama-3.3-70b-instruct",
+  "model": "minimaxai/minimax-m3.1-flash",
   "cost": "חינם",
   "upstream": {
    "base": "https://integrate.api.nvidia.com/v1"

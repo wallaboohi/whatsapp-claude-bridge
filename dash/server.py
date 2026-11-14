@@ -765,12 +765,35 @@ def claude_account_info(max_age=60, force=False):
     return v
 
 
+ENGINES_DASH = {"claude": ("Claude Code", "claude"), "qwen": ("Qwen Code", "qwen")}
+
+
+def _which(cmd):
+    return shutil.which(cmd)
+
+
+def _agent_json(name):
+    try:
+        return json.load(open(os.path.join(ROOT, "agent", name), encoding="utf-8")) or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def engine_info():
+    """Owner 14.11: the agent engine this computer's bridge runs on, which engines are installed, and what happens when Claude's quota runs out."""
+    e = _agent_json("engine.json").get("engine")
+    fo = _agent_json("failover.json")
+    return {"engine": e if e in ENGINES_DASH else "claude", "ready": {k: bool(shutil.which(c)) for k, (_, c) in ENGINES_DASH.items()},
+            "labels": {k: lbl for k, (lbl, _) in ENGINES_DASH.items()},
+            "failover": {"on_limit": fo.get("on_limit", True), "engine": fo.get("engine") if fo.get("engine") in ENGINES_DASH else "qwen"}}
+
+
 def ai_brief():
     """Which AI this computer's bridge runs on: the provider (local / remote), the model and the Claude account (for the map and /חשבונות)."""
     pname, pmodel = active_provider()
     p = _providers().get(pname) or {}
     return {"provider": pname, "short": p.get("short") or p.get("label") or pname, "model": pmodel or p.get("model") or "",
-            "where": "local" if (p.get("where") == "local" or p.get("hosts")) else "remote", "claude": claude_account_info()}
+            "where": "local" if (p.get("where") == "local" or p.get("hosts")) else "remote", "claude": claude_account_info(), "engine": engine_info()}
 
 
 def claude_login_start():
@@ -834,7 +857,8 @@ def ai_map():
         local = p.get("where") == "local" or bool(p.get("hosts"))
         chk = provider_check_cached(k)
         out.append({"id": k, "label": p.get("short") or p.get("label") or k, "where": "local" if local else "remote", "cost": p.get("cost") or "",
-                    "ready": bool(chk["ok"]), "active": k == pname, "key": (bool(_provider_key(p)) if p.get("key_file") else None)})
+                    "ready": bool(chk["ok"]), "active": k == pname, "key": (bool(_provider_key(p)) if p.get("key_file") else None),
+                    "models": list(chk.get("models") or [])[:40], "model": p.get("model") or ""})
         for h in (p.get("hosts") or []):
             try:
                 names = json.loads(urllib.request.urlopen(h["url"].rstrip("/") + "/api/tags", timeout=3).read().decode()).get("models", [])
@@ -2034,6 +2058,31 @@ def action(a):
             os.makedirs(os.path.join(ROOT, "secrets"), exist_ok=True)
             open(os.path.join(ROOT, "secrets", name + ".key"), "w", encoding="utf-8").write(key)
         return {"ok": True, "id": name, "check": provider_check(name)}
+    if kind == "engine_set":  # map: the agent engine of this computer
+        e = a.get("engine")
+        if e not in ENGINES_DASH:
+            return {"error": "מנוע לא מוכר"}
+        if not _which(ENGINES_DASH[e][1]):  # (a module-level helper: action() has a local `import shutil` further down)
+            return {"error": f"{ENGINES_DASH[e][0]} לא מותקן במחשב הזה"}
+        dump_json({"engine": e, "at": dt.datetime.now().isoformat(timespec="seconds")}, os.path.join(ROOT, "agent", "engine.json"))
+        return {"ok": True, "engine": e}
+    if kind == "failover_set":  # map: what happens when Claude's usage quota is used up
+        cur = engine_info()["failover"]
+        if a.get("on_limit") is not None:
+            cur["on_limit"] = bool(a.get("on_limit"))
+        if a.get("engine") in ENGINES_DASH:
+            cur["engine"] = a["engine"]
+        dump_json(cur, os.path.join(ROOT, "agent", "failover.json"))
+        return {"ok": True, "failover": cur}
+    if kind == "restart_agent":  # map: the agent restarts after the answer it is working on
+        open(os.path.join(ROOT, "agent", "restart.request"), "w", encoding="utf-8").write("בקשה ממפת המערכת")
+        return {"ok": True}
+    if kind == "restart_bridge":  # map: the WhatsApp bridge exits, its keep-alive loop starts it again within seconds
+        try:
+            subprocess.run(["taskkill", "/IM", "whatsapp-bridge.exe", "/F"], capture_output=True, timeout=20, creationflags=_NOWIN)
+        except Exception as e:
+            return {"error": f"לא הצלחתי: {e}"}
+        return {"ok": True}
     if kind == "claude_account":
         return claude_account_info(force=True)
     if kind == "claude_login_start":  # map: sign this computer in with another Claude account (link, then the code)
