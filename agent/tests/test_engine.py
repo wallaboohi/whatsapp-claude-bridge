@@ -127,3 +127,10 @@ def test_qwen_command_uses_the_provider_endpoint_without_a_translator(agent, mon
         assert False, "the Claude subscription has no OpenAI endpoint"
     except RuntimeError as e:
         assert "OpenAI" in str(e)
+
+
+def test_the_free_tier_and_retired_model_errors_move_the_failover_on(agent):
+    mod, _ = agent
+    c = mod.classify_down
+    assert c("[API Error: 413 Request too large for model `openai/gpt-oss-120b` on tokens per minute (TPM): Limit 8000, Requested 14123]")[0] == "rate"
+    assert c("[API Error: 410 status code (no body)]")[0] == "rate"  # a retired model: skipped for a while, the next provider takes over

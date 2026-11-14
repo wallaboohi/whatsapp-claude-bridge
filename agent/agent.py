@@ -844,7 +844,7 @@ def provider_host(p, model=None, max_age=20):
 
 AUTO_LADDER = ("claude", "gemini", "groq", "openrouter_free", "deepseek", "openai")
 BILLING_RE = re.compile(r"(?i)(insufficient (balance|funds|credit)|no credits|credit balance|billing|payment required|\b402\b)")
-RATE_RE = re.compile(r"(?i)(\b429\b|rate.?limit|quota|too many requests|overloaded|\b50[234]\b|resource.?exhausted)")
+RATE_RE = re.compile(r"(?i)(\b429\b|rate.?limit|quota|too many requests|overloaded|\b50[234]\b|resource.?exhausted|\b413\b|request too large|tokens per minute|\b410\b)")
 DENIED_RE = re.compile(r"(?i)(\b40[13]\b|unauthori[sz]ed|invalid api key|authentication)")
 DOWN_RE = re.compile(r"(?i)(connection refused|econnrefused|enotfound|fetch failed|timed out|unreachable|socket hang up)")
 
@@ -2160,6 +2160,8 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
     if stopped.is_set():
         raise Stopped()
     result = res.get("result") or ""
+    if res.get("is_error") and not result:  # Qwen Code reports its error under "error", not in "result"
+        result = str((res.get("error") or {}).get("message") or "")
     if not res or res.get("is_error") or len(result) < 300:  # a real answer may talk about limits; only short / error results count
         reset = parse_limit(result + "\n" + errtext)
         if reset:
