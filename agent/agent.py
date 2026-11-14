@@ -2696,8 +2696,11 @@ def name_prefix():
 
 def _name_words(name):
     pre = name_prefix()
-    shorts = {str((p or {}).get("short") or "").lower() for k, p in providers().items() if k != "claude"}  # Ollama, Groq, Gemini ... are model words too
-    return [w for w in name.replace("·", " ").split()
+    shorts = {str((p or {}).get("short") or "").strip().lower() for k, p in providers().items() if k != "claude"} - {""}  # Ollama, Groq, Gemini ... are model words too
+    name = name.replace("·", " ")
+    for s in sorted((s for s in shorts if " " in s), key=len, reverse=True):  # a two-word short ("OpenRouter חינמי", 14.11) is removed whole, else the name grew every minute
+        name = re.sub(r"(?<!\S)" + r"\s+".join(map(re.escape, s.split())) + r"(?!\S)", " ", name, flags=re.I)
+    return [w for w in name.split()
             if w not in _MODEL_WORDS and w != pre and ":" not in w and not w.lower().startswith("bridge-") and w.lower() not in shorts]
 
 

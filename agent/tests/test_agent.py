@@ -1899,6 +1899,14 @@ def test_group_name_never_keeps_a_model_id_and_english_is_translated(agent, monk
     junk = f"{pre} אוטומציה אופוס bridge-qwen3-4b:latest bridge-qwen3-4b:latest bridge-qwen3-4b:latest 4M-D"
     assert mod._name_words(junk) == ["אוטומציה", "4M-D"]
     assert mod.template_after_first_word(junk) == f"{pre} אוטומציה {{model}} 4M-D"  # the grown name is cleaned back
+    # a provider whose short name is two words ("OpenRouter חינמי") is a model word too: no owner rename is detected (14.11)
+    real_providers = mod.providers
+    monkeypatch.setattr(mod, "providers", lambda: {"openrouter_free": {"short": "OpenRouter חינמי"}, "nvidia": {"short": "NVIDIA"}})
+    assert mod.name_core(f"{pre} Claude OpenRouter חינמי פרטי") == mod.name_core(f"{pre} Claude {{model}} פרטי") == "Claude פרטי"
+    grown = f"{pre} Claude OpenRouter חינמי OpenRouter חינמי OpenRouter חינמי פרטי"
+    assert mod.template_after_first_word(grown) == f"{pre} Claude {{model}} פרטי"
+    assert mod.name_core(f"{pre} Claude NVIDIA פרטי") == "Claude פרטי" and mod.name_core("גשר חינמי ויוי") == "גשר חינמי ויוי"  # one word alone stays
+    monkeypatch.setattr(mod, "providers", real_providers)
     monkeypatch.setattr(mod, "active_provider", lambda: ("ollama", "bridge-qwen3-4b:latest"))
     assert mod.group_label("bridge-qwen3-4b:latest") == "Ollama"
     monkeypatch.setattr(mod, "active_provider", lambda: ("claude", None))
