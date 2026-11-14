@@ -151,3 +151,8 @@
 - **נבדק בהרצה אמיתית דרך הגשר** (`LIVE_ENGINE=1 pytest agent/tests/test_engine_live.py -k agent_cli`): שלושתם קראו קובץ והחזירו את התוכן (Gemini CLI 7 שניות, Codex 9, Copilot 20).
 - **סולם `/אוטו` וגיבוי:** Claude ← Codex ← Copilot ← OpenCode ← Gemini CLI ← Gemini ← Groq ← NVIDIA ← OpenRouter, ובסוף Ollama המקומי.
 - **בלוח:** תיבת "בינה מארחת" ליד תיבת המודל, בפינת חלון השיחה, עם מזעור; ובשבב 🧠 מצב החיבור של כל כלי.
+
+
+## 15. Cloudflare Workers AI מחובר, וסולם `/אוטו` מהמהיר לאיטי (14.11.2026)
+- **חיבור Cloudflare:** טוקן API ב-`secrets/cloudflare.key` ומזהה חשבון ב-`secrets/cloudflare.account` (נשלף מ-`GET /client/v4/accounts`). בדיקת החיבור (`cloudflare_verify`, `provider_check`) קוראת ל-`GET /client/v4/user/tokens/verify`, בלי קריאה למודל ובלי צריכת נוירונים. נבדק חי: הטוקן פעיל, ושאלה אחת ל-`@cf/meta/llama-3.3-70b-instruct-fp8-fast` נענתה בשניות. הסודות מועתקים ידנית לכל מחשב ואינם במאגר.
+- **סולם `/אוטו` (יקיר 14.11): מהמהיר לאיטי.** Claude ← Cloudflare ← Groq ← Gemini ← Codex ← Copilot ← OpenCode ← Gemini CLI ← OpenRouter חינמי ← NVIDIA. הסיבה: בלפטופ, כשמכסת Claude נגמרה, הסוכן עבר ספק אחרי ספק (NVIDIA לבדו לקח כ-12 דקות עד שהגביל קצב) ושאלה פשוטה חיכתה מעל 20 דקות. מקור הדירוג: `SPEED_HINT` ב-`agent.py` ומדידות הלוג; מהירות כלי שורת הפקודה לא נמדדה, ולכן הם באמצע.

@@ -1083,6 +1083,27 @@ def openrouter_free_models():
     return _or_free["ids"]
 
 
+def cloudflare_verify(p, tok):
+    """{"ok", "detail", "models"} for Cloudflare Workers AI: GET /client/v4/user/tokens/verify proves the token is active, and the saved
+    account id file must exist (the token itself is never printed)."""
+    models = list(p.get("models") or [])
+    if not os.path.exists(os.path.join(SECRETS_DIR, p["upstream"]["account_file"])):
+        return {"ok": False, "detail": f"חסר מזהה חשבון: secrets/{p['upstream']['account_file']}", "models": models}
+    req = urllib.request.Request("https://api.cloudflare.com/client/v4/user/tokens/verify",
+                                 headers={"Authorization": "Bearer " + tok, "User-Agent": "oai-proxy/1.0 (whatsapp-claude-bridge)"})
+    try:
+        d = json.loads(urllib.request.urlopen(req, timeout=15).read().decode())
+        st = (d.get("result") or {}).get("status")
+        if d.get("success") and st == "active":
+            return {"ok": True, "detail": f"מחובר ל-Cloudflare · הטוקן פעיל · {len(models)} מודלים", "models": models}
+        return {"ok": False, "detail": f"הטוקן לא פעיל ({st or 'לא ידוע'})", "models": models}
+    except urllib.error.HTTPError as e:
+        why = {401: "הטוקן נדחה", 403: "הטוקן נדחה", 429: "Cloudflare מגביל קצב כרגע"}.get(e.code, f"שגיאה {e.code} מ-Cloudflare")
+        return {"ok": False, "detail": why, "models": models}
+    except Exception as e:
+        return {"ok": False, "detail": f"לא מגיב: {str(e)[:70]}", "models": models}
+
+
 def anthropic_probe(p, tok):
     """{"ok", "detail", "models"} for an Anthropic-compatible cloud API with a fixed model list (providers.json "models"): one 1-token call
     proves the key (owner 13.11: the DeepSeek key must be the key itself, not its id)."""
@@ -1136,6 +1157,8 @@ def provider_check(name):
         if not pick:
             return {"ok": False, "detail": "אף מחשב לא מגיב: " + " · ".join(rows), "models": []}
         return {"ok": True, "detail": f"עובד דרך {pick[0].get('label') or pick[0]['url']} · " + " · ".join(rows), "models": pick[1]}
+    if (p.get("upstream") or {}).get("account_file"):  # Cloudflare: log in = verify the API token (no model call, no neurons spent)
+        return cloudflare_verify(p, provider_key(p) or tok)  # "token" is the local proxy's placeholder; the real key is in secrets/
     if p.get("models") and p.get("base_url"):
         return anthropic_probe(p, tok)
     try:

@@ -131,16 +131,17 @@
   ],
   "ladder": [
    "claude",
+   "cloudflare",
+   "groq",
+   "gemini",
    "codex",
    "copilot",
    "opencode",
    "gemini_cli",
-   "gemini",
-   "groq",
-   "nvidia",
-   "openrouter_free"
+   "openrouter_free",
+   "nvidia"
   ],
-  "how": "הגשר בוחר לבד את הספק הזול ביותר שזמין: קודם המנוי של Claude, אחריו ספקים חינמיים לפי הסדר. כשספק נגמרה לו המכסה, אין לו מפתח או שהוא לא מגיב, הגשר עובר לבא בתור ומנסה אותו שוב אחרי זמן המתנה. מודלים מקומיים (Ollama) לא בסולם כי הם איטיים מדי לעבודה עם כלים על המעבד: עוברים אליהם ידנית, למשל /qwencode. הסדר ב-providers.json תחת auto.ladder או config auto_ladder."
+  "how": "הגשר בוחר לבד את הספק המהיר ביותר שזמין: קודם המנוי של Claude, אחריו ספקים חינמיים מהמהיר לאיטי (Cloudflare, Groq, Gemini, כלי שורת הפקודה, OpenRouter, ובסוף NVIDIA). כשספק נגמרה לו המכסה, אין לו מפתח או שהוא לא מגיב, הגשר עובר לבא בתור ומנסה אותו שוב אחרי זמן המתנה. מודלים מקומיים (Ollama) לא בסולם כי הם איטיים מדי לעבודה עם כלים על המעבד: עוברים אליהם ידנית, למשל /qwencode. הסדר ב-providers.json תחת auto.ladder או config auto_ladder."
  },
  "nvidia": {
   "label": "NVIDIA NIM · חינמי (דרך שרת התרגום)",

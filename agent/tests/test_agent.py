@@ -1826,16 +1826,16 @@ def _keys(mod, monkeypatch, *names):
     monkeypatch.setattr(mod, "provider_key", lambda p: "k" if p.get("key_file", "").removesuffix(".key") in have else "")
 
 
-def test_auto_ladder_goes_up_in_cost_and_skips_what_is_down(agent, monkeypatch):
+def test_auto_ladder_goes_fast_to_slow_and_skips_what_is_down(agent, monkeypatch):
     mod, _ = agent
     _keys(mod, monkeypatch, "gemini", "groq", "nvidia")
     assert mod.auto_pick() == "claude"  # the subscription first (already paid)
     mod.kv_set("limit_until", (mod.dt.datetime.now() + mod.dt.timedelta(hours=1)).isoformat(timespec="seconds"))
-    assert mod.auto_pick() == "gemini"  # its limit is on: the first free provider
-    mod.auto_cool("gemini", 10, "rate")
-    assert mod.auto_pick() == "groq" and mod.provider_cooled("gemini")
-    mod.kv_set("cool:gemini", (mod.dt.datetime.now() - mod.dt.timedelta(minutes=1)).isoformat(timespec="seconds"))
-    assert mod.auto_pick() == "gemini"  # the wait is over
+    assert mod.auto_pick() == "groq"  # its limit is on: the fastest free provider (owner 14.11: ladder fast to slow)
+    mod.auto_cool("groq", 10, "rate")
+    assert mod.auto_pick() == "gemini" and mod.provider_cooled("groq")
+    mod.kv_set("cool:groq", (mod.dt.datetime.now() - mod.dt.timedelta(minutes=1)).isoformat(timespec="seconds"))
+    assert mod.auto_pick() == "groq"  # the wait is over
     assert mod.auto_pick(skip=("gemini", "groq")) == "nvidia"  # openrouter_free has no key
     assert mod.auto_pick(skip=("gemini", "groq", "nvidia")) is None
     assert "openai" not in mod.auto_ladder() and "deepseek" not in mod.auto_ladder()  # free providers only
@@ -1857,7 +1857,7 @@ def test_classify_down_texts(agent):
 
 def test_auto_run_moves_to_the_next_provider(agent, monkeypatch):
     mod, _ = agent
-    _keys(mod, monkeypatch, "gemini", "groq")
+    _keys(mod, monkeypatch, "groq", "gemini")
     monkeypatch.setattr(mod, "active_provider", lambda *a: ("auto", None))
     used = []
 
@@ -1871,10 +1871,10 @@ def test_auto_run_moves_to_the_next_provider(agent, monkeypatch):
     monkeypatch.setattr(mod, "_run_claude", fake)
     mod.kv_set("limit_until", (mod.dt.datetime.now() + mod.dt.timedelta(hours=1)).isoformat(timespec="seconds"))
     assert mod._run_auto("p", None, None, 5) == {"result": "ok"}
-    assert used == ["gemini", "groq"] and mod.provider_cooled("gemini") and not mod.provider_cooled("groq")
+    assert used == ["groq", "gemini"] and mod.provider_cooled("groq") and not mod.provider_cooled("gemini")
     # nobody is left: the failure goes up as before
-    mod.kv_set("cool:groq", "")
-    monkeypatch.setattr(mod, "_run_claude", lambda *a, **k: (_ for _ in ()).throw(mod.ProviderDown(mod._ctx.provider_used or "groq", "billing", 180)))
+    mod.kv_set("cool:gemini", "")
+    monkeypatch.setattr(mod, "_run_claude", lambda *a, **k: (_ for _ in ()).throw(mod.ProviderDown(mod._ctx.provider_used or "gemini", "billing", 180)))
     mod.provider_env()
     monkeypatch.setattr(mod, "auto_pick", lambda skip=(): None)
     with pytest.raises(mod.ProviderDown):
@@ -2026,3 +2026,24 @@ def test_dictionary_learns_from_an_edit_once(tmp_path):
     assert dictlearn.add_pairs(path, pairs, "מעריכה בלוח")[0].startswith("הגרבא → הגרסה")
     assert dictlearn.add_pairs(path, pairs) == []  # never twice
     assert dictlearn.edit_pairs("שלום 123", "שלום 456") == []  # numbers are not words
+
+
+def test_cloudflare_verify_logs_in_with_the_token_endpoint(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    p = dict(mod.providers()["cloudflare"])
+    monkeypatch.setattr(mod, "SECRETS_DIR", str(tmp_path))
+    assert not mod.cloudflare_verify(p, "k")["ok"]  # no account id saved yet
+    (tmp_path / p["upstream"]["account_file"]).write_text("acc", encoding="utf-8")
+    seen = {}
+
+    class R:
+        def read(self):
+            return json.dumps({"success": True, "result": {"status": "active"}}).encode()
+
+    def fake(req, timeout=0):
+        seen["url"], seen["auth"] = req.full_url, req.get_header("Authorization")
+        return R()
+    monkeypatch.setattr(mod.urllib.request, "urlopen", fake)
+    r = mod.cloudflare_verify(p, "tok")
+    assert r["ok"] and seen["url"].endswith("/user/tokens/verify") and seen["auth"] == "Bearer tok"
+    assert "tok" not in r["detail"]  # the token is never printed

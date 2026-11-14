@@ -35,14 +35,14 @@ def test_engine_choice_and_failover_settings(agent, monkeypatch, tmp_path):
 def test_failover_target_picks_the_first_ready_free_provider_and_the_chosen_engine(agent, monkeypatch, tmp_path):
     mod, _ = agent
     _no_state_files(mod, monkeypatch, tmp_path)
-    _keys(mod, monkeypatch, "gemini", "groq")
+    _keys(mod, monkeypatch, "groq", "gemini")
     mod.kv_set("limit_until", (mod.dt.datetime.now() + mod.dt.timedelta(hours=1)).isoformat(timespec="seconds"))
     monkeypatch.setattr(mod, "engine_ready", lambda n: n in ("claude", "qwen"))
-    assert mod.failover_target() == ("qwen", "gemini")  # the subscription is capped: the first free provider, on Qwen Code
-    mod.auto_cool("gemini", 10, "rate")
-    assert mod.failover_target() == ("qwen", "groq")
+    assert mod.failover_target() == ("qwen", "groq")  # the subscription is capped: the first free provider, on Qwen Code
+    mod.auto_cool("groq", 10, "rate")
+    assert mod.failover_target() == ("qwen", "gemini")
     monkeypatch.setattr(mod, "engine_ready", lambda n: n == "claude")
-    assert mod.failover_target() == ("claude", "groq")  # Qwen Code is not installed: Claude Code with that provider
+    assert mod.failover_target() == ("claude", "gemini")  # Qwen Code is not installed: Claude Code with that provider
     monkeypatch.setattr(mod, "provider_ready", lambda n: n == "ollama")
     assert mod.failover_target() == ("claude", "ollama")  # nothing but the local model is left
     monkeypatch.setattr(mod, "provider_ready", lambda n: False)
@@ -72,7 +72,7 @@ def test_a_capped_claude_does_not_stop_the_bridge(agent, monkeypatch, tmp_path):
 def test_claude_failing_mid_run_moves_to_the_failover_and_then_to_the_next_provider(agent, monkeypatch, tmp_path):
     mod, _ = agent
     _no_state_files(mod, monkeypatch, tmp_path)
-    _keys(mod, monkeypatch, "gemini", "groq")
+    _keys(mod, monkeypatch, "groq", "gemini")
     monkeypatch.setattr(mod, "engine_ready", lambda n: n == "claude")
     calls = []
 
@@ -82,12 +82,12 @@ def test_claude_failing_mid_run_moves_to_the_failover_and_then_to_the_next_provi
         calls.append(prov)
         if prov is None:
             raise mod.LimitHit(mod.dt.datetime.now() + mod.dt.timedelta(hours=1))  # Claude: quota
-        if prov == "gemini":
-            raise mod.ProviderDown("gemini", "rate", 15)  # the first free provider is busy
+        if prov == "groq":
+            raise mod.ProviderDown("groq", "rate", 15)  # the first free provider is busy
         return {"result": "ok"}
     monkeypatch.setattr(mod, "_run_claude", fake)
     assert mod._run_auto("p", None, None, 5) == {"result": "ok"}
-    assert calls == [None, "gemini", "groq"] and mod.provider_cooled("gemini")
+    assert calls == [None, "groq", "gemini"] and mod.provider_cooled("groq")
 
 
 def test_guests_and_restricted_runs_keep_claude_code(agent, monkeypatch, tmp_path):
