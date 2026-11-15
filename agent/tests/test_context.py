@@ -26,7 +26,7 @@ def test_a_fresh_session_gets_the_conversation_and_the_way_to_read_more(agent, m
     identity = mod.group_prompt(c)
     assert f'קבוצת בדיקה" (מזהה: {c}' in identity and "get_group_info" in identity and "set_group_name" in identity
     assert "הודעה מקבוצה אחרת" not in pack  # only this conversation
-    assert "list_messages" in pack and "אל תשלח הודעות" in pack
+    assert "list_messages" in pack and "send_message" in pack and "אל תשלח הודעות" not in pack
     assert pack.index("מה המצב של הגשר?") < pack.index("הגשר תקין")  # oldest first
 
 

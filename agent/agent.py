@@ -3987,7 +3987,7 @@ def downtime_notice(cursor, since):
         for mid, c, ts, content, media in rows:
             if (content or "").startswith(prefix) or not ((content or "").strip() or media):
                 continue
-            if db.execute("SELECT 1 FROM handled WHERE id = ? AND chat_jid = ?", (mid, c)).fetchone():
+            if db.execute("SELECT 1 FROM handled WHERE id = ? AND chat_jid = ?", (mid, c)).fetchone() or answered_elsewhere(c, ts):
                 continue
             by.setdefault(c, []).append(str(ts or "")[11:16] or "?")
     why = (f"חזרתי אחרי הפעלה מחדש (לא הייתי זמין מ-{since:%H:%M})" if LANG == "he"
@@ -5999,6 +5999,32 @@ def learn_from_edit(chat, mid, new_text):
         log("dictionary learned from an edit:", "; ".join(added))
 
 
+def answered_elsewhere(chat, ts, min_age_minutes=10):
+    """Owner 15.11: the other computer (same WhatsApp account) already answered this old message. After a long stop this
+    computer replayed 98 messages the other one had handled hours earlier, with another AI. A message older than
+    `min_age_minutes` counts as answered when a later answer of the bridge ("🤖 _🧠 ...") exists in the same chat; a message
+    nobody answered (both computers were down) has no later answer and is still handled. Fresh messages are never skipped."""
+    try:
+        when = dt.datetime.fromisoformat(str(ts).replace(" ", "T", 1)) if "T" not in str(ts) else dt.datetime.fromisoformat(str(ts))
+        if when.tzinfo is None:
+            when = when.astimezone()
+        if (dt.datetime.now().astimezone() - when).total_seconds() < min_age_minutes * 60:
+            return False
+        pre = (CFG.get("reply_prefix") or "🤖").strip()
+        with mdb() as db:
+            rows = db.execute("SELECT timestamp FROM messages WHERE chat_jid = ? AND is_from_me = 1 AND content LIKE ? ORDER BY rowid DESC LIMIT 3",
+                              (chat, pre + " _🧠%")).fetchall()
+        for (t,) in rows:
+            w = dt.datetime.fromisoformat(str(t).replace(" ", "T", 1))
+            if w.tzinfo is None:
+                w = w.astimezone()
+            if w > when:
+                return True
+    except Exception:
+        log("answered_elsewhere check failed", traceback.format_exc()[-300:])
+    return False
+
+
 def sweep_once(cursor, on_row=None):
     """Handle messages stored after `cursor` (rowid = insertion order, so late-arriving older messages are never
     skipped); `handled` makes every message act exactly once. Returns the new cursor."""
@@ -6008,6 +6034,9 @@ def sweep_once(cursor, on_row=None):
     for r in rows:
         with adb() as db:  # mark first: a crash must never make us act on the same message twice
             fresh = db.execute("INSERT OR IGNORE INTO handled VALUES (?, ?, ?)", (r[1], r[2], dt.datetime.now().isoformat())).rowcount
+        if fresh and r[6] and r[2] in load_groups() and answered_elsewhere(r[2], r[4]):
+            log("skipped an old message the other computer already answered:", r[1])
+            fresh = 0
         if fresh:
             try:
                 (on_row or handle)(r[1:])

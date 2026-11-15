@@ -2397,3 +2397,22 @@ def test_system_notice_skips_guest_groups(agent, monkeypatch):
     monkeypatch.setattr(mod, "load_groups", lambda: {"a@g.us": {"name": "A"}, "guest@g.us": {"name": "Rita", "guest": True}})
     mod.broadcast_system_notice("בדיקה")
     assert sent == ["a@g.us"]
+
+
+def test_old_message_already_answered_by_the_other_computer_is_skipped(agent):
+    mod, db = agent
+    now = mod.dt.datetime.now().astimezone()
+    old = (now - mod.dt.timedelta(hours=5)).isoformat(sep=" ", timespec="seconds")
+    ans = (now - mod.dt.timedelta(hours=4)).isoformat(sep=" ", timespec="seconds")
+    db.execute("INSERT INTO messages VALUES ('O1', ?, 'me', 'שאלה', ?, 1, '', '')", (mod.PRIMARY, old))
+    db.execute("INSERT INTO messages VALUES ('A1', ?, 'me', ?, ?, 1, '', '')", (mod.PRIMARY, "🤖 _🧠 Claude · סונט_\nתשובה", ans))
+    db.commit()
+    assert mod.answered_elsewhere(mod.PRIMARY, old) is True
+    # nobody answered it: still handled; a fresh message is never skipped
+    db.execute("DELETE FROM messages WHERE id = 'A1'")
+    db.commit()
+    assert mod.answered_elsewhere(mod.PRIMARY, old) is False
+    fresh = now.isoformat(sep=" ", timespec="seconds")
+    db.execute("INSERT INTO messages VALUES ('A2', ?, 'me', ?, ?, 1, '', '')", (mod.PRIMARY, "🤖 _🧠 Claude_\nx", fresh))
+    db.commit()
+    assert mod.answered_elsewhere(mod.PRIMARY, fresh) is False
