@@ -4298,10 +4298,28 @@ READ_ALOUD = "🛞"  # owner request 08.11 23:23: the wheel = "I am driving, rea
 
 
 _wheel_recent = {}  # (chat, message id) -> when our own 🛞 work on it started / ended: the 🛞 we put back must not start it again
+_wheel_lock = threading.Lock()
 
 
 def wheel_is_ours(chat, mid, within=90):
     return time.time() - _wheel_recent.get((chat, mid), 0) < within
+
+
+def queue_wheel(chat, mid, fn):
+    """Reserve a wheel action before queueing it, so repeated SSE events cannot enqueue duplicate sends."""
+    if not chat or not mid:
+        return False
+    key = (chat, mid)
+    now = time.time()
+    with _wheel_lock:
+        if now - _wheel_recent.get(key, 0) < 90:
+            return False
+        _wheel_recent[key] = now
+        for old, at in list(_wheel_recent.items()):
+            if now - at > 180:
+                del _wheel_recent[old]
+    work.put(fn)
+    return True
 
 
 class WheelBusy:
@@ -4361,26 +4379,35 @@ def read_aloud(chat, mid=None):
                                (chat, prefix + "%", "%סיימתי ·%", prefix + " _⏳%", prefix + " _⌛%")).fetchone()
     except sqlite3.Error as e:
         log("read_aloud db", e)
-        r = None
+        wheel_failure("לא הצלחתי לקרוא את ההודעה המבוקשת.", e)
+        return
     text = (r[0] if r else "") or ""
     for p in (prefix, "🦾"):
         if text.startswith(p):
             text = text[len(p):].strip()
     t = tts_clean(text)
     if len(t) < 2:
-        _ctx.chat = chat
-        try:
-            reply("🛞 אין הודעה שלי להקריא כאן." if LANG == "he" else "🛞 Nothing of mine to read here.")
-        finally:
-            _ctx.chat = None
+        wheel_failure("לא מצאתי כאן תשובה שאפשר להקריא.")
         return
     try:
         os.makedirs(VOICE_DIR, exist_ok=True)
         with WheelBusy(chat, mid):
             path = tts_ogg(t, os.path.join(VOICE_DIR, f"read_{int(time.time() * 1000)}.ogg"))
-            send(chat, "", media=path)
+            if not send(chat, "", media=path, read_aloud_of=mid):
+                wheel_failure(f"לא הצלחתי לשלוח את ההקראה. הטקסט עדיין זמין: {t[:600]}")
     except Exception as e:
         log("read_aloud failed", e)
+        wheel_failure(f"לא הצלחתי להכין את ההקראה. הטקסט עדיין זמין: {t[:600]}", e)
+
+
+def wheel_failure(message, error=None):
+    """Report wheel failures only to the owner's control chat, never to the other person's conversation."""
+    if error:
+        log("wheel failed", str(error)[:300])
+    body = "🛞 " + message
+    body = italic(body) if CFG.get("reply_italic", True) else body
+    if not send(PRIMARY, CFG["reply_prefix"] + body):
+        log("wheel failure report could not be sent", message[:160])
 
 
 def read_other(chat, mid, wait=90):
@@ -4393,46 +4420,59 @@ def read_other(chat, mid, wait=90):
             r = db.execute("SELECT content, is_from_me, media_type FROM messages WHERE id = ? AND chat_jid = ?", (mid, chat)).fetchone()
     except sqlite3.Error as e:
         log("read_other db", e)
+        wheel_failure("לא הצלחתי לקרוא את ההודעה שביקשת.", e)
         return
     if not r:
+        wheel_failure("לא מצאתי את ההודעה שביקשת.")
         return
     content, _, mtype = r  # owner 11.11: his own messages too — both sides of the chat hear / read it
     if mtype in ("audio", "ptt", "voice"):
         # owner 09.11 17:27: 🛞 on a voice note = its transcript as a text message in that chat (not automatic, not a voice)
-        with mdb() as db:
-            r2 = db.execute("SELECT sender, timestamp FROM messages WHERE id = ? AND chat_jid = ?", (mid, chat)).fetchone()
+        try:
+            with mdb() as db:
+                r2 = db.execute("SELECT sender, timestamp FROM messages WHERE id = ? AND chat_jid = ?", (mid, chat)).fetchone()
+        except sqlite3.Error as e:
+            wheel_failure("לא הצלחתי לקרוא את פרטי ההקלטה.", e)
+            return
         with WheelBusy(chat, mid):
-            text = (transcript_of(chat, mid, r2[0] if r2 else "", r2[1] if r2 else "") or "").strip()
+            try:
+                text = (transcript_of(chat, mid, r2[0] if r2 else "", r2[1] if r2 else "") or "").strip()
+            except Exception as e:
+                log("read_other transcript failed", e)
+                wheel_failure("לא הצלחתי לתמלל את ההקלטה. אפשר לנסות שוב אחרי שהקובץ נטען.")
+                return
             if not text:
                 log("read_other: no transcript", chat, mid)
+                wheel_failure("לא התקבל תמלול מההקלטה. אפשר לנסות שוב אחרי שהקובץ נטען.")
                 return
             try:
                 res = bridge("/send_transcript", {"jid": chat, "id": mid, "text": f"🤖 תמלול: {text}"[:3900]}, timeout=120)
             except Exception as e:  # noqa: BLE001
                 res = {"error": str(e)[:160]}
             log("wheel transcript", chat, mid, json.dumps(res, ensure_ascii=False)[:160])
-            if res.get("error") or res.get("success") is False:  # owner 13.11: a failed 🛞 must say so, not stay silent
-                _ctx.chat = PRIMARY
-                try:
-                    reply(f"🛞 התמלול הוכן אבל לא נשלח לשיחה: {res.get('error') or res.get('message') or '?'}"+chr(10)+f"_התמלול:_ {text[:600]}")
-                finally:
-                    _ctx.chat = None
+            if res.get("error") or res.get("success") is False or not any(k in res for k in ("success", "message", "skipped")):
+                wheel_failure(f"התמלול מוכן, אך לא נשלח לשיחה. הנה הטקסט: {text[:600]}",
+                              res.get("error") or res.get("message") or "תשובת הגשר לא אישרה שליחה")
         return
     elif mtype:
-        return  # image / video / document / sticker: unchanged (owner 09.11)
+        wheel_failure("הגלגל תומך כרגע בהודעות טקסט או קול בלבד.")
+        return
     else:
         text = content or ""
     t = tts_clean(text)
     if len(t) < 2:
         log("read_other: nothing to read", chat, mid)
+        wheel_failure("לא נמצא טקסט שאפשר להקריא.")
         return
     try:
         os.makedirs(VOICE_DIR, exist_ok=True)
         with WheelBusy(chat, mid):
             path = tts_ogg(t, os.path.join(VOICE_DIR, f"read_{int(time.time() * 1000)}.ogg"))
-            send(chat, "", media=path, quoted=mid, read_aloud_of=mid)
+            if not send(chat, "", media=path, quoted=mid, read_aloud_of=mid):
+                wheel_failure(f"לא הצלחתי לשלוח את ההקראה. הטקסט עדיין זמין: {t[:600]}")
     except Exception as e:
         log("read_other failed", e)
+        wheel_failure(f"לא הצלחתי להכין את ההקראה. הטקסט עדיין זמין: {t[:600]}", e)
 
 
 def read_text(chat, text):
@@ -5906,14 +5946,7 @@ def event_listener():
                         if b'"reaction"' in line:
                             try:
                                 ev = json.loads(line[5:].decode("utf-8", "replace"))
-                                cj = ev.get("chat_jid", "")
-                                note_reaction(cj, ev.get("message_id", ""), ev.get("emoji", ""))
-                                if ev.get("emoji") == READ_ALOUD and wheel_is_ours(cj, ev.get("message_id", "")):
-                                    pass  # the 🛞 we put back after the work (or a second one while it runs)
-                                elif ev.get("emoji") == READ_ALOUD and (cj == PRIMARY or cj in load_groups()):
-                                    work.put(lambda cj=cj, m=ev.get("message_id"): read_aloud(cj, m))
-                                elif ev.get("emoji") == READ_ALOUD and cj and CFG.get("read_aloud_others", True) and watches_people():
-                                    work.put(lambda cj=cj, m=ev.get("message_id"): read_other(cj, m))
+                                handle_reaction_event(ev)
                             except Exception as e:
                                 log("reaction event", e)
                         elif b'"edited"' in line:
@@ -5925,6 +5958,23 @@ def event_listener():
                                 log("edit event", e)
         except Exception:
             time.sleep(5)
+
+
+def handle_reaction_event(ev):
+    cj = ev.get("chat_jid", "")
+    mid = ev.get("message_id", "")
+    emoji = ev.get("emoji", "")
+    note_reaction(cj, mid, emoji)
+    if emoji != READ_ALOUD or wheel_is_ours(cj, mid):
+        return
+    if cj == PRIMARY or cj in load_groups():
+        if not serves_here(cj):
+            return
+        if not ((_groups_last or {}).get(cj) or {}).get("host") and not watches_people():
+            return
+        queue_wheel(cj, mid, lambda cj=cj, mid=mid: read_aloud(cj, mid))
+    elif cj and CFG.get("read_aloud_others", True) and watches_people():
+        queue_wheel(cj, mid, lambda cj=cj, mid=mid: read_other(cj, mid))
 
 
 from dictlearn import EDIT_WORD, add_pairs, edit_pairs  # noqa: E402,F401  (owner 14.11: shared with the dashboard)

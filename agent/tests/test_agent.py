@@ -1152,6 +1152,57 @@ def test_wheel_command_toggles_read_all(agent):
     assert not mod.kv_get(mod.K("read_all", mod.PRIMARY)) and b != a
 
 
+def test_wheel_reaction_is_routed_to_one_group_host(agent, monkeypatch):
+    mod, _ = agent
+    chat, mid = "managed@g.us", "wheel-host-test"
+    queued = []
+    monkeypatch.setattr(mod, "load_groups", lambda: {chat: {}})
+    monkeypatch.setattr(mod, "serves_here", lambda _: False)
+    monkeypatch.setattr(mod, "note_reaction", lambda *a: None)
+    monkeypatch.setattr(mod, "work", type("Work", (), {"put": lambda _, fn: queued.append(fn)})())
+    mod.handle_reaction_event({"chat_jid": chat, "message_id": mid, "emoji": "🛞"})
+    assert not queued
+
+    monkeypatch.setattr(mod, "serves_here", lambda _: True)
+    monkeypatch.setattr(mod, "watches_people", lambda: True)
+    mod.handle_reaction_event({"chat_jid": chat, "message_id": mid, "emoji": "🛞"})
+    mod.handle_reaction_event({"chat_jid": chat, "message_id": mid, "emoji": "🛞"})
+    assert len(queued) == 1
+
+
+def test_read_aloud_reports_failed_send_with_text_fallback(agent, monkeypatch):
+    mod, db = agent
+    chat, mid = "managed@g.us", "wheel-send-fail"
+    text = mod.CFG["reply_prefix"] + "_תשובה לבדיקה_"
+    db.execute("INSERT INTO messages VALUES (?, ?, 'bot', ?, '2026-11-15 10:00:00', 1, '', '')", (mid, chat, text))
+    db.commit()
+    sent = []
+
+    def fake_send(recipient, message, media=None, **kwargs):
+        sent.append((recipient, message, media, kwargs.get("read_aloud_of")))
+        return media is None
+
+    monkeypatch.setattr(mod, "send", fake_send)
+    monkeypatch.setattr(mod, "tts_ogg", lambda _, path, **k: path)
+    monkeypatch.setattr(mod, "bridge", lambda *a, **k: {"success": True})
+    mod.read_aloud(chat, mid)
+    assert sent[0][0] == chat and sent[0][2] and sent[0][3] == mid
+    assert sent[-1][0] == mod.PRIMARY and "לא הצלחתי לשלוח" in sent[-1][1] and "תשובה לבדיקה" in sent[-1][1]
+
+
+def test_read_other_reports_transcription_error_to_owner(agent, monkeypatch):
+    mod, db = agent
+    chat, mid = "972500000009@s.whatsapp.net", "wheel-transcript-fail"
+    db.execute("INSERT INTO messages VALUES (?, ?, 'sender', '', '2026-11-15 10:00:00', 0, 'audio', '')", (mid, chat))
+    db.commit()
+    sent = []
+    monkeypatch.setattr(mod, "send", lambda recipient, message, **k: sent.append((recipient, message)) or True)
+    monkeypatch.setattr(mod, "bridge", lambda *a, **k: {"success": True})
+    monkeypatch.setattr(mod, "transcript_of", lambda *a: (_ for _ in ()).throw(RuntimeError("transcription failed")))
+    mod.read_other(chat, mid)
+    assert sent and sent[-1][0] == mod.PRIMARY and "לא הצלחתי לתמלל" in sent[-1][1]
+
+
 def test_group_name_single_source_and_owner_rename(agent, monkeypatch):
     mod, db = agent
     g = "120363000000000001@g.us"
@@ -1295,14 +1346,17 @@ def test_wheel_on_someone_elses_message_reads_it_in_that_chat(agent, monkeypatch
     mod, db = agent
     sent, made = [], []
     monkeypatch.setattr(mod, "tts_ogg", lambda text, path, **k: made.append(text) or path)
-    monkeypatch.setattr(mod, "send", lambda chat, text, media=None, quoted=None, read_aloud_of=None: sent.append((chat, quoted, read_aloud_of)))
+    monkeypatch.setattr(mod, "send", lambda chat, text, media=None, quoted=None, read_aloud_of=None:
+                        sent.append((chat, text, media, quoted, read_aloud_of)) or True)
     add(db, "T1", "2026-11-09 17:00:00+02:00", "אני מאחר בעשר דקות", chat="972500000009@s.whatsapp.net")
     mod.read_other("972500000009@s.whatsapp.net", "T1")
-    assert made == ["אני מאחר בעשר דקות"] and sent == [("972500000009@s.whatsapp.net", "T1", "T1")]
+    assert made == ["אני מאחר בעשר דקות"] and len(sent) == 1
+    assert sent[0][0] == "972500000009@s.whatsapp.net" and sent[0][1] == "" and sent[0][2]
+    assert sent[0][3:] == ("T1", "T1")
     db.execute("INSERT INTO messages VALUES ('I1', '972500000009@s.whatsapp.net', 'x', '', '2026-11-09 17:01:00+02:00', 0, 'image', '')")
     db.commit()
     mod.read_other("972500000009@s.whatsapp.net", "I1")
-    assert len(sent) == 1, "an image: nothing"
+    assert len(sent) == 2 and sent[-1][0] == mod.PRIMARY and "טקסט או קול בלבד" in sent[-1][1]
 
 
 def test_wheel_on_a_voice_note_posts_its_transcript(agent, monkeypatch):
