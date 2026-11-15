@@ -1937,12 +1937,21 @@ def _stage_of(ev):
     for part in (ev.get("message") or {}).get("content") or []:
         if part.get("type") == "tool_use":
             name, inp = part.get("name", ""), part.get("input") or {}
+            tool = name.rsplit("__", 1)[-1]
+            if tool in ("list_messages", "get_message_context"):
+                return "🧵 קורא הקשר מהשיחה"
+            if tool in ("get_group_info", "group_participants"):
+                return "👥 בודק פרטי קבוצה"
+            if tool == "search_all":
+                return "🔍 מחפש הודעות"
+            if tool == "send_message":
+                return "📤 מכין טיוטה"
             if name == "Read":
-                return "📖 קורא קבצים"
+                return "🧵 קורא הקשר וקבצים"
             if name in ("Edit", "Write", "NotebookEdit"):
-                return "✏️ עורך קוד/קבצים"
+                return "✍️ עורך קוד/קבצים"
             if name in ("Grep", "Glob"):
-                return "🔎 מחפש בקבצים"
+                return "🔍 מחפש בקבצים"
             if name in ("WebSearch", "WebFetch"):
                 return "🌐 מחפש ברשת"
             if name in ("Agent", "Workflow"):
@@ -1958,11 +1967,11 @@ def _stage_of(ev):
                 if re.search(r"go build|go vet|release|pyinstaller", c):
                     return "🛠️ מקמפל/בונה"
                 if "wa_send" in c:
-                    return "📨 מכין טיוטה"
+                    return "📤 מכין טיוטה"
                 return "⬛ מריץ פקודה (cmd)"
             return "⚙️ " + name
         if part.get("type") == "thinking":
-            return "🧠 חושב"
+            return "💬 מנסח תשובה"
     return None
 
 
@@ -3553,7 +3562,7 @@ class StatusMsg:
     """One WhatsApp message that is edited while Claude works (stage, detail, elapsed time, model). At the end it is left
     in its final state (not deleted). The steps also go to kv 'live_steps' for the dashboard."""
     def __init__(self, model, chat=None, wa=True, react_to=None):
-        self.model, self.stage, self.mid, self.t0, self.done = model, "🧠 מתחיל", None, time.time(), threading.Event()
+        self.model, self.stage, self.mid, self.t0, self.done = model, "📩 התקבלה הודעה", None, time.time(), threading.Event()
         self.chat, self.wa = chat or PRIMARY, wa
         self.ai_short, self.ai_model, self.ai_location = status_ai_info(model, self.chat)
         self.react_to = react_to if wa and CFG.get("status_reactions", True) else None
@@ -3596,9 +3605,7 @@ class StatusMsg:
         return f"{e // 60}:{e % 60:02d}"
 
     def _ai_details(self, stage_included=True):
-        details = []
-        if self.ai_short and (not stage_included or self.ai_short not in self.stage):
-            details.append(self.ai_short)
+        details = [f"🧠 {self.ai_short}"] if self.ai_short else []
         if self.ai_model:
             details.append(model_he(self.ai_model))
         if self.ai_location:
@@ -3611,11 +3618,11 @@ class StatusMsg:
         prefix = CFG["reply_prefix"]
         if self.tick % 2 and prefix.strip() == "🤖":
             prefix = prefix.replace("🤖", "🦾")  # the robot "moves" too while working (owner request 08.11)
-        return prefix + italic(f"{icon} {machine_tag()} · {self.stage} · {self._ai_details()} · {self._elapsed()}")
+        return prefix + italic(f"{icon} {machine_tag()} · {self._ai_details()} · {self.stage} · {self._elapsed()}")
 
     def _final(self):
         n = len(self.steps)
-        return CFG["reply_prefix"] + italic(f"✅ {machine_tag()} · סיימתי · {self._ai_details(stage_included=False)} · {self._elapsed()}" + (f" · {n} שלבים" if n else ""))
+        return CFG["reply_prefix"] + italic(f"✅ {machine_tag()} · {self._ai_details()} · סיימתי · {self._elapsed()}" + (f" · {n} שלבים" if n else ""))
 
     def _start(self):
         if self.done.is_set():

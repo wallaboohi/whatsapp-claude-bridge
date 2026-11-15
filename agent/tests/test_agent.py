@@ -885,6 +885,7 @@ def test_status_hourglass_flips(agent):
     assert "\u23f3" in a and "\u231b" in b, "the hourglass alternates on every edit"
     host = mod.CFG.get("host_label") or mod.socket.gethostname()
     assert host in a.split("·")[0] and host in st._final().split("·")[0], "the computer is named first"
+    assert a.index("🧠") < a.index("📩 התקבלה הודעה") and "📩 התקבלה הודעה" in a
     assert "מגבלת" not in st._final() and "$" not in st._final(), "no usage/money line in the regular chat (owner 09.11 07:14)"
     mod._account_cache.update(at=mod.time.time() + 3600, v="me@example.com (Pro)")
     rep = mod.owner_command("/תקרה")
@@ -899,12 +900,13 @@ def test_cli_status_shows_actual_provider_and_remote_location(agent):
     mod.set_provider("copilot", chat=chat)
     assert mod.effective_model("sonnet") is None
     st = mod.StatusMsg(mod.effective_model("sonnet"), chat=chat, wa=False)
-    st.set_stage("🧠 קופילוט חושב")
+    st.set_stage("💬 מנסח תשובה")
     text = st._text()
     final = st._final()
     st.finish()
     mod._ctx.chat = None
-    assert "קופילוט חושב" in text and "☁️ מרוחק (ענן)" in text and "סונט" not in text
+    assert "💬 מנסח תשובה" in text and "🧠 קופילוט" in text and "☁️ מרוחק (ענן)" in text and "סונט" not in text
+    assert text.index("🖥️") < text.index("🧠 קופילוט") < text.index("💬 מנסח תשובה")
     assert "קופילוט" in final and "☁️ מרוחק (ענן)" in final and "סונט" not in final
 
 
@@ -990,6 +992,12 @@ def test_stage_icons_for_commands_and_git(agent):
     assert "\u05de\u05e7\u05d5\u05de\u05d9" in mod._stage_of(ev("git commit -m x"))  # local
     assert mod._stage_of(ev("git -C C:/x pull --ff-only")).startswith("\U0001f501")
     assert "\U0001f512" in mod.T["budget_stop"] and "!!!" in mod.T["budget_stop"]
+    def mcp_tool(name):
+        return {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": f"mcp__whatsapp__{name}", "input": {}}]}}
+    assert mod._stage_of(mcp_tool("get_group_info")).startswith("👥")
+    assert mod._stage_of(mcp_tool("search_all")).startswith("🔍")
+    assert mod._stage_of(mcp_tool("get_message_context")).startswith("🧵")
+    assert mod._stage_of(mcp_tool("send_message")).startswith("📤")
 
 
 def test_day_sync_plan():
@@ -2086,7 +2094,7 @@ def test_opencode_events_become_an_answer_and_live_steps(agent):
            {"type": "step_finish", "sessionID": "S1", "part": {"tokens": {"input": 50, "output": 3}}}]
     out = [mod._opencode_event(e, oc) for e in evs]
     tool = [e for e in out if e][0]
-    assert tool["message"]["content"][0]["name"] == "Read" and mod._stage_of(tool) == "📖 קורא קבצים"
+    assert tool["message"]["content"][0]["name"] == "Read" and mod._stage_of(tool) == "🧵 קורא הקשר וקבצים"
     assert oc["text"] == ["ZEBRA-4471"] and oc["sid"] == "S1" and oc["tin"] == 150
     oc2 = {"text": [], "sid": "", "err": "", "tin": 0, "tout": 0}
     mod._opencode_event({"type": "error", "error": {"message": "Model unavailable"}}, oc2)
