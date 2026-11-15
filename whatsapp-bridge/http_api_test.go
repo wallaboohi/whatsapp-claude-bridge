@@ -15,7 +15,7 @@ var registerOnce sync.Once
 // every endpoint the bridge serves (kept in step with the handlers; a new endpoint must be added here)
 var allEndpoints = []string{
 	"/api/send", "/api/download", "/api/react", "/api/typing", "/api/status", "/api/policy", "/api/events",
-	"/api/draft_decide", "/api/create_group", "/api/leave_group", "/api/join_group", "/api/list_groups",
+	"/api/draft_decide", "/api/draft_repost", "/api/create_group", "/api/leave_group", "/api/join_group", "/api/list_groups",
 	"/api/group_info", "/api/set_group", "/api/group_participants", "/api/group_photo", "/api/group_settings",
 	"/api/group_invite", "/api/edit_message", "/api/delete_message", "/api/forward", "/api/pin_message", "/api/star",
 	"/api/mark_read", "/api/pin_chat", "/api/send_poll", "/api/send_contact", "/api/post_status", "/api/set_about",

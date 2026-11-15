@@ -113,6 +113,41 @@ func registerApprovalAPI(client *whatsmeow.Client) {
 		st, err := decideDraft(client, int64(id), ok, control)
 		return map[string]any{"status": st}, err
 	})
+	adminHandler("/api/draft_repost", func(ctx context.Context, b map[string]any) (map[string]any, error) {
+		id, _ := b["id"].(float64)
+		st, err := repostDraftCard(client, int64(id))
+		return map[string]any{"status": st}, err
+	})
+}
+
+// repostDraftCard (owner 15.11): posts the card of an existing pending draft again (full text + attachment) in its card
+// chat, without creating a second draft. The new card becomes the one a ✅ approves.
+func repostDraftCard(client *whatsmeow.Client, id int64) (string, error) {
+	var recipient, name, message, media, cardChat string
+	err := globalStore.db.QueryRow(`SELECT recipient, name, message, COALESCE(media_path,''), COALESCE(card_chat,'')
+		FROM drafts WHERE id = ? AND status = 'pending'`, id).Scan(&recipient, &name, &message, &media, &cardChat)
+	if err != nil {
+		return "", fmt.Errorf("draft %d is not pending", id)
+	}
+	jid, err := types.ParseJID(recipient)
+	if err != nil {
+		return "", err
+	}
+	policyMu.Lock()
+	p := loadPolicy()
+	policyMu.Unlock()
+	card := p.cardChatFor(cardChat)
+	ok, res := sendWhatsAppMessage(client, card, draftCardText(id, name, jid, message, media), "")
+	if !ok {
+		return "", fmt.Errorf("card could not be posted: %s", res)
+	}
+	if cardID := sentID(res); cardID != "" {
+		globalStore.db.Exec("UPDATE drafts SET card_id = ?, card_chat = ? WHERE id = ?", cardID, card, id)
+	}
+	if media != "" {
+		sendWhatsAppMessage(client, card, "🤖 📎 קובץ לטיוטה → "+name, media)
+	}
+	return "reposted", nil
 }
 
 // sendApprovedSpecial sends an approved poll / contact / forward draft as the real message. The approval itself is the
