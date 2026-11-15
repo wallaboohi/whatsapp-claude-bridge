@@ -46,3 +46,12 @@ dash/BUILD
 .aider*
 .env
 .pytest_tmp/
+
+# ---- local leftovers: backups, old builds, secrets, stray files ----
+*.bak-*
+*.exe.old*
+m-d-logistic-*.json
+qr.png
+/store/
+agent/7
+agent/'*
