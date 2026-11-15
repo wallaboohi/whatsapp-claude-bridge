@@ -790,6 +790,16 @@ def load_groups():
     return g
 
 
+def serves_here(chat):
+    """False when groups.json gives this conversation a "host" that is not this computer (host_label or hostname)."""
+    load_groups()
+    want = ((_groups_last or {}).get(chat) or {}).get("host")
+    if not want:
+        return True
+    me = CFG.get("host_label") or socket.gethostname()
+    return str(want).strip().lower() in (me.lower(), socket.gethostname().lower())
+
+
 def K(name, chat=None):
     """Per-conversation key in kv; the primary group keeps the legacy (unsuffixed) keys so its session survives the upgrade."""
     return name if not chat or chat == PRIMARY else f"{name}:{chat}"
@@ -5512,6 +5522,8 @@ def handle(row):
             return  # "מאשר לנייח": answered by the failover code, never a Claude run
     except Exception:
         log("failover approve error", traceback.format_exc())
+    if cj != LOCAL and cj in load_groups() and not serves_here(cj):
+        return  # another computer answers this group (owner 15.11: two bridges on one number talked to each other)
     if cj != LOCAL and cj in load_groups() and (me or is_guest_sender(cj, sender)):  # the owner's own message in a connected group (others' messages stay plain information; a guest group also takes its guests')
         if content.startswith(CFG["reply_prefix"].strip()):
             return  # our own reply

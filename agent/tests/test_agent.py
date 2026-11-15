@@ -2157,3 +2157,16 @@ def test_restart_line_is_short_and_adb_is_silent(agent, monkeypatch):
     monkeypatch.setattr(mod, "reply", lambda *a, **k: sent.append(a))
     mod._adb_tell("📱 ה-adb לטלפון נפל")
     assert sent == []  # owner 14.11: nothing about adb reaches WhatsApp
+
+
+def test_group_served_by_one_computer_only(agent, monkeypatch):
+    mod, db = agent
+    mine, other, free = "120363000000000011@g.us", "120363000000000012@g.us", "120363000000000013@g.us"
+    open(mod.GROUPS_FILE, "w", encoding="utf-8").write(json.dumps(
+        {mine: {"name": "a", "host": "YB-PC-HW"}, other: {"name": "b", "host": "lap-yakir"}, free: {"name": "c"}}))
+    monkeypatch.setitem(mod.CFG, "host_label", "YB-PC-HW")
+    assert mod.serves_here(mine) and mod.serves_here(free) and not mod.serves_here(other)
+    seen = []
+    monkeypatch.setattr(mod, "enqueue_command", lambda *a, **k: seen.append(a[2] if len(a) > 2 else a))
+    mod.handle(("m1", other, "me", "2026-11-15 06:40:00", "שלום", 1, ""))
+    assert not seen  # the other computer's group: no run, no voice, no reply here
