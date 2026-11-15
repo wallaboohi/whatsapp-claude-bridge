@@ -12,6 +12,7 @@ import (
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
+	"go.mau.fi/whatsmeow/proto/waE2E"
 )
 
 // handleReaction returns true if the event was a reaction (handled or not).
@@ -20,7 +21,11 @@ func handleReaction(client *whatsmeow.Client, msg *events.Message) bool {
 	if r == nil {
 		return false
 	}
-	if !msg.Info.IsFromMe || globalStore == nil { // only the owner's own reactions count
+	if !msg.Info.IsFromMe && globalStore != nil {
+		storeApprovalReaction(client, msg, r)
+		return true
+	}
+	if !msg.Info.IsFromMe || globalStore == nil { // only the owner's own reactions count for draft cards
 		return true
 	}
 	chatJID := normalizeChat(client, msg.Info.Chat).String()
@@ -142,4 +147,27 @@ func sendApprovedSpecial(client *whatsmeow.Client, recipient, kind, payload stri
 	}
 	recordSent(to, resp.ID, desc, "", "", true, kind)
 	return true, "sent"
+}
+
+// storeApprovalReaction (owner 15.11): someone else's ✅ / 👍 on one of OUR messages in a private chat counts as an answer
+// ("מאשר"): the site manager marks ✅ on the daily report instead of writing. It is stored and published as a short
+// text message from that person, so the existing reply handling (e.g. the daily-report approval) picks it up unchanged.
+func storeApprovalReaction(client *whatsmeow.Client, msg *events.Message, r *waE2E.ReactionMessage) {
+	emoji := r.GetText()
+	if emoji != "✅" && emoji != "✔️" && emoji != "👍" {
+		return
+	}
+	if !r.GetKey().GetFromMe() || msg.Info.Chat.Server == types.GroupServer {
+		return
+	}
+	chat := normalizeChat(client, msg.Info.Chat)
+	chatJID := chat.String()
+	sender := normalizeUser(client, msg.Info.Sender.User)
+	id := "rx-" + msg.Info.ID
+	content := emoji + " (סימון אישור על הודעה)"
+	if err := globalStore.StoreMessage(id, chatJID, sender, content, msg.Info.Timestamp, false, "", "", "", nil, nil, nil, 0); err != nil {
+		return
+	}
+	globalStore.db.Exec("UPDATE messages SET quoted_id = ? WHERE id = ? AND chat_jid = ?", r.GetKey().GetID(), id, chatJID)
+	publishMessage(id, chatJID, sender, content, "", msg.Info.Timestamp, false)
 }
