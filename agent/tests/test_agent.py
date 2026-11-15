@@ -2170,3 +2170,13 @@ def test_group_served_by_one_computer_only(agent, monkeypatch):
     monkeypatch.setattr(mod, "enqueue_command", lambda *a, **k: seen.append(a[2] if len(a) > 2 else a))
     mod.handle(("m1", other, "me", "2026-11-15 06:40:00", "שלום", 1, ""))
     assert not seen  # the other computer's group: no run, no voice, no reply here
+
+
+def test_event_card_is_not_an_instruction(agent, monkeypatch):
+    mod, db = agent
+    seen = []
+    monkeypatch.setattr(mod, "enqueue_command", lambda *a, **k: seen.append(a))
+    mod.handle(("e1", mod.PRIMARY, "me", "2026-11-15 06:45:00", "📅 אירוע: ✅ סיימתי (6 דק'): דוח · 15/11 06:45", 1, ""))
+    assert not seen
+    mod.handle(("e2", mod.PRIMARY, "me", "2026-11-15 06:45:01", "מה המצב", 1, ""))
+    assert seen

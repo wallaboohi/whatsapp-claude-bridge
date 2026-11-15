@@ -5529,6 +5529,8 @@ def handle(row):
             return  # our own reply
         if sent_special(mid):
             return  # an event / poll / location the tool itself sent (has no reply prefix)
+        if me and content.startswith("📅 אירוע: "):
+            return  # an event card (notifications, possibly from the other computer's bridge on this number), never an instruction
         if is_draft_copy(content):
             return  # the bridge's copy-and-paste text under a draft card (owner 10.11), not an instruction
         if content == READ_ALOUD:  # 🛞 = read my last answer aloud (no Claude run)
