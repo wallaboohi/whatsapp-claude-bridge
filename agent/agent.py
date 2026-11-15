@@ -314,11 +314,7 @@ def report_auto_update():
         msg = f"↩ העדכון האוטומטי ל-{info.get('to', '?')} נכשל בבדיקה — הכלי חזר לגרסה {cur}. הגשר והסוכן פועלים."
     else:
         msg = f"✅ עודכן אוטומטית לגרסה {cur} ({dt.datetime.now():%H:%M}). הגשר והסוכן הופעלו מחדש."
-    _ctx.chat = PRIMARY
-    try:
-        reply(msg)
-    finally:
-        _ctx.chat = None
+    broadcast_system_notice(msg)
 
 
 def _git(*args, timeout=120):
@@ -535,12 +531,8 @@ def day_sync():
     if rebuild:
         err = _rebuild_bridge()
         notes.append(("⚠️ " + err) if err else "🔧 הגשר נבנה מחדש ועלה מחדש.")
-    _ctx.chat = PRIMARY
-    try:
-        reply(f"🌙 *שמירה יומית · {host}*\n" + ("\n".join(notes) if notes else "אין שינויים היום.")
-              + ("\n🔄 הסוכן עולה מחדש עם הקוד החדש." if restart else ""))
-    finally:
-        _ctx.chat = None
+    broadcast_system_notice(f"🌙 *שמירה יומית · {host}*\n" + ("\n".join(notes) if notes else "אין שינויים היום.")
+                            + ("\n🔄 הסוכן עולה מחדש עם הקוד החדש." if restart else ""))
     if restart:
         RESTART_REQ.set()
 
@@ -564,14 +556,10 @@ def auto_update():
         log("auto_update: up to date", res.get("current"))
         return
     dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
-    _ctx.chat = PRIMARY
-    try:
-        if dirty:
-            reply(f"⚠️ עדכון אוטומטי לגרסה {res.get('latest')} לא בוצע: יש שינויים לא שמורים בקבצי הכלי במחשב הזה. שמור אותם בגיט ואעדכן מחר (או עכשיו מהלוח).")
-            return
-        reply(f"🔄 עדכון אוטומטי: גרסה {res.get('current')} ← {res.get('latest')}. הגשר והסוכן יופעלו מחדש בעוד רגע; אודיע כשסיימתי.")
-    finally:
-        _ctx.chat = None
+    if dirty:
+        broadcast_system_notice(f"⚠️ עדכון אוטומטי לגרסה {res.get('latest')} לא בוצע: יש שינויים לא שמורים בקבצי הכלי במחשב הזה. שמור אותם בגיט ואעדכן מחר (או עכשיו מהלוח).")
+        return
+    broadcast_system_notice(f"🔄 עדכון אוטומטי: גרסה {res.get('current')} ← {res.get('latest')}. הגשר והסוכן יופעלו מחדש בעוד רגע; אודיע כשסיימתי.")
     kv_set("auto_update_pending", json.dumps({"from": res.get("current"), "to": res.get("latest"),
                                               "at": dt.datetime.now().isoformat(timespec="seconds")}))
     # the updater stops this agent and its run-agent loop, so it must not live in our process tree / Task Scheduler job
@@ -602,11 +590,7 @@ def auto_release():
     def say(t):
         if not t.startswith("🚀"):
             push("⏸️ השחרור הלילי לא בוצע (הפרטים בקבוצה)", PRIMARY, "release")
-        _ctx.chat = PRIMARY
-        try:
-            reply(t)
-        finally:
-            _ctx.chat = None
+        broadcast_system_notice(t)
 
     if g("status", "--porcelain", "--untracked-files=no").stdout.strip():
         say("⚠️ שחרור לילי לא בוצע: יש שינויים לא שמורים בקבצי הכלי במחשב הזה.")
@@ -647,7 +631,7 @@ def auto_release():
 
 
 def report_restart():
-    """After a requested restart: confirm in the group with the settings actually loaded."""
+    """After a requested restart: confirm in every managed group with the settings actually loaded."""
     raw = kv_get("restart_pending")
     if not raw:
         return
@@ -657,10 +641,10 @@ def report_restart():
     except Exception:
         info = {}
     wait_bridge(300)
-    reply(f"✅ עליתי מחדש ({dt.datetime.now():%H:%M}) · {machine_tag()}\n"
-          f"⏱ מנותק היום: {hm(down_today_min())} · מחובר מ-00:00: {hm(connected_today_min())}\n"
-          f"🔌 כרגע מחובר ל: {connected_ais_text()}"
-          + (f"\nסיבה: {restart_reason_he(info['reason'])}" if info.get("reason") else ""))
+    broadcast_system_notice(f"✅ עליתי מחדש ({dt.datetime.now():%H:%M}) · {machine_tag()}\n"
+                            f"⏱ מנותק היום: {hm(down_today_min())} · מחובר מ-00:00: {hm(connected_today_min())}\n"
+                            f"🔌 כרגע מחובר ל: {connected_ais_text()}"
+                            + (f"\nסיבה: {restart_reason_he(info['reason'])}" if info.get("reason") else ""))
 
 
 AI_HE = {"claude": "קלוד", "codex": "קודקס", "copilot": "קופילוט", "gemini": "גמיני", "gemini_cli": "גמיני", "ollama": "אולמה מקומי",
@@ -1724,6 +1708,20 @@ def reply(text, quoted=None):
         return
     body = italic(text.strip()) if CFG.get("reply_italic", True) else text.strip()
     send(chat, CFG["reply_prefix"] + body, quoted=quoted)
+
+
+def broadcast_system_notice(text):
+    """Send machine-wide maintenance notices to every enabled WhatsApp group handled by this agent."""
+    body = italic(text.strip()) if CFG.get("reply_italic", True) else text.strip()
+    message = CFG["reply_prefix"] + body
+    for chat in load_groups():
+        if not chat.endswith("@g.us"):
+            continue
+        if chat == PRIMARY:
+            kv_set("last_tool_msg", json.dumps({"ts": dt.datetime.now().isoformat(timespec="seconds"),
+                                                "text": text.strip()[:300]}, ensure_ascii=False))
+        if not send(chat, message):
+            log("system notice send failed", chat)
 
 
 def react(msg_id, emoji):
@@ -6089,11 +6087,7 @@ def report_reconnect(down_since, now, alerted, settle=None):
         msg = f"✅ WhatsApp is back · down {start:%H:%M}–{end:%H:%M} (~{mins} min)" + outage_reason(start, end)
         if missed:
             msg += f"\n📥 {len(missed)} message(s) were not taken in — handling them now."
-    _ctx.chat = PRIMARY
-    try:
-        reply(msg)
-    finally:
-        _ctx.chat = None
+    broadcast_system_notice(msg)
 
 
 def heal_bridge(why):
@@ -6112,6 +6106,8 @@ def heal_bridge(why):
         push(f"🔧 הגשר במחשב הזה לא ענה ({why}) והופעל מחדש לבד", PRIMARY, "bridge_heal")
     except Exception as e:
         log("bridge heal failed", e)
+        return
+    broadcast_system_notice(f"🔧 הגשר במחשב הזה לא ענה ({why}) והופעל מחדש לבד")
 
 
 def watchdog():

@@ -640,7 +640,8 @@ def test_reconnect_finds_missed_owner_messages(multi, monkeypatch):
     monkeypatch.setattr(mod, "send", lambda chat, text, media=None, quoted=None: sent.append((chat, text)) or True)
     mod.report_reconnect(start, now, False, settle=0)
     assert handled == ["O1"]
-    assert sent and sent[-1][0] == mod.PRIMARY and "נמצאו 1" in sent[-1][1] and "20" in sent[-1][1]
+    assert {chat for chat, _ in sent} == {mod.PRIMARY, DEV}
+    assert all("נמצאו 1" in text and "20" in text for _, text in sent)
     # a short blip with nothing missed stays quiet
     sent.clear()
     mod.report_reconnect(now - mod.dt.timedelta(seconds=50), now, False, settle=0)
@@ -738,7 +739,7 @@ def test_tts_text_cleaning(agent):
 def test_auto_update_is_scheduled_and_reports(agent, monkeypatch, tmp_path):
     mod, _ = agent
     calls = []
-    monkeypatch.setattr(mod, "reply", lambda t, *a, **k: calls.append(t))
+    monkeypatch.setattr(mod, "broadcast_system_notice", calls.append)
     monkeypatch.setattr(mod, "wait_bridge", lambda *a, **k: True)
     monkeypatch.setattr(mod, "HERE", str(tmp_path))  # never touch the real update.log
     mod.report_auto_update()
@@ -752,6 +753,31 @@ def test_auto_update_is_scheduled_and_reports(agent, monkeypatch, tmp_path):
     (tmp_path / "update.log").write_text("[x] \u05de\u05e2\u05d3\u05db\u05df 1.0.8 v1.0.9\n[x] \u21a9 back 1.0.8\n", encoding="utf-8")
     mod.report_auto_update()
     assert "נכשל" in calls[-1]
+
+
+def test_restart_notice_reaches_all_managed_groups(agent, monkeypatch):
+    mod, _ = agent
+    group = "1203631111@g.us"
+    direct_chat = "972500000002@s.whatsapp.net"
+    monkeypatch.setattr(mod, "load_groups", lambda: {
+        mod.PRIMARY: {},
+        group: {},
+        direct_chat: {},
+        mod.LOCAL: {},
+    })
+    monkeypatch.setattr(mod, "wait_bridge", lambda *a, **k: True)
+    monkeypatch.setattr(mod, "machine_tag", lambda: "YB-PC-HW")
+    monkeypatch.setattr(mod, "down_today_min", lambda: 0)
+    monkeypatch.setattr(mod, "connected_today_min", lambda: 0)
+    monkeypatch.setattr(mod, "connected_ais_text", lambda: "Copilot")
+    sent = []
+    monkeypatch.setattr(mod, "send", lambda chat, text, **kwargs: sent.append((chat, text)) or True)
+    mod.kv_set("restart_pending", '{"reason": "בדיקה"}')
+
+    mod.report_restart()
+
+    assert {chat for chat, _ in sent} == {mod.PRIMARY, group}
+    assert all("עליתי מחדש" in text for _, text in sent)
 
 
 def test_tunnel_command_both_ways(agent):
@@ -989,7 +1015,7 @@ def test_day_sync_does_not_save_when_tests_fail(agent, monkeypatch):
         return 0, ""
     monkeypatch.setattr(mod, "_git", fake_git)
     monkeypatch.setattr(mod, "_day_sync_tests", lambda go, py: "1 failed")
-    monkeypatch.setattr(mod, "reply", lambda text, **k: said.append(text))
+    monkeypatch.setattr(mod, "broadcast_system_notice", said.append)
     mod.day_sync()
     assert not any(a[0] in ("add", "commit") or (len(a) > 4 and a[4] == "commit") for a in calls)
     assert said and "לא נשמרו" in said[0] and "1 failed" in said[0]
@@ -1065,7 +1091,7 @@ def test_day_sync_skips_without_hub(agent, monkeypatch):
     mod, _ = agent
     said = []
     monkeypatch.setattr(mod, "_git", lambda *a, timeout=120: (0, "origin"))
-    monkeypatch.setattr(mod, "reply", lambda text, **k: said.append(text))
+    monkeypatch.setattr(mod, "broadcast_system_notice", said.append)
     mod.day_sync()
     assert said == []
 
@@ -2139,6 +2165,7 @@ def test_watchdog_heals_a_bridge_whose_api_is_down(agent, monkeypatch):
             self.stdout = out
     monkeypatch.setattr(mod.subprocess, "run", lambda cmd, **k: calls.append(cmd) or R("0" if cmd[0] == "powershell" else ""))
     monkeypatch.setattr(mod, "push", lambda *a, **k: calls.append(["push", a[0]]))
+    monkeypatch.setattr(mod, "broadcast_system_notice", lambda *a, **k: calls.append(["notice"]))
     mod.heal_bridge("ה-API לא ענה 3 דק'")
     names = [c[0] for c in calls]
     assert "taskkill" in names and "schtasks" in names and "push" in names  # no loop was running: the task is started too
