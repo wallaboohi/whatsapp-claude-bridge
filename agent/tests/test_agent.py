@@ -873,6 +873,22 @@ def test_status_hourglass_flips(agent):
     assert "27%" in rep and "70%" in rep and "כל הגשר" in rep and "השיחה הזו" in rep and "חודשי" not in rep
 
 
+def test_cli_status_shows_actual_provider_and_remote_location(agent):
+    mod, _ = agent
+    chat = "copilot-group@g.us"
+    mod._ctx.chat = chat
+    mod.set_provider("copilot", chat=chat)
+    assert mod.effective_model("sonnet") is None
+    st = mod.StatusMsg(mod.effective_model("sonnet"), chat=chat, wa=False)
+    st.set_stage("🧠 קופילוט חושב")
+    text = st._text()
+    final = st._final()
+    st.finish()
+    mod._ctx.chat = None
+    assert "קופילוט חושב" in text and "☁️ מרוחק (ענן)" in text and "סונט" not in text
+    assert "קופילוט" in final and "☁️ מרוחק (ענן)" in final and "סונט" not in final
+
+
 def test_downtime_notice_lists_messages_sent_while_down(agent, monkeypatch):
     mod, db = agent
     sent = []

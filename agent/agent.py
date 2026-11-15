@@ -1328,7 +1328,10 @@ def effective_model(model):
         name, pm = used or auto_pick() or "claude", None                       # (the tag showed "Claude · bridge-qwen3-4b")
     if name == "claude":
         return model
-    return pm or (providers().get(name) or {}).get("model") or model
+    p = providers().get(name) or {}
+    if p.get("kind") in ("cli", "opencode"):
+        return pm or p.get("model") or None
+    return pm or p.get("model") or model
 
 
 def hebrew_share(text):
@@ -2488,7 +2491,7 @@ def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
             if k:
                 env[var] = k
     if on_stage:
-        on_stage(f"🧠 {p.get('short') or name} חושב", "")
+        on_stage(f"🧠 {AI_HE.get(name) or p.get('short') or name} חושב", "")
     t0 = time.time()
     try:
         r = subprocess.run(cmd, cwd=HOME, input=stdin_text, capture_output=True, text=True, encoding="utf-8", errors="replace",
@@ -2874,6 +2877,22 @@ def cap_lifted(chat, text=""):
 def machine_tag():
     """Owner 09.11: which computer is working, at the start of every status message (config host_label, else host name)."""
     return "🖥️ " + (CFG.get("host_label") or socket.gethostname())
+
+
+def status_ai_info(model, chat, use_run_state=False):
+    """Return only the selected provider's real model and execution location for a progress message."""
+    name, pm = active_provider(chat)
+    if name == "auto" or (use_run_state and getattr(_ctx, "failover_used", False)):
+        name = getattr(_ctx, "provider_used", None) or (auto_pick() if name == "auto" else None) or "claude"
+        pm = None
+    p = providers().get(name) or {}
+    actual_model = pm or p.get("model")
+    if p.get("kind") not in ("cli", "opencode"):
+        actual_model = actual_model or model
+    kind, place = where_of(name, actual_model)
+    short = AI_HE.get(name) or p.get("short") or name
+    location = f"🏠 מקומי, {place}" if kind == "local" else "☁️ מרוחק (ענן)"
+    return short, actual_model, location
 
 
 _usage_cache = {"at": 0.0, "v": None}
@@ -3376,6 +3395,7 @@ class StatusMsg:
     def __init__(self, model, chat=None, wa=True, react_to=None):
         self.model, self.stage, self.mid, self.t0, self.done = model, "🧠 מתחיל", None, time.time(), threading.Event()
         self.chat, self.wa = chat or PRIMARY, wa
+        self.ai_short, self.ai_model, self.ai_location = status_ai_info(model, self.chat)
         self.react_to = react_to if wa and CFG.get("status_reactions", True) else None
         self._reacted, self._react_t = "", 0.0
         self.steps, self.tick = [], 0
@@ -3394,6 +3414,7 @@ class StatusMsg:
     def set_stage(self, st, detail=""):
         text = f"{st} · {detail}" if detail else st
         self.stage = text
+        self.ai_short, self.ai_model, self.ai_location = status_ai_info(self.model, self.chat, use_run_state=True)
         self._react_stage(st)
         if not self.steps or self.steps[-1]["text"] != text:
             self.steps.append({"at": dt.datetime.now().isoformat(timespec="seconds"), "text": text})
@@ -3414,17 +3435,27 @@ class StatusMsg:
         e = int(time.time() - self.t0)
         return f"{e // 60}:{e % 60:02d}"
 
+    def _ai_details(self, stage_included=True):
+        details = []
+        if self.ai_short and (not stage_included or self.ai_short not in self.stage):
+            details.append(self.ai_short)
+        if self.ai_model:
+            details.append(model_he(self.ai_model))
+        if self.ai_location:
+            details.append(self.ai_location)
+        return " · ".join(details)
+
     def _text(self):
         # the hourglass flips (⏳ ↔ ⌛) on every edit so the owner sees it is alive (owner request 08.11)
         icon = "⏳" if self.tick % 2 == 0 else "⌛"
         prefix = CFG["reply_prefix"]
         if self.tick % 2 and prefix.strip() == "🤖":
             prefix = prefix.replace("🤖", "🦾")  # the robot "moves" too while working (owner request 08.11)
-        return prefix + italic(f"{icon} {machine_tag()} · {self.stage} · {self._elapsed()} · {self.model}")
+        return prefix + italic(f"{icon} {machine_tag()} · {self.stage} · {self._ai_details()} · {self._elapsed()}")
 
     def _final(self):
         n = len(self.steps)
-        return CFG["reply_prefix"] + italic(f"✅ {machine_tag()} · סיימתי · {self._elapsed()} · {self.model}" + (f" · {n} שלבים" if n else ""))
+        return CFG["reply_prefix"] + italic(f"✅ {machine_tag()} · סיימתי · {self._ai_details(stage_included=False)} · {self._elapsed()}" + (f" · {n} שלבים" if n else ""))
 
     def _start(self):
         if self.done.is_set():
