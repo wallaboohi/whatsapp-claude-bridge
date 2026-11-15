@@ -6965,7 +6965,8 @@ def chrome_start():
         return "כרום כבר פועל במחשב, והתוסף של Claude מחובר דרכו."
     if not os.path.exists(exe):
         return "לא מצאתי את כרום במחשב הזה."
-    subprocess.Popen([exe, "--no-startup-window"], creationflags=NO_WINDOW, close_fds=True)
+    # without a window Chrome exits at once (owner 16.11), so open one minimized; the extension connects inside it
+    subprocess.Popen([exe, "--start-minimized", "--no-first-run", "--no-default-browser-check", "about:blank"], close_fds=True)
     time.sleep(8)
     return "✅ הפעלתי את כרום ברקע; התוסף של Claude מתחבר אליו לבד." if chrome_running() else "⚠️ ניסיתי להפעיל את כרום ולא הצלחתי."
 
