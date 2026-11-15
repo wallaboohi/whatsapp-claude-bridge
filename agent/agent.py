@@ -2973,20 +2973,78 @@ def claude_account(max_age=3600):
     return v or "החשבון של המחשב הזה"
 
 
-def restart_usage():
-    """Owner 09.11 07:20: usage only in the restart message — the bridge's cap, and Claude's 5-hour / weekly / monthly (%)."""
+_USAGE_PROBE = r"""
+import json,os,urllib.request
+o=json.load(open(os.path.expanduser("~/.claude/.credentials.json"),encoding="utf-8")).get("claudeAiOauth") or {}
+h={"Authorization":"Bearer "+(o.get("accessToken") or ""),"anthropic-beta":"oauth-2025-04-20","User-Agent":"claude-code"}
+g=lambda u:json.loads(urllib.request.urlopen(urllib.request.Request(u,headers=h),timeout=10).read().decode())
+r={"plan":o.get("subscriptionType"),"usage":g("https://api.anthropic.com/api/oauth/usage")}
+try: r["email"]=(g("https://api.anthropic.com/api/oauth/profile").get("account") or {}).get("email")
+except Exception: r["email"]=None
+print(json.dumps(r))
+"""
+
+
+def _claude_probe(host):
+    """Owner 15.11: one Claude account's meter, read with that machine's own sign-in (host None = this machine)."""
     try:
-        tot, tcap = spent_today(), total_budget()
-        u = claude_usage() or {}
-        pct = lambda k: f"{(u.get(k) or {}).get('utilization'):.0f}%" if (u.get(k) or {}).get("utilization") is not None else "—"
-        line = (f"💰 שימוש הגשר היום: {money(tot)} · ללא תקרה (ייחוס: התקרה הקודמת {money(tcap, 0)}, {_pct(tot, tcap)})"
-                if CFG.get("unlimited_all") else f"💰 מגבלת הגשר: {money(tot)} מתוך {money(tcap, 0)} ({_pct(tot, tcap)})")
-        return (line + "\n"
-                f"☁️ מגבלת Claude · {claude_account()}: " + " · ".join(f"{n} {pct(k)}" for k, n in (("five_hour", "5 שעות"), ("seven_day", "שבועית"))
-                                                       if (u.get(k) or {}).get("utilization") is not None))
+        if host is None:
+            r = subprocess.run([sys.executable, "-I", "-X", "utf8", "-c", _USAGE_PROBE], capture_output=True, timeout=40)
+        else:
+            r = subprocess.run(["ssh", "-o", "ConnectTimeout=8", "-o", "BatchMode=yes", host, "python -I -X utf8 -"],
+                               input=_USAGE_PROBE.encode(), capture_output=True, timeout=40)
+        if r.returncode == 0:
+            return json.loads(r.stdout.decode("utf-8").strip().splitlines()[-1]), ""
+        err = r.stderr.decode("utf-8", "replace")
+        return None, ("הטוקן של Claude במחשב הזה פג (יתחדש כשקלוד ירוץ שם)" if "401" in err else "לא הצלחתי לקרוא את המחשב")
     except Exception as e:
-        log("restart usage failed", e)
-        return ""
+        return None, f"לא זמין ({str(e)[:40]})"
+
+
+def _claude_account_lines(label, host):
+    key = "claude_status_last_" + (host or "local")
+    d, why = _claude_probe(host)
+    out = [f"*{label}*"]
+    if d:
+        kv_set(key, json.dumps({"d": d, "at": f"{dt.datetime.now():%d.%m %H:%M}"}))
+        stamp = ""
+    else:
+        try:
+            last = json.loads(kv_get(key) or "")
+            d, stamp = last["d"], f" _(נתון אחרון מ-{last['at']}, לא עדכני)_"
+        except Exception:
+            out.append(f"• {why}")
+            return out
+        out.append(f"• ⚠️ {why}")
+    u = d.get("usage") or {}
+    plan = (d.get("plan") or "").capitalize()
+    out[0] += f" · {d.get('email') or 'חשבון לא מזוהה'}" + (f" ({plan})" if plan else "") + stamp
+    for k, n in (("five_hour", "5 שעות"), ("seven_day", "שבועי"), ("seven_day_opus", "שבועי Opus"), ("seven_day_sonnet", "שבועי Sonnet")):
+        x = u.get(k) or {}
+        if x.get("utilization") is not None:
+            out.append(f"• {n}: {x['utilization']:.0f}% (מתאפס {_reset_at(x.get('resets_at') or '')})")
+    for x in u.get("limits") or []:
+        sc = (((x.get("scope") or {}).get("model") or {}).get("display_name"))
+        if x.get("kind") == "weekly_scoped" and sc:
+            out.append(f"• שבועי {sc}: {x.get('percent')}%")
+    rows = ((u.get("seven_day_breakdown") or {}).get("rows")) or []
+    he = {"Claude Code": "קוד", "Chats": "צ'אט", "Cowork": "Cowork", "Other": "אחר"}
+    if any(r.get("percent") for r in rows):
+        out.append("• פילוח שבועי: " + " · ".join(f"{he.get(r['display_name'], r['display_name'])} {r['percent']}%" for r in rows))
+    ex = u.get("extra_usage") or {}
+    out.append("• קרדיט נוסף: " + ("פעיל" + (f", {ex['utilization']:.0f}%" if ex.get("utilization") is not None else "") if ex.get("is_enabled") else "כבוי"))
+    out.append("• חודשי: אין מדד חודשי ב-Claude")
+    return out
+
+
+def claude_status_report():
+    """/מצב קלוד (owner 15.11): both subscriptions' meters, in full; not in the restart message."""
+    peer = CFG.get("peer_ssh") or ("4-MINE" if socket.gethostname().upper() == "YB-PC-HW" else None)
+    out = [f"📊 *מצב קלוד · נכון ל-{dt.datetime.now():%H:%M}*", ""]
+    out += _claude_account_lines(f"🖥️ {machine_tag()}", None)
+    if peer:
+        out += [""] + _claude_account_lines("💻 המחשב השני", peer)
+    return "\n".join(out)
 
 
 def _pct(a, b):
@@ -3602,6 +3660,8 @@ def owner_command(text, chat=None):
         return ((f"📜 *כללי הבסיס של השיחה הזו* — יש {rules_count(body)} כללים (`{rel}`):\n{body}" if body
                  else f"📜 עוד אין כללי בסיס לשיחה הזו — יש 0 כללים (`{rel}`).")
                 + "\n\nלהוספה: /כלל בסיס ואחריו הכלל. אבדוק שהוא ברור ולא סותר כללים קיימים לפני שאוסיף.")
+    if re.match(r"^/\s*(מצב קלוד|מצב claude)\s*$", text.strip()):
+        return claude_status_report()
     if re.match(r"^/(תקרה|תקרת שימוש|שימוש|usage)\s*$", text.strip()):
         return usage_report(chat or PRIMARY)
     if re.match(r"^/\s*(כרום|chrome)\s*$", text.strip()):   # owner 10.11: bring the Chrome extension back remotely

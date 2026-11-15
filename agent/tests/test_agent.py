@@ -862,8 +862,7 @@ def test_status_hourglass_flips(agent):
     assert "מגבלת" not in st._final() and "$" not in st._final(), "no usage/money line in the regular chat (owner 09.11 07:14)"
     mod._account_cache.update(at=mod.time.time() + 3600, v="me@example.com (Pro)")
     rep = mod.owner_command("/תקרה")
-    ru = mod.restart_usage()
-    assert "me@example.com" in rep and "me@example.com" in ru and "5 שעות 27%" in ru and "שבועית 70%" in ru and "מגבלת הגשר" in ru
+    assert "me@example.com" in rep
     assert "27%" in rep and "70%" in rep and "כל הגשר" in rep and "השיחה הזו" in rep and "חודשי" not in rep
 
 
@@ -2279,3 +2278,13 @@ def test_chosen_ai_that_fails_is_never_replaced_by_another(agent, monkeypatch):
     assert calls == [None] and e.value.name == "gemini"  # one try, on Gemini only
     assert mod.classify_down("You exceeded your current quota, please check your plan and billing details") == ("rate", 15)
     assert mod.classify_down("insufficient_quota: check your plan and billing details")[0] == "billing"
+
+
+def test_claude_status_command_shows_both_accounts_and_survives_a_dead_token(agent):
+    mod, _ = agent
+    ok = {"email": "me@example.com", "plan": "pro", "usage": {"five_hour": {"utilization": 66, "resets_at": "2026-11-15T09:30:00+00:00"},
+                                                            "seven_day": {"utilization": 59, "resets_at": "2026-11-20T03:00:00+00:00"}}}
+    mod.CFG["peer_ssh"] = "peer"
+    mod._claude_probe = lambda host: (ok, "") if host is None else (None, "הטוקן פג")
+    rep = mod.owner_command("/מצב קלוד")
+    assert "me@example.com" in rep and "5 שעות: 66%" in rep and "שבועי: 59%" in rep and "הטוקן פג" in rep and "חודשי" in rep
