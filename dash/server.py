@@ -788,7 +788,7 @@ def legend(chat=None):
             "scope": {"chat": chat or "", "chat_name": (convs.get(chat) or {}).get("name") or "", "own": own,
                       "computer": {"provider": gname, "short": (_providers().get(gname) or {}).get("short") or gname}},
             "provider_code": "agent/providers.json · agent/provider.json · secrets/<key>",
-            "provider_phone": "/ספק · /ספק <שם> [מודל]"}
+            "provider_phone": "/ספק · /ספק <שם> [מודל] · /ספק כאן <שם> [מודל]"}
 
 
 _CLAUDE_ACC = {"at": 0.0, "v": None}

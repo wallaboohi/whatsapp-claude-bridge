@@ -1256,18 +1256,19 @@ def resolve_ai_word(word):
     return (PROVIDER_WORDS[w], None) if PROVIDER_WORDS.get(w) in providers() else None
 
 
-def switch_provider(name, model=None):
-    """Make `name` (and `model`) the bridge's provider if it answers now; the reply text for WhatsApp."""
+def switch_provider(name, model=None, chat=None):
+    """Set the computer provider, or one conversation's provider, if it answers now."""
     ps = providers()
     c = provider_check(name)
     if not c["ok"]:
         return f"⚪ {ps[name]['label']} לא מחובר: {c['detail']}. לא הוחלף."
     if model and c["models"] and model not in c["models"]:
         return f"המודל {model} לא נמצא אצל {ps[name]['label']}. יש: " + ", ".join(c["models"][:15])
-    set_provider(name, model)
-    _, cm = active_provider()
-    return (f"✅ ספק הגשר: *{ps[name]['label']}*" + (f" · מודל {cm or ps[name].get('model')}" if name != "claude" else "")
-            + ". כל השיחות עוברות דרכו מההודעה הבאה. חזרה: /קלוד")
+    set_provider(name, model, chat=chat)
+    _, cm = active_provider(chat)
+    scope = "בקבוצה הזו" if chat else "הגשר"
+    return (f"✅ ספק {scope}: *{ps[name]['label']}*" + (f" · מודל {cm or ps[name].get('model')}" if name != "claude" else "")
+            + (". חזרה לספק המחשב: /ספק כאן איפוס" if chat else ". כל השיחות עוברות דרכו מההודעה הבאה. חזרה: /קלוד"))
 
 
 def effective_model(model):
@@ -3491,10 +3492,21 @@ def owner_command(text, chat=None):
         if m.group(2):
             return f"⛔ אין חריגות לחוק הגרסאות. אחרי {v.current()} באה {v.next_version()}.\n{law}"
         return f"🔖 גרסה נוכחית: {v.current()} · הבאה לפי החוק: *{v.next_version()}*\n{law}"
-    m = re.match(r"^/\s*(ספק|provider)(?:\s+(\S+))?(?:\s+(\S+))?\s*$", text.strip())
+    m = re.match(r"^/\s*(ספק|provider)(?:\s+(\S+))?(?:\s+(\S+))?(?:\s+(\S+))?\s*$", text.strip())
     if m:  # owner 13.11: the bridge's AI provider (the same as the provider node of the legend in the dashboard)
         if not m.group(2):
             return providers_text()
+        if m.group(2).lower() in ("כאן", "קבוצה", "לקבוצה"):
+            chat = cur_chat()
+            if not m.group(3) or m.group(3).lower() in ("איפוס", "ברירת-מחדל", "default"):
+                set_provider("", chat=chat)
+                return "↩️ הקבוצה חזרה לספק המחשב."
+            hit = resolve_ai_word(m.group(3))
+            if not hit:
+                return "לא מכיר את הספק הזה.\n\n" + providers_text()
+            return switch_provider(hit[0], m.group(4) or hit[1], chat=chat)
+        if m.group(4):
+            return "לשינוי ספק בקבוצה הזו: /ספק כאן <שם> [מודל]"
         hit = resolve_ai_word(m.group(2))
         if not hit:
             return "לא מכיר את הספק הזה.\n\n" + providers_text()

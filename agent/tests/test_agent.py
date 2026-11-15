@@ -1734,6 +1734,18 @@ def test_provider_layer(agent, monkeypatch):
     assert mod.active_provider()[0] == "claude" and mod.limit_until()
 
 
+def test_provider_command_can_target_current_group_only(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    monkeypatch.setattr(mod, "PROVIDER_FILE", str(tmp_path / "provider.json"))
+    monkeypatch.setattr(mod, "provider_check", lambda n: {"ok": True, "detail": "", "models": ["bridge-qwen3-4b", "qwen3:4b-instruct"]})
+    chat = mod.PRIMARY
+    assert "בקבוצה הזו" in mod.owner_command("/ספק כאן ollama qwen3:4b-instruct", chat)
+    assert mod.active_provider(chat) == ("ollama", "qwen3:4b-instruct")
+    assert mod.active_provider("another-group@g.us")[0] == "claude"
+    assert "חזרה לספק המחשב" in mod.owner_command("/ספק כאן איפוס", chat)
+    assert mod.active_provider(chat)[0] == "claude"
+
+
 def test_auth_regex_and_login_code(agent, monkeypatch):
     mod, _ = agent
     # owner 13.11: the real expiry text from Claude Code must count as a sign-out
