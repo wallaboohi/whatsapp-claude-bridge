@@ -45,3 +45,4 @@ agent/failover/
 dash/BUILD
 .aider*
 .env
+.pytest_tmp/

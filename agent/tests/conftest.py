@@ -5,6 +5,11 @@ import datetime as _dt
 import os
 import time as _time
 
+# A temp folder in the user's profile can end up unreadable (broken ACL), which turned every tmp_path test into an
+# error and failed releases (15.11). Keep pytest's temp root inside the repo, where the tool always has rights.
+os.environ.setdefault("PYTEST_DEBUG_TEMPROOT", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".pytest_tmp"))
+os.makedirs(os.environ["PYTEST_DEBUG_TEMPROOT"], exist_ok=True)
+
 _fake = os.environ.get("FAKE_NOW")
 if _fake:
     _shift = _dt.datetime.fromisoformat(_fake).timestamp() - _time.time()
