@@ -3,7 +3,7 @@
   peer_sync.py status        show which local-only files differ and whether the peer's code/bridge is current
   peer_sync.py files         merge the local-only rule files in BOTH directions: a line one side lacks is appended to the
                              other side (never overwritten, a backup is kept on each side first);
-                             JSON settings (config.json, groups.json): only keys the other side lacks are added, secrets skipped
+                             JSON settings (config.json, agent/groups.json): only keys the other side lacks are added, secrets skipped
   peer_sync.py code          peer: git pull --ff-only from hub, rebuild the bridge through agent._rebuild_bridge() when Go
                              files changed, then show both versions
 
@@ -21,7 +21,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PEER = "4-MINE"
 PEER_ROOT = "C:/Users/walla/whatsapp-mcp"
 MERGE = ["agent/home/bridge_rules.md", "agent/home/dictionary.md"]
-JSON_MERGE = ["agent/config.json", "whatsapp-bridge/store/groups.json"]  # only keys the other side lacks; values never replaced
+JSON_MERGE = ["agent/config.json", "agent/groups.json"]  # only keys the other side lacks; values never replaced
 SECRET_WORDS = ("key", "token", "secret", "password", "pass")
 COMPARE = ["agent/home/AI-KNOWLEDGE.md"]
 SSH_NOISE = ("WARNING", "vulnerable", "upgraded", "post-quantum", "store now")
