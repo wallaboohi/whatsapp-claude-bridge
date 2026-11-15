@@ -3033,11 +3033,44 @@ def side_answer(chat, text, msg_id=None):
         _ctx.chat = None
 
 
-def enqueue_command(msg_id, text, when, chat=None):
+def instant_command(msg_id, text, chat):
+    """Owner 15.11: a bridge command (/gemini, /מודל, /בריאות...) is answered by the bridge at once, never queued behind a running answer.
+    True when it was one; anything the bridge does not know (or "/מודל X <request>") goes to the queue as before."""
+    t = re.sub(r"^\s*/\s+", "/", text or "")
+    if not t.startswith("/") or (guest_cfg(chat) and not GUEST_CMDS.match(t)):
+        return False
+    if re.match(r"^\s*/\s*(מודל|model)\s+\S+(?:\s+(?:שעה|hour))?\s+\S", t):
+        return False  # a model switch with a request after it: the request is real work
+    _ctx.chat, _ctx.src, _ctx.sync = chat, "wa", 0
+    try:
+        out = login_code_reply(t)
+        if out is None:
+            out = owner_command(t, chat)
+        if out is None:
+            return False
+        reply(out, quoted=msg_id)
+        react(msg_id, "✅")
+        return True
+    finally:
+        _ctx.chat = None
+
+
+def enqueue_command(msg_id, text, when, chat=None, direct=True):
     chat = chat or PRIMARY
     sm = SIDE_RE.match(text or "")
     if sm:  # not queued behind the running work: answered now, in its own thread
         threading.Thread(target=side_answer, args=(chat, sm.group(1).strip(), msg_id), daemon=True).start()
+        return
+    if direct and re.match(r"^\s*/", text or ""):
+        def now():
+            try:
+                done = instant_command(msg_id, text, chat)
+            except Exception:
+                log("instant command error", traceback.format_exc())
+                done = False
+            if not done:
+                enqueue_command(msg_id, text, when, chat, direct=False)
+        threading.Thread(target=now, daemon=True).start()
         return
     with adb() as db:
         cid = db.execute("INSERT INTO commands (msg_id, text, at, chat_jid, source, sync) VALUES (?, ?, ?, ?, 'wa', 0)", (msg_id, text, when, chat)).lastrowid

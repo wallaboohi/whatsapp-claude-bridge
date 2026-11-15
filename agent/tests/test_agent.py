@@ -2231,3 +2231,15 @@ def test_switch_reports_which_models_failed_and_which_answers(agent, monkeypatch
     out = mod.switch_provider("gemini")
     assert got == ["b"] and "❌ a: הספק מגביל קצב כרגע" in out and "✅ b: עונה עכשיו" in out
     assert mod.tried_he([("a", "x"), ("b", "y")]).count("❌") == 2
+
+
+def test_bridge_command_is_answered_at_once_not_queued(agent, monkeypatch):
+    mod, db = agent
+    said = []
+    monkeypatch.setattr(mod, "reply", lambda t, **k: said.append(t))
+    monkeypatch.setattr(mod, "react", lambda *a, **k: None)
+    monkeypatch.setattr(mod, "owner_command", lambda t, chat=None: "בוצע" if t.startswith("/בריאות") else None)
+    assert mod.instant_command("c1", "/בריאות", mod.PRIMARY) and said == ["בוצע"]
+    assert not mod.instant_command("c2", "/משהו לא מוכר", mod.PRIMARY)  # unknown: goes to the queue as before
+    assert not mod.instant_command("c3", "/מודל אופוס תכין דוח", mod.PRIMARY)  # a request after the switch is real work
+    assert not mod.instant_command("c4", "שלום", mod.PRIMARY)
