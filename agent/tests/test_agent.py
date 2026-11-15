@@ -1727,10 +1727,10 @@ def test_provider_layer(agent, monkeypatch):
     monkeypatch.setattr(mod, "provider_check", lambda n: {"ok": n != "groq", "detail": "x", "models": ["bridge-qwen3-4b", "qwen3:4b-instruct"]})
     assert "לא הוחלף" in mod.owner_command("/ספק groq", mod.PRIMARY)
     assert "לא נמצא" in mod.owner_command("/ספק ollama nosuch", mod.PRIMARY)
-    assert "✅" in mod.owner_command("/ספק אולמה qwen3:4b-instruct", mod.PRIMARY)
+    assert "✅" in mod.owner_command("/ספק מחשב אולמה qwen3:4b-instruct", mod.PRIMARY)
     assert mod.active_provider() == ("ollama", "qwen3:4b-instruct") and mod.limit_until() is None, "no subscription limit on Ollama"
     assert mod.provider_env()[1] == "qwen3:4b-instruct"
-    mod.owner_command("/ספק claude", mod.PRIMARY)
+    mod.owner_command("/ספק מחשב claude", mod.PRIMARY)
     assert mod.active_provider()[0] == "claude" and mod.limit_until()
 
 
@@ -1744,6 +1744,10 @@ def test_provider_command_can_target_current_group_only(agent, monkeypatch, tmp_
     assert mod.active_provider("another-group@g.us")[0] == "claude"
     assert "חזרה לספק המחשב" in mod.owner_command("/ספק כאן איפוס", chat)
     assert mod.active_provider(chat)[0] == "claude"
+    assert "בקבוצה הזו" in mod.owner_command("/ספק ollama qwen3:4b-instruct", chat)
+    assert mod.active_provider(chat)[0] == "ollama" and mod.active_provider("another-group@g.us")[0] == "claude"
+    mod.owner_command("/קלוד", chat)
+    assert mod.active_provider(chat)[0] == "claude" and mod.active_provider()[0] == "claude"
 
 
 def test_auth_regex_and_login_code(agent, monkeypatch):
@@ -1823,12 +1827,14 @@ def test_switch_words_and_the_answer_tag(agent, monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "provider_check", lambda n: {"ok": False, "detail": "אין מפתח", "models": []})
     assert "לא מחובר" in mod.owner_command("/גמיני") and mod.active_provider()[0] == "claude"  # not connected: nothing switches
     monkeypatch.setattr(mod, "provider_check", lambda n: {"ok": True, "detail": "", "models": ["qwen2.5-coder:3b", "qwen3:8b"]})
-    assert "ספק הגשר" in mod.owner_command("/qwencode") and mod.active_provider() == ("ollama", "qwen2.5-coder:3b")
+    assert "בקבוצה הזו" in mod.owner_command("/qwencode") and mod.active_provider(mod.PRIMARY) == ("ollama", "qwen2.5-coder:3b") and mod.active_provider()[0] == "claude"
+    mod.owner_command("/ספק כאן איפוס")
+    assert "ספק הגשר" in mod.owner_command("/ספק מחשב qwencode") and mod.active_provider() == ("ollama", "qwen2.5-coder:3b")
     tag = mod.ai_tag("opus")
     assert tag.startswith("🧠 Ollama") and "qwen2.5-coder:3b" in tag and tag.endswith("\n")
-    assert "ספק הגשר" in mod.owner_command("/ספק ollama qwen3:8b") and mod.active_provider() == ("ollama", "qwen3:8b")
+    assert "ספק הגשר" in mod.owner_command("/ספק מחשב ollama qwen3:8b") and mod.active_provider() == ("ollama", "qwen3:8b")
     assert "לא נמצא" in mod.owner_command("/ספק ollama no-such-model")
-    mod.owner_command("/קלוד")
+    mod.owner_command("/ספק מחשב קלוד")
     assert mod.ai_tag("opus").startswith("🧠 Claude")
     monkeypatch.setitem(mod.CFG, "show_ai_tag", False)
     assert mod.ai_tag("opus") == ""

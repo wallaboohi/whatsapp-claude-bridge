@@ -1278,7 +1278,7 @@ def switch_provider(name, model=None, chat=None):
     _, cm = active_provider(chat)
     scope = "בקבוצה הזו" if chat else "הגשר"
     return (f"✅ ספק {scope}: *{ps[name]['label']}*" + (f" · מודל {cm or ps[name].get('model')}" if name != "claude" else "")
-            + (". חזרה לספק המחשב: /ספק כאן איפוס" if chat else ". כל השיחות עוברות דרכו מההודעה הבאה. חזרה: /קלוד"))
+            + (". חזרה לספק המחשב: /ספק כאן איפוס" if chat else ". כל השיחות עוברות דרכו מההודעה הבאה (חוץ מקבוצות עם ספק משלהן). חזרה: /ספק מחשב claude"))
 
 
 def effective_model(model):
@@ -1532,7 +1532,7 @@ def providers_text():
             lines.append(f"   מודל: {cm or p.get('model') or '—'}")
         lines.append(f"   _{p.get('how', '')}_")
     words = [f"/{(p.get('aliases') or [k])[0]}" for k, p in providers().items()]
-    lines += ["", "החלפה מהירה: " + " ".join(words) + " · עם מודל: /ספק ollama <מודל> · מקרא גרפי בלוח: legend.html"]
+    lines += ["", "החלפה מהירה: " + " ".join(words) + " · עם מודל: /ספק ollama <מודל> (הקבוצה הזו בלבד) · כל המחשב: /ספק מחשב <שם> · איפוס הקבוצה: /ספק כאן איפוס · מקרא גרפי בלוח: legend.html"]
     return "\n".join(lines)
 
 
@@ -3515,19 +3515,24 @@ def owner_command(text, chat=None):
             if not hit:
                 return "לא מכיר את הספק הזה.\n\n" + providers_text()
             return switch_provider(hit[0], m.group(4) or hit[1], chat=chat)
-        if m.group(4):
-            return "לשינוי ספק בקבוצה הזו: /ספק כאן <שם> [מודל]"
-        hit = resolve_ai_word(m.group(2))
+        if m.group(2).lower() in ("מחשב", "computer"):  # owner 15.11: the rare computer-wide switch has its own word
+            hit = resolve_ai_word(m.group(3)) if m.group(3) else None
+            if not hit:
+                return "לשינוי ספק כל המחשב: /ספק מחשב <שם> [מודל]\n\n" + providers_text()
+            return switch_provider(hit[0], m.group(4) or hit[1])
+        hit = resolve_ai_word(m.group(2))  # owner 15.11: /ספק <name> [model] = this group only
         if not hit:
             return "לא מכיר את הספק הזה.\n\n" + providers_text()
-        return switch_provider(hit[0], m.group(3) or hit[1])
+        if m.group(4):
+            return "פורמט: /ספק <שם> [מודל]"
+        return switch_provider(hit[0], m.group(3) or hit[1], chat=cur_chat())
     if re.match(r"^/(הפעל מחדש|אתחל|restart)\s*$", text.strip()):
         RESTART_REQ.set()
         return "🔄 מפעיל את הסוכן מחדש. אכתוב כאן כשאעלה (בערך 20 שניות)."
     m = re.match(r"^/\s*([^\s/]+)\s*$", text.strip())
     hit = resolve_ai_word(m.group(1)) if m else None
     if hit:  # owner 13.11: /דיפסיק /openai /qwencode ... switch the bridge's provider (and model) in one word
-        return switch_provider(*hit)
+        return switch_provider(hit[0], hit[1], chat=cur_chat())  # owner 15.11: the one-word switch is per group too
     m = re.match(r"^/\s*(מודלים|מודל|models|model|סשן|session)\s*(.*)$", text.strip(), re.S)
     if not m:
         return None
