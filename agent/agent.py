@@ -2826,7 +2826,7 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
     interactive = on_stage is not None  # the owner's commands; plugin / background runs skip quietly instead
     _ctx.failover_used, _ctx.failover_why = False, ""
     chosen = active_provider(chat)[0]
-    _ctx.no_failover = interactive and chosen != "auto"
+    _ctx.no_failover = interactive and chosen != "auto" and not getattr(_ctx, "automation_cmd", False)
     lu = limit_until()
     if lu and _ctx.no_failover:
         if chosen == "claude":
@@ -4090,6 +4090,7 @@ def run_command(row):
     if src == "pc":
         text = pc_voice_to_text(text)
     _ctx.chat, _ctx.src, _ctx.sync, _ctx.auto_pick = chat, src, sync, False
+    _ctx.automation_cmd = str(mid or "").startswith("att-")  # owner 15.11: Dolev's / Zion's messages (queued by the automation) may go to any free AI
     g = load_groups().get(chat) or {}
     parked = False
     guest = guest_cfg(chat)
@@ -4112,11 +4113,11 @@ def run_command(row):
             return
         lu = limit_until()
         chosen = active_provider(chat)[0]
-        if lu and chosen == "claude":  # owner 15.11: Claude is chosen here and capped: say so, no switch to another AI
+        if lu and chosen == "claude" and not getattr(_ctx, "automation_cmd", False):  # owner 15.11: Claude is chosen here and capped: say so, no switch to another AI (not for automation messages)
             reply(ai_down_text("claude", f"נגמרה המכסה עד {lu:%H:%M}"), quoted=mid if src == "wa" else None)
             react(mid, "⚠️")
             return
-        if lu and chosen == "auto" and not failover_target():  # no Claude run while the usage limit is on and no failover target: wait for the reset
+        if lu and (chosen == "auto" or getattr(_ctx, "automation_cmd", False)) and not failover_target():  # no Claude run while the usage limit is on and no failover target: wait for the reset
             parked = True
             wait_for_limit(cid, chat, mid, src, lu)
             return
