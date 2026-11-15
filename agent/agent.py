@@ -1218,6 +1218,9 @@ def provider_check(name):
     if p["kind"] == "anthropic-key":
         k = provider_key(p)
         return {"ok": bool(k), "detail": "מפתח שמור" if k else f"חסר מפתח: secrets/{p.get('key_file')}", "models": ["opus", "sonnet", "haiku"]}
+    if p["kind"] == "cli":  # agent CLIs bring their own sign-in: installed + login/key is the whole check
+        ok = cli_ready(p)
+        return {"ok": ok, "detail": "מותקן ומחובר" if ok else f"לא מותקן או לא מחובר: {(p.get('cli') or {}).get('bin')}", "models": list(p.get("models") or [])}
     tok = p.get("token") or provider_key(p)
     if not tok:
         return {"ok": False, "detail": f"חסר מפתח: secrets/{p.get('key_file')}", "models": []}
