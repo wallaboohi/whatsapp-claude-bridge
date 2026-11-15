@@ -5738,6 +5738,33 @@ def scheduled_check():
             db.execute("UPDATE scheduled_drafts SET status = ?, done = ? WHERE id = ?", (status, dt.datetime.now().isoformat(timespec="seconds"), sid))
 
 
+DRAFT_EXPIRE_MIN = 30
+
+
+def expire_stale_drafts():
+    """Owner 15.11: a draft card nobody approved within half an hour is cancelled (not deleted: status 'cancelled'), so
+    pending drafts never pile up. Age counts from the latest card post (a re-posted card restarts the clock); a draft with a
+    scheduled send time is left alone."""
+    try:
+        with mdb() as m:
+            rows = m.execute(
+                "SELECT d.id FROM drafts d WHERE d.status = 'pending' AND "
+                "(julianday('now','localtime') - julianday(substr(COALESCE((SELECT timestamp FROM messages WHERE id = d.card_id "
+                "AND chat_jid = COALESCE(NULLIF(d.card_chat,''), chat_jid) LIMIT 1), d.created),1,19))) * 1440 > ?",
+                (DRAFT_EXPIRE_MIN,)).fetchall()
+        with adb() as db:
+            scheduled = {r[0] for r in db.execute("SELECT draft_id FROM scheduled_drafts WHERE status = 'scheduled'")}
+    except sqlite3.Error as e:
+        log("expire drafts query failed", e)
+        return
+    for (did,) in rows:
+        if did in scheduled:
+            continue
+        res = bridge("/draft_decide", {"id": int(did), "approve": False}, timeout=30)
+        log("draft expired", did, res.get("status") or res)
+        time.sleep(1.5)
+
+
 def sent_special(mid):
     try:
         db = mdb()
@@ -7058,6 +7085,7 @@ def scheduler():
                     kv_set("at:reminders", now.strftime("%Y%m%d%H%M"))
                     work.put(reminders_check)
                     work.put(scheduled_check)
+                    slow.put(expire_stale_drafts)
                     if CFG.get("once_jobs"):
                         slow.put(once_jobs)
                     slow.put(sync_all_group_names)
