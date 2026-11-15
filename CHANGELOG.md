@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.8 — 2026-11-15
+- Re-post a pending draft's approval card without a duplicate draft (tools/wa_draft_card.py, /api/draft_repost)
+- Pending draft cards not approved within 30 minutes are cancelled automatically
+- A contact's ✅/👍 on our private message counts as a reply
+- After a long stop, skip old owner messages the other computer already answered
+
 ## 1.1.7 — 2026-11-14
 - כל בינה מתארחת שווה ל-Claude: שרת ה-MCP של הגשר (כלי הווצאפ) נרשם אוטומטית בהגדרות של Codex, Gemini CLI, Copilot ו-OpenCode בכל הפעלת סוכן. נבדק בהרצה: Codex ו-Copilot הפעילו get_status.
 - זיהוי שגיאת 400 מדויק (בהקשר HTTP בלבד); הכותרת של כלי שורת פקודה מציגה את המודל שלו.
