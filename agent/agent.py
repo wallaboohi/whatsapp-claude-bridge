@@ -1714,9 +1714,9 @@ def broadcast_system_notice(text):
     """Send machine-wide maintenance notices to every enabled WhatsApp group handled by this agent."""
     body = italic(text.strip()) if CFG.get("reply_italic", True) else text.strip()
     message = CFG["reply_prefix"] + body
-    for chat in load_groups():
-        if not chat.endswith("@g.us"):
-            continue
+    for chat, g in load_groups().items():
+        if not chat.endswith("@g.us") or (g or {}).get("guest"):
+            continue  # a guest group (Rita) never gets machine notices: the bridge would turn each into an approval draft
         if chat == PRIMARY:
             kv_set("last_tool_msg", json.dumps({"ts": dt.datetime.now().isoformat(timespec="seconds"),
                                                 "text": text.strip()[:300]}, ensure_ascii=False))

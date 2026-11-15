@@ -2334,3 +2334,12 @@ def test_ai_status_codex_reads_the_session_meter_and_unknown_ai_is_told(agent):
     assert "חודשי: 13%" in rep and "free" in rep
     assert "לא הבנתי" in mod.owner_command("/מצב משהו")
     assert "מד מכסה" in mod.owner_command("/מצב גרוק")
+
+
+def test_system_notice_skips_guest_groups(agent, monkeypatch):
+    mod, _ = agent
+    sent = []
+    monkeypatch.setattr(mod, "send", lambda chat, text, **k: sent.append(chat) or True)
+    monkeypatch.setattr(mod, "load_groups", lambda: {"a@g.us": {"name": "A"}, "guest@g.us": {"name": "Rita", "guest": True}})
+    mod.broadcast_system_notice("בדיקה")
+    assert sent == ["a@g.us"]
