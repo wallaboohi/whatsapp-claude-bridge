@@ -350,17 +350,28 @@ def _day_sync_tests(go, py):
     return ""
 
 
+REBUILD_NOTES = []
+
+
 def _rebuild_bridge():
     """Build the bridge next to the running one, swap the exe and stop the old process (run-bridge.cmd starts the new one)."""
     bdir = os.path.join(ROOT, "whatsapp-bridge")
-    # owner 15.11: never build over the owner's unsaved edits, or on code that hub has moved past (nothing is overwritten)
-    _, dirty = _git("status", "--porcelain", "--untracked-files=no", "--", "whatsapp-bridge")
+    # owner 15.11 23:23: unsaved bridge edits are saved (commit) and merged with hub, hub changes are pulled, then it builds;
+    # what happened goes to REBUILD_NOTES for the daily summary. A failed merge/test stops the build (nothing is overwritten).
+    REBUILD_NOTES.clear()
+    _, dirty = _git("status", "--porcelain", "--untracked-files=no")
     if dirty.strip():
-        return "הבנייה נעצרה: יש שינויים לא שמורים בקוד הגשר (ייתכן שאתה עורך עכשיו). שמור בקומיט ואבנה."
-    _git("fetch", "-q", "hub", timeout=120)
-    rc, behind = _git("rev-list", "--count", "HEAD..hub/main")
-    if rc == 0 and behind.strip() not in ("", "0"):
-        return "הבנייה נעצרה: ב-hub יש שינויים שעוד לא נמשכו. אמשוך (git pull --ff-only hub main) ואבנה."
+        _git("add", "-u")
+        rc, out = _git(*_git_author(), "commit", "-q", "-m", "Save unsaved changes before bridge rebuild")
+        REBUILD_NOTES.append("💾 שינויים לא שמורים נשמרו בקומיט לפני הבנייה." if rc == 0 else "⚠️ שמירת השינויים נכשלה: " + out[-150:])
+        if rc != 0:
+            return "הבנייה נעצרה: שמירת השינויים הלא שמורים נכשלה"
+    ok, note = _hub_sync()
+    if note:
+        REBUILD_NOTES.append(note)
+    if not ok:
+        return "הבנייה נעצרה: המיזוג עם hub לא הושלם"
+    _git("push", "hub", "HEAD:main", timeout=300)
     ver = open(os.path.join(ROOT, "VERSION")).read().strip() if os.path.exists(os.path.join(ROOT, "VERSION")) else "dev"
     r = subprocess.run(["go", "build", "-ldflags", f"-X main.version={ver}", "-o", "whatsapp-bridge-new.exe", "."], cwd=bdir,
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900, creationflags=NO_WINDOW,
@@ -538,6 +549,7 @@ def day_sync():
     restart = bool(changed_since_start)
     if rebuild:
         err = _rebuild_bridge()
+        notes.extend(REBUILD_NOTES)
         notes.append(("⚠️ " + err) if err else "🔧 הגשר נבנה מחדש ועלה מחדש.")
     broadcast_system_notice(f"🌙 *שמירה יומית · {host}*\n" + ("\n".join(notes) if notes else "אין שינויים היום.")
                             + ("\n🔄 הסוכן עולה מחדש עם הקוד החדש." if restart else ""))
