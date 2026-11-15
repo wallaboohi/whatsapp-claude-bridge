@@ -2,7 +2,8 @@
 
   peer_sync.py status        show which local-only files differ and whether the peer's code/bridge is current
   peer_sync.py files         merge the local-only rule files in BOTH directions: a line one side lacks is appended to the
-                             other side (never overwritten, a backup is kept on each side first)
+                             other side (never overwritten, a backup is kept on each side first);
+                             JSON settings (config.json, groups.json): only keys the other side lacks are added, secrets skipped
   peer_sync.py code          peer: git pull --ff-only from hub, rebuild the bridge through agent._rebuild_bridge() when Go
                              files changed, then show both versions
 
@@ -20,6 +21,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PEER = "4-MINE"
 PEER_ROOT = "C:/Users/walla/whatsapp-mcp"
 MERGE = ["agent/home/bridge_rules.md", "agent/home/dictionary.md"]
+JSON_MERGE = ["agent/config.json", "whatsapp-bridge/store/groups.json"]  # only keys the other side lacks; values never replaced
+SECRET_WORDS = ("key", "token", "secret", "password", "pass")
 COMPARE = ["agent/home/AI-KNOWLEDGE.md"]
 SSH_NOISE = ("WARNING", "vulnerable", "upgraded", "post-quantum", "store now")
 
@@ -74,6 +77,57 @@ def conflicts(a, b):
     return [k for k, v in ((_key(l), l.strip()) for l in lines_of(b)) if k in ours and ours[k] != v and k.startswith("- *")]
 
 
+def missing_keys(base, other, path=""):
+    """{dotted path: value} for keys in other that base lacks (nested dicts walked; secrets and existing values never touched)."""
+    out = {}
+    for k, v in other.items():
+        if any(w in k.lower() for w in SECRET_WORDS):
+            continue
+        if k not in base:
+            out[path + k] = v
+        elif isinstance(v, dict) and isinstance(base[k], dict):
+            out.update(missing_keys(base[k], v, path + k + "."))
+    return out
+
+
+def put(d, dotted, value):
+    *parents, last = dotted.split(".")
+    for p in parents:
+        d = d.setdefault(p, {})
+    d[last] = value
+
+
+def merge_json(tmp):
+    import json
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M")
+    for rel in JSON_MERGE:
+        local = os.path.join(ROOT, rel)
+        peer_copy = fetch(rel, tmp)
+        try:
+            mine, theirs = json.loads(read(local)), json.loads(read(peer_copy))
+        except Exception:
+            print(f"{rel}: skipped (missing or unreadable on one side)")
+            continue
+        if not (isinstance(mine, dict) and isinstance(theirs, dict)):
+            print(f"{rel}: skipped (not an object)")
+            continue
+        to_me, to_peer = missing_keys(mine, theirs), missing_keys(theirs, mine)
+        if to_me:
+            os.replace(local, local + f".bak-{stamp}-peersync")
+            for k, v in to_me.items():
+                put(mine, k, v)
+            open(local, "w", encoding="utf-8", newline="").write(json.dumps(mine, ensure_ascii=False, indent=2) + "\n")
+        if to_peer:
+            for k, v in to_peer.items():
+                put(theirs, k, v)
+            out = os.path.join(tmp, "peer_new_" + rel.replace("/", "_"))
+            open(out, "w", encoding="utf-8", newline="").write(json.dumps(theirs, ensure_ascii=False, indent=2) + "\n")
+            win = f"{PEER_ROOT}/{rel}".replace("/", "\\")
+            ssh(f'copy /Y "{win}" "{win}.bak-{stamp}-peersync"')
+            scp(out, f"{PEER}:{PEER_ROOT}/{rel}")
+        print(f"{rel}: +{len(to_me)} keys here ({', '.join(to_me)[:120]}), +{len(to_peer)} on the peer (existing values untouched)")
+
+
 def status(tmp):
     for rel in MERGE + COMPARE:
         mine, theirs = read(os.path.join(ROOT, rel)), read(fetch(rel, tmp) or "")
@@ -92,6 +146,7 @@ def status(tmp):
 
 
 def merge_files(tmp):
+    merge_json(tmp)
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M")
     for rel in MERGE:
         local = os.path.join(ROOT, rel)

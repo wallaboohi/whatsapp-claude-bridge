@@ -353,6 +353,14 @@ def _day_sync_tests(go, py):
 def _rebuild_bridge():
     """Build the bridge next to the running one, swap the exe and stop the old process (run-bridge.cmd starts the new one)."""
     bdir = os.path.join(ROOT, "whatsapp-bridge")
+    # owner 15.11: never build over the owner's unsaved edits, or on code that hub has moved past (nothing is overwritten)
+    _, dirty = _git("status", "--porcelain", "--untracked-files=no", "--", "whatsapp-bridge")
+    if dirty.strip():
+        return "הבנייה נעצרה: יש שינויים לא שמורים בקוד הגשר (ייתכן שאתה עורך עכשיו). שמור בקומיט ואבנה."
+    _git("fetch", "-q", "hub", timeout=120)
+    rc, behind = _git("rev-list", "--count", "HEAD..hub/main")
+    if rc == 0 and behind.strip() not in ("", "0"):
+        return "הבנייה נעצרה: ב-hub יש שינויים שעוד לא נמשכו. אמשוך (git pull --ff-only hub main) ואבנה."
     ver = open(os.path.join(ROOT, "VERSION")).read().strip() if os.path.exists(os.path.join(ROOT, "VERSION")) else "dev"
     r = subprocess.run(["go", "build", "-ldflags", f"-X main.version={ver}", "-o", "whatsapp-bridge-new.exe", "."], cwd=bdir,
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900, creationflags=NO_WINDOW,
