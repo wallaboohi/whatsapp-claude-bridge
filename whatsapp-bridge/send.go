@@ -37,6 +37,7 @@ type SendMessageRequest struct {
 	QuotedID  string `json:"quoted_id,omitempty"` // optional: reply quoting this message (same chat)
 	// optional: the message the owner reacted 🛞 on — a voice note reading it may skip the draft once (readaloud.go)
 	ReadAloudOf string `json:"read_aloud_of,omitempty"`
+	CardChat    string `json:"card_chat,omitempty"` // group whose automation owns this send: its draft card is posted there (owner 15.11)
 }
 
 // Function to send a WhatsApp message
@@ -44,12 +45,12 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 	return sendWhatsAppMessageQuoted(client, recipient, message, mediaPath, "")
 }
 
-func sendWhatsAppMessageQuoted(client *whatsmeow.Client, recipient string, message string, mediaPath string, quotedID string) (bool, string) {
-	return sendCore(client, recipient, message, mediaPath, quotedID, false)
+func sendWhatsAppMessageQuoted(client *whatsmeow.Client, recipient string, message string, mediaPath string, quotedID string, cardChat ...string) (bool, string) {
+	return sendCore(client, recipient, message, mediaPath, quotedID, false, cardChat...)
 }
 
 // sendCore: approved=true only when sending a draft the owner approved (exactly one message).
-func sendCore(client *whatsmeow.Client, recipient string, message string, mediaPath string, quotedID string, approved bool) (bool, string) {
+func sendCore(client *whatsmeow.Client, recipient string, message string, mediaPath string, quotedID string, approved bool, cardChat ...string) (bool, string) {
 	if !client.IsConnected() {
 		return false, "Not connected to WhatsApp"
 	}
@@ -80,7 +81,7 @@ func sendCore(client *whatsmeow.Client, recipient string, message string, mediaP
 		recordSent(recipientJID, "", message, "", "", false, "paused: "+pol.PauseReason)
 		return false, "Paused: sends to others are suspended (" + pol.PauseReason + ")"
 	case "draft":
-		return makeDraft(client, pol, recipientJID, message, mediaPath, quotedID)
+		return makeDraft(client, pol, recipientJID, message, mediaPath, quotedID, cardChat...)
 	}
 
 	if err := sendPacer.wait(client, recipientJID, len(message)); err != nil {

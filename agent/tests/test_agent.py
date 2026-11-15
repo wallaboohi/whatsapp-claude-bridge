@@ -96,6 +96,14 @@ def test_other_conversation_is_not_ahead(agent, monkeypatch):
     assert len(said) == 1 and "בתור לפניה: 1" in said[0][0] and said[0][1] == "G3"
 
 
+def test_automation_belongs_to_its_group(agent, monkeypatch):
+    """Owner 15.11: an automation's approvals live in the group that lists it; others fall back to the control group."""
+    mod, _ = agent
+    monkeypatch.setattr(mod, "load_groups", lambda: {"dev@g.us": {"name": "dev"}, "auto@g.us": {"name": "a", "automations": ["segment_d"]}})
+    assert mod.automation_chat("segment_d") == "auto@g.us" and mod.automation_chat("other") == mod.PRIMARY
+    assert mod.card_chat_for("auto@g.us") == "auto@g.us" and mod.card_chat_for("dev@g.us") == "" and mod.card_chat_for(None) == ""
+
+
 def test_strings_exist_in_both_languages(agent):
     mod, _ = agent
     src = open(os.path.join(HERE, "agent.py"), encoding="utf-8").read()

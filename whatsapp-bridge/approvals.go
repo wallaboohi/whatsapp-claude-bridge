@@ -30,9 +30,10 @@ func handleReaction(client *whatsmeow.Client, msg *events.Message) bool {
 	publish(map[string]any{"type": "reaction", "chat_jid": chatJID,
 		"message_id": r.GetKey().GetID(), "emoji": r.GetText()})
 	policyMu.Lock()
-	control := loadPolicy().ControlGroup
+	pol := loadPolicy()
 	policyMu.Unlock()
-	if msg.Info.Chat.String() != control {
+	control := msg.Info.Chat.String()
+	if pol.cardChatFor(control) != control {
 		return true
 	}
 	emoji := r.GetText()
@@ -43,6 +44,11 @@ func handleReaction(client *whatsmeow.Client, msg *events.Message) bool {
 	var id int64
 	if err := globalStore.db.QueryRow(`SELECT id FROM drafts WHERE card_id = ? AND status = 'pending'`, cardID).Scan(&id); err != nil {
 		return true // not a pending draft card
+	}
+	var cardChat string
+	globalStore.db.QueryRow(`SELECT COALESCE(card_chat,'') FROM drafts WHERE id = ?`, id).Scan(&cardChat)
+	if (cardChat == "" && control != pol.ControlGroup) || (cardChat != "" && cardChat != control) {
+		return true // the card lives in another group: only a ✅ there approves it
 	}
 	decideDraft(client, id, emoji != "❌", control)
 	return true
@@ -94,6 +100,11 @@ func registerApprovalAPI(client *whatsmeow.Client) {
 		policyMu.Lock()
 		control := loadPolicy().ControlGroup
 		policyMu.Unlock()
+		var cardChat string
+		globalStore.db.QueryRow(`SELECT COALESCE(card_chat,'') FROM drafts WHERE id = ?`, int64(id)).Scan(&cardChat)
+		if cardChat != "" {
+			control = cardChat
+		}
 		st, err := decideDraft(client, int64(id), ok, control)
 		return map[string]any{"status": st}, err
 	})

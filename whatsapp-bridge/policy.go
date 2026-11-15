@@ -81,6 +81,22 @@ func inList(list []string, jid types.JID) bool {
 	return false
 }
 
+// cardChatFor: where a draft's approval card goes. A group may keep its own automations' cards (owner 15.11): the requested
+// chat counts only when it is the control group or one of the connected groups; anything else falls back to the control group.
+func (p SendPolicy) cardChatFor(c ...string) string {
+	if len(c) > 0 && c[0] != "" {
+		if c[0] == p.ControlGroup {
+			return c[0]
+		}
+		for _, g := range p.ControlGroups {
+			if g == c[0] {
+				return c[0]
+			}
+		}
+	}
+	return p.ControlGroup
+}
+
 // ownIn: the owner's own chats and the control groups (where Claude talks to the owner).
 func ownIn(p SendPolicy, jid types.JID) bool {
 	return inList(p.Owner, jid) || jid.String() == p.ControlGroup || inList(p.ControlGroups, jid) || isOwnChat(jid)
@@ -210,13 +226,14 @@ func needsCopyText(jid types.JID, message, mediaPath string) bool {
 }
 
 // makeDraft turns a send into a draft card in the control group instead of sending it.
-func makeDraft(client *whatsmeow.Client, p SendPolicy, jid types.JID, message, mediaPath, quotedID string) (bool, string) {
-	return makeDraftKind(client, p, jid, message, mediaPath, quotedID, "", "")
+func makeDraft(client *whatsmeow.Client, p SendPolicy, jid types.JID, message, mediaPath, quotedID string, cardChat ...string) (bool, string) {
+	return makeDraftKind(client, p, jid, message, mediaPath, quotedID, "", "", cardChat...)
 }
 
 // makeDraftKind: like makeDraft, for special messages — kind ("poll" / "contact" / "forward") + JSON payload are stored
 // so the approval sends the real thing.
-func makeDraftKind(client *whatsmeow.Client, p SendPolicy, jid types.JID, message, mediaPath, quotedID, kind, payload string) (bool, string) {
+func makeDraftKind(client *whatsmeow.Client, p SendPolicy, jid types.JID, message, mediaPath, quotedID, kind, payload string, cardChat ...string) (bool, string) {
+	card := p.cardChatFor(cardChat...)
 	name := jid.User
 	if globalStore != nil {
 		var n string
@@ -230,12 +247,12 @@ func makeDraftKind(client *whatsmeow.Client, p SendPolicy, jid types.JID, messag
 	}
 	var draftID int64
 	if globalStore != nil {
-		if r, err := globalStore.db.Exec(`INSERT INTO drafts (recipient, name, message, media_path, created, status, quoted_id, kind, payload) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
-			jid.String(), name, message, mediaPath, time.Now(), quotedID, kind, payload); err == nil {
+		if r, err := globalStore.db.Exec(`INSERT INTO drafts (recipient, name, message, media_path, created, status, quoted_id, kind, payload, card_chat) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
+			jid.String(), name, message, mediaPath, time.Now(), quotedID, kind, payload, card); err == nil {
 			draftID, _ = r.LastInsertId()
 		}
 	}
-	ok, res := sendWhatsAppMessage(client, p.ControlGroup, draftCardText(draftID, name, jid, message, mediaPath), "")
+	ok, res := sendWhatsAppMessage(client, card, draftCardText(draftID, name, jid, message, mediaPath), "")
 	if ok && draftID > 0 && globalStore != nil {
 		// remember the card's message id (from this send's own result) so a ✅ on it approves exactly this draft
 		if cardID := sentID(res); cardID != "" {
@@ -243,7 +260,7 @@ func makeDraftKind(client *whatsmeow.Client, p SendPolicy, jid types.JID, messag
 		}
 	}
 	if ok && mediaPath != "" {
-		sendWhatsAppMessage(client, p.ControlGroup, "🤖 📎 קובץ לטיוטה → "+name, mediaPath)
+		sendWhatsAppMessage(client, card, "🤖 📎 קובץ לטיוטה → "+name, mediaPath)
 	}
 	if !ok {
 		return false, "Draft could not be posted: " + res

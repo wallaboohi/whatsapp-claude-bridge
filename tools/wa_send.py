@@ -10,6 +10,8 @@ if len(args) > 2:
     body["media_path"] = args[2]
 if quote:
     body["quoted_id"] = quote  # reply quoting that message (same chat)
+if os.environ.get("WA_CARD_CHAT"):
+    body["card_chat"] = os.environ["WA_CARD_CHAT"]  # the group that owns the automation: its draft card is posted there
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 

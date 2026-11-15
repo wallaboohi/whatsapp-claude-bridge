@@ -76,6 +76,7 @@ func initEnhancedSchema(store *MessageStore) error {
 	// special drafts (poll / contact / forward): ✅ rebuilds and sends the real message, not its text description
 	store.db.Exec("ALTER TABLE drafts ADD COLUMN kind TEXT")
 	store.db.Exec("ALTER TABLE drafts ADD COLUMN payload TEXT")
+	store.db.Exec("ALTER TABLE drafts ADD COLUMN card_chat TEXT")
 	return nil
 }
 

@@ -70,7 +70,7 @@ func registerAllAPI(client *whatsmeow.Client, messageStore *MessageStore) {
 		if req.ReadAloudOf != "" && consumeReadAloud(req.Recipient, req.ReadAloudOf, req.Message, req.MediaPath) {
 			success, message = sendCore(client, req.Recipient, req.Message, req.MediaPath, req.QuotedID, true)
 		} else {
-			success, message = sendWhatsAppMessageQuoted(client, req.Recipient, req.Message, req.MediaPath, req.QuotedID)
+			success, message = sendWhatsAppMessageQuoted(client, req.Recipient, req.Message, req.MediaPath, req.QuotedID, req.CardChat)
 		}
 		fmt.Println("Message sent", success, message)
 		// Set response headers

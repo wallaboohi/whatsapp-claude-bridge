@@ -229,7 +229,7 @@ def bridge(path, body=None, timeout=180, tok=None):
             return {"success": False, "message": f"HTTP {e.code}"}
 
 
-def send(recipient, text, media=None, quoted=None, read_aloud_of=None):
+def send(recipient, text, media=None, quoted=None, read_aloud_of=None, card_chat=None):
     """Send through the bridge (send policy + pacing apply there). Never retried: a retry could double-send.
     read_aloud_of = the message the owner reacted 🛞 on: the bridge lets that one voice note skip the draft."""
     body = {"recipient": recipient, "message": text}
@@ -244,6 +244,8 @@ def send(recipient, text, media=None, quoted=None, read_aloud_of=None):
         body["media_path"] = media
     if quoted:
         body["quoted_id"] = quoted
+    if card_chat:
+        body["card_chat"] = card_chat  # the draft card (if any) is posted in this group, not the control group (owner 15.11)
     try:
         try:
             res = bridge("/send", body)
@@ -763,6 +765,20 @@ def sync_names_file():
             v["name"], changed = live[jid], True
     if changed:
         write_json(GROUPS_FILE, raw)
+
+
+def automation_chat(name):
+    """Owner 15.11: automations belong to a group. The group whose groups.json "automations" lists `name` (its approvals, cards,
+    questions and reports live there); the primary control group when no group owns it."""
+    for jid, g in load_groups().items():
+        if name in (g.get("automations") or []):
+            return jid
+    return PRIMARY
+
+
+def card_chat_for(chat):
+    """The group where a draft made inside `chat` posts its card: the chat itself when it owns automations, else '' (control group)."""
+    return chat if chat and (load_groups().get(chat) or {}).get("automations") else ""
 
 
 def load_groups():
@@ -2464,6 +2480,8 @@ def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
         if how.startswith("stdin:"):
             cmd += [how[6:]]
     env = dict(os.environ, NO_COLOR="1")
+    if card_chat_for(chat):  # owner 15.11: draft cards of tools run here are posted in this group
+        env["WA_CARD_CHAT"] = card_chat_for(chat)
     if not (c.get("login_file") and os.path.exists(os.path.expanduser(c["login_file"]))):
         for var, f in (c.get("key_env") or {}).items():
             k = provider_key({"key_file": f})
@@ -2575,8 +2593,12 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
     if stoppable is None:
         stoppable = on_stage is not None  # only the owner's interactive runs; plugin / hand-off runs never eat a stop request
     t0 = time.time()
+    run_env = qwen_env or penv
+    cc = card_chat_for(chat)
+    if cc and not guest:  # owner 15.11: tools run here (wa_send.py) post their draft cards in this group
+        run_env = dict(run_env or os.environ, WA_CARD_CHAT=cc)
     proc = subprocess.Popen(cmd, cwd=guest_home(guest) if guest else HOME, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, encoding="utf-8", errors="replace", env=qwen_env or penv)
+                            text=True, encoding="utf-8", errors="replace", env=run_env)
     errbuf = []
 
     def read_err():  # stderr carries the sign-in expiry warning and limit / login errors
