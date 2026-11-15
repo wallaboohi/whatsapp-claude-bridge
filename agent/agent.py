@@ -1183,26 +1183,35 @@ def cloudflare_verify(p, tok):
         return {"ok": False, "detail": f"לא מגיב: {str(e)[:70]}", "models": models}
 
 
-def anthropic_probe(p, tok):
-    """{"ok", "detail", "models"} for an Anthropic-compatible cloud API with a fixed model list (providers.json "models"): one 1-token call
-    proves the key (owner 13.11: the DeepSeek key must be the key itself, not its id)."""
+def anthropic_probe(p, tok, prefer=None):
+    """{"ok", "detail", "models", "working"} for an Anthropic-compatible cloud API with a fixed model list (providers.json "models"): one
+    1-token call proves the key (owner 13.11: the DeepSeek key must be the key itself, not its id). When the first model is rate-limited or
+    overloaded the others are tried (owner 15.11: Gemini's default model was out of quota while gemini-3-flash-preview answered)."""
     models = list(p["models"])
-    body = {"model": p.get("model") or models[0], "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]}
-    req = urllib.request.Request(p["base_url"].rstrip("/") + "/v1/messages", data=json.dumps(body).encode(), method="POST",
-                                 headers={"x-api-key": tok, "Authorization": "Bearer " + tok, "anthropic-version": "2023-06-01",
-                                          "content-type": "application/json"})
-    try:
-        urllib.request.urlopen(req, timeout=20).read()
-        return {"ok": True, "detail": f"מחובר · המפתח תקין · {len(models)} מודלים", "models": models}
-    except urllib.error.HTTPError as e:
-        why = {401: "המפתח נדחה (ודא שהעתקת את המפתח עצמו ולא את המזהה שלו)", 403: "המפתח נדחה", 402: "אין יתרה בחשבון הספק",
-               429: "הספק מגביל קצב כרגע"}.get(e.code, f"שגיאה {e.code} מהספק")
-        return {"ok": False, "detail": why, "models": models}
-    except Exception as e:
-        return {"ok": False, "detail": f"לא מגיב: {str(e)[:70]}", "models": models}
+    first = prefer or p.get("model") or models[0]
+    why = ""
+    for m in [first] + [x for x in models if x != first]:
+        body = {"model": m, "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]}
+        req = urllib.request.Request(p["base_url"].rstrip("/") + "/v1/messages", data=json.dumps(body).encode(), method="POST",
+                                     headers={"x-api-key": tok, "Authorization": "Bearer " + tok, "anthropic-version": "2023-06-01",
+                                              "content-type": "application/json"})
+        try:
+            urllib.request.urlopen(req, timeout=20).read()
+            return {"ok": True, "detail": f"מחובר · המפתח תקין · {len(models)} מודלים", "models": models, "working": m}
+        except urllib.error.HTTPError as e:
+            why = {401: "המפתח נדחה (ודא שהעתקת את המפתח עצמו ולא את המזהה שלו)", 403: "המפתח נדחה", 402: "אין יתרה בחשבון הספק",
+                   429: "הספק מגביל קצב כרגע"}.get(e.code, f"שגיאה {e.code} מהספק")
+            if e.code in (401, 402, 403):
+                break  # the key or the account, not the model: another model will not help
+        except Exception as e:
+            why = f"לא מגיב: {str(e)[:70]}"
+            break
+        if prefer:
+            break  # the owner named this model: do not swap it for another
+    return {"ok": False, "detail": why + (" בכל המודלים" if len(models) > 1 and not prefer and "מגביל" in why else ""), "models": models}
 
 
-def provider_check(name):
+def provider_check(name, prefer=None):
     """{"ok", "detail", "models"}: is this provider reachable now, and which models it offers (no secrets in the result)."""
     p = providers().get(name)
     if not p:
@@ -1242,7 +1251,7 @@ def provider_check(name):
     if (p.get("upstream") or {}).get("account_file"):  # Cloudflare: log in = verify the API token (no model call, no neurons spent)
         return cloudflare_verify(p, provider_key(p) or tok)  # "token" is the local proxy's placeholder; the real key is in secrets/
     if p.get("models") and p.get("base_url"):
-        return anthropic_probe(p, tok)
+        return anthropic_probe(p, tok, prefer)
     try:
         if "11434" in p.get("base_url", ""):
             d = json.loads(urllib.request.urlopen(p["base_url"] + "/api/tags", timeout=8).read().decode())
@@ -1272,9 +1281,11 @@ def resolve_ai_word(word):
 def switch_provider(name, model=None, chat=None):
     """Set the computer provider, or one conversation's provider, if it answers now."""
     ps = providers()
-    c = provider_check(name)
+    c = provider_check(name, model)
     if not c["ok"]:
         return f"⚪ {ps[name]['label']} לא מחובר: {c['detail']}. לא הוחלף."
+    if not model and c.get("working") and c["working"] != ps[name].get("model"):
+        model = c["working"]  # the default model is out of quota now: switch to the one that answered
     if model and c["models"] and model not in c["models"]:
         return f"המודל {model} לא נמצא אצל {ps[name]['label']}. יש: " + ", ".join(c["models"][:15])
     set_provider(name, model, chat=chat)

@@ -1724,7 +1724,7 @@ def test_provider_layer(agent, monkeypatch):
     assert env["ANTHROPIC_CUSTOM_MODEL_OPTION"] == "bridge-qwen3-4b:latest"
     mod.kv_set("limit_until", (mod.dt.datetime.now() + mod.dt.timedelta(hours=5)).isoformat(timespec="seconds"))
     assert mod.limit_until()
-    monkeypatch.setattr(mod, "provider_check", lambda n: {"ok": n != "groq", "detail": "x", "models": ["bridge-qwen3-4b", "qwen3:4b-instruct"]})
+    monkeypatch.setattr(mod, "provider_check", lambda n, *a: {"ok": n != "groq", "detail": "x", "models": ["bridge-qwen3-4b", "qwen3:4b-instruct"]})
     assert "לא הוחלף" in mod.owner_command("/ספק groq", mod.PRIMARY)
     assert "לא נמצא" in mod.owner_command("/ספק ollama nosuch", mod.PRIMARY)
     assert "✅" in mod.owner_command("/ספק מחשב אולמה qwen3:4b-instruct", mod.PRIMARY)
@@ -1737,7 +1737,7 @@ def test_provider_layer(agent, monkeypatch):
 def test_provider_command_can_target_current_group_only(agent, monkeypatch, tmp_path):
     mod, _ = agent
     monkeypatch.setattr(mod, "PROVIDER_FILE", str(tmp_path / "provider.json"))
-    monkeypatch.setattr(mod, "provider_check", lambda n: {"ok": True, "detail": "", "models": ["bridge-qwen3-4b", "qwen3:4b-instruct"]})
+    monkeypatch.setattr(mod, "provider_check", lambda n, *a: {"ok": True, "detail": "", "models": ["bridge-qwen3-4b", "qwen3:4b-instruct"]})
     chat = mod.PRIMARY
     assert "בקבוצה הזו" in mod.owner_command("/ספק כאן ollama qwen3:4b-instruct", chat)
     assert mod.active_provider(chat) == ("ollama", "qwen3:4b-instruct")
@@ -1824,9 +1824,9 @@ def test_switch_words_and_the_answer_tag(agent, monkeypatch, tmp_path):
     assert mod.resolve_ai_word("דיפסיק") is None and mod.resolve_ai_word("api") is None  # the paid providers were removed
     assert mod.resolve_ai_word("qwencode") == ("ollama", "qwen2.5-coder:3b") and mod.resolve_ai_word("קלוד") == ("claude", None)
     assert mod.resolve_ai_word("nope") is None and mod.resolve_ai_word("סשן") is None  # a real command is never a switch word
-    monkeypatch.setattr(mod, "provider_check", lambda n: {"ok": False, "detail": "אין מפתח", "models": []})
+    monkeypatch.setattr(mod, "provider_check", lambda n, *a: {"ok": False, "detail": "אין מפתח", "models": []})
     assert "לא מחובר" in mod.owner_command("/גמיני") and mod.active_provider()[0] == "claude"  # not connected: nothing switches
-    monkeypatch.setattr(mod, "provider_check", lambda n: {"ok": True, "detail": "", "models": ["qwen2.5-coder:3b", "qwen3:8b"]})
+    monkeypatch.setattr(mod, "provider_check", lambda n, *a: {"ok": True, "detail": "", "models": ["qwen2.5-coder:3b", "qwen3:8b"]})
     assert "בקבוצה הזו" in mod.owner_command("/qwencode") and mod.active_provider(mod.PRIMARY) == ("ollama", "qwen2.5-coder:3b") and mod.active_provider()[0] == "claude"
     mod.owner_command("/ספק כאן איפוס")
     assert "ספק הגשר" in mod.owner_command("/ספק מחשב qwencode") and mod.active_provider() == ("ollama", "qwen2.5-coder:3b")
@@ -2186,3 +2186,22 @@ def test_event_card_is_not_an_instruction(agent, monkeypatch):
     assert not seen
     mod.handle(("e2", mod.PRIMARY, "me", "2026-11-15 06:45:01", "מה המצב", 1, ""))
     assert seen
+
+
+def test_probe_falls_back_to_a_model_that_answers(agent, monkeypatch):
+    mod, db = agent
+    import io, urllib.error
+    calls = []
+
+    def fake(req, timeout=0):
+        m = json.loads(req.data)["model"]
+        calls.append(m)
+        if m != "b":
+            raise urllib.error.HTTPError(req.full_url, 429, "quota", {}, io.BytesIO(b""))
+        return io.BytesIO(b"{}")
+    monkeypatch.setattr(mod.urllib.request, "urlopen", fake)
+    p = {"base_url": "http://x", "model": "a", "models": ["a", "b", "c"]}
+    r = mod.anthropic_probe(p, "t")
+    assert r["ok"] and r["working"] == "b" and calls == ["a", "b"]
+    calls.clear()
+    assert not mod.anthropic_probe(p, "t", prefer="a")["ok"] and calls == ["a"]  # a model the owner named is not swapped
