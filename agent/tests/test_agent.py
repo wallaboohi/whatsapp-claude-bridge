@@ -2288,3 +2288,14 @@ def test_claude_status_command_shows_both_accounts_and_survives_a_dead_token(age
     mod._claude_probe = lambda host: (ok, "") if host is None else (None, "הטוקן פג")
     rep = mod.owner_command("/מצב קלוד")
     assert "me@example.com" in rep and "5 שעות: 66%" in rep and "שבועי: 59%" in rep and "הטוקן פג" in rep and "חודשי" in rep
+
+
+def test_ai_status_codex_reads_the_session_meter_and_unknown_ai_is_told(agent):
+    mod, _ = agent
+    import datetime as _dt
+    rl = {"plan_type": "free", "primary": {"used_percent": 13.0, "window_minutes": 43200, "resets_at": 1797246701}, "secondary": None}
+    mod.codex_limits = lambda: (rl, _dt.datetime(2026, 11, 15, 5, 33))
+    rep = mod.owner_command("/מצב קודקס שימוש")
+    assert "חודשי: 13%" in rep and "free" in rep
+    assert "לא הבנתי" in mod.owner_command("/מצב משהו")
+    assert "מד מכסה" in mod.owner_command("/מצב גרוק")

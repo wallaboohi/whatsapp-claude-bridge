@@ -3047,6 +3047,75 @@ def claude_status_report():
     return "\n".join(out)
 
 
+AI_ALIASES = {"claude": "claude", "קלוד": "claude", "codex": "codex", "קודקס": "codex", "copilot": "copilot", "קופילוט": "copilot", "קפילו": "copilot",
+              "קפילוט": "copilot", "גמיני": "gemini", "gemini": "gemini", "גמיני cli": "gemini_cli", "groq": "groq", "גרוק": "groq",
+              "openrouter": "openrouter_free", "אופנראוטר": "openrouter_free", "nvidia": "nvidia", "אנבידיה": "nvidia", "cloudflare": "cloudflare",
+              "קלאודפלייר": "cloudflare", "opencode": "opencode", "אופנקוד": "opencode", "ollama": "ollama", "אולמה": "ollama"}
+
+
+def codex_limits():
+    """Owner 15.11: Codex writes its plan meter into every session log (rate_limits); the newest one is the last known state."""
+    import glob
+    files = sorted(glob.glob(os.path.expanduser("~/.codex/sessions/*/*/*/*.jsonl")), key=os.path.getmtime, reverse=True)[:5]
+    for f in files:
+        try:
+            with open(f, "rb") as fh:
+                fh.seek(max(0, os.path.getsize(f) - 600000))
+                lines = fh.read().decode("utf-8", "replace").splitlines()
+        except OSError:
+            continue
+        for ln in reversed(lines):
+            if '"rate_limits"' in ln:
+                try:
+                    rl = json.loads(ln)["payload"]["rate_limits"]
+                    return rl, dt.datetime.fromtimestamp(os.path.getmtime(f))
+                except (ValueError, KeyError, TypeError):
+                    continue
+    return None, None
+
+
+def _window_he(minutes):
+    return {300: "5 שעות", 10080: "שבועי", 43200: "חודשי"}.get(minutes) or (f"{minutes // 60} שעות" if minutes else "חלון")
+
+
+def ai_status_report(arg):
+    """/מצב <בינה> (owner 15.11): whatever usage and quota data that hosted AI exposes; nothing is invented."""
+    name = AI_ALIASES.get(re.sub(r"\s+", " ", arg.strip().lower()))
+    if name == "claude":
+        return claude_status_report()
+    provs = providers()
+    if name not in provs:
+        return "לא הבנתי איזו בינה. אפשר: " + ", ".join(sorted({k for k in AI_ALIASES if re.match(r"^[א-ת]", k)}))
+    p = provs[name]
+    out = [f"📊 *מצב {prov_short(name)} · נכון ל-{dt.datetime.now():%H:%M}*", ""]
+    cool = kv_get("cool:" + name) or ""
+    out.append("• זמינה בגשר: " + ("כן" if provider_ready(name) else "לא כרגע" + (f" (מושהית עד {cool[11:16]})" if provider_cooled(name) else "")))
+    out.append(f"• עלות: {p.get('cost') or 'לא צוין'}" + (f" · מודל ברירת מחדל: {p['model']}" if p.get("model") else ""))
+    if name == "codex":
+        rl, at = codex_limits()
+        if rl:
+            out.append(f"• מנוי: {rl.get('plan_type') or '?'} _(נתון אחרון מ-{at:%d.%m %H:%M}, מיומן ההרצות של קודקס)_")
+            for k in ("primary", "secondary"):
+                x = rl.get(k)
+                if x:
+                    out.append(f"• {_window_he(x.get('window_minutes'))}: {x.get('used_percent'):.0f}% (מתאפס {_reset_at(dt.datetime.fromtimestamp(x['resets_at']).astimezone().isoformat())})")
+            if rl.get("rate_limit_reached_type"):
+                out.append(f"• 🔒 המכסה הגיעה: {rl['rate_limit_reached_type']}")
+        else:
+            out.append("• עוד אין נתון: קודקס כותב אותו ביומן אחרי הרצה.")
+    elif name == "openrouter_free":
+        try:
+            req = urllib.request.Request("https://openrouter.ai/api/v1/key", headers={"Authorization": "Bearer " + provider_key(p)})
+            d = (json.loads(urllib.request.urlopen(req, timeout=10).read().decode()) or {}).get("data") or {}
+            out.append(f"• שימוש: ${d.get('usage', 0):.2f} · מגבלה: " + (f"${d['limit']}" if d.get("limit") is not None else "ללא")
+                       + (" · שכבה חינמית" if d.get("is_free_tier") else ""))
+        except Exception as e:
+            out.append(f"• לא הצלחתי לקרוא את המפתח ({str(e)[:40]})")
+    else:
+        out.append("• מד מכסה: הספק הזה לא חושף נתון כזה. כשהמכסה נגמרת הגשר מזהה זאת, משהה אותו ועובר לספק הבא.")
+    return "\n".join(out)
+
+
 def _pct(a, b):
     return f"{100 * a / b:.0f}%" if b else "—"
 
@@ -3660,8 +3729,9 @@ def owner_command(text, chat=None):
         return ((f"📜 *כללי הבסיס של השיחה הזו* — יש {rules_count(body)} כללים (`{rel}`):\n{body}" if body
                  else f"📜 עוד אין כללי בסיס לשיחה הזו — יש 0 כללים (`{rel}`).")
                 + "\n\nלהוספה: /כלל בסיס ואחריו הכלל. אבדוק שהוא ברור ולא סותר כללים קיימים לפני שאוסיף.")
-    if re.match(r"^/\s*(מצב קלוד|מצב claude)\s*$", text.strip()):
-        return claude_status_report()
+    m = re.match(r"^/\s*מצב\s+(.+?)(?:\s+שימוש)?\s*$", text.strip())
+    if m:
+        return ai_status_report(m.group(1))
     if re.match(r"^/(תקרה|תקרת שימוש|שימוש|usage)\s*$", text.strip()):
         return usage_report(chat or PRIMARY)
     if re.match(r"^/\s*(כרום|chrome)\s*$", text.strip()):   # owner 10.11: bring the Chrome extension back remotely
