@@ -1189,7 +1189,7 @@ def anthropic_probe(p, tok, prefer=None):
     overloaded the others are tried (owner 15.11: Gemini's default model was out of quota while gemini-3-flash-preview answered)."""
     models = list(p["models"])
     first = prefer or p.get("model") or models[0]
-    why = ""
+    why, tried = "", []
     for m in [first] + [x for x in models if x != first]:
         body = {"model": m, "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]}
         req = urllib.request.Request(p["base_url"].rstrip("/") + "/v1/messages", data=json.dumps(body).encode(), method="POST",
@@ -1197,18 +1197,27 @@ def anthropic_probe(p, tok, prefer=None):
                                               "content-type": "application/json"})
         try:
             urllib.request.urlopen(req, timeout=20).read()
-            return {"ok": True, "detail": f"מחובר · המפתח תקין · {len(models)} מודלים", "models": models, "working": m}
+            return {"ok": True, "detail": f"מחובר · המפתח תקין · {len(models)} מודלים", "models": models, "working": m, "tried": tried}
         except urllib.error.HTTPError as e:
             why = {401: "המפתח נדחה (ודא שהעתקת את המפתח עצמו ולא את המזהה שלו)", 403: "המפתח נדחה", 402: "אין יתרה בחשבון הספק",
                    429: "הספק מגביל קצב כרגע"}.get(e.code, f"שגיאה {e.code} מהספק")
+            tried.append((m, why))
             if e.code in (401, 402, 403):
                 break  # the key or the account, not the model: another model will not help
         except Exception as e:
             why = f"לא מגיב: {str(e)[:70]}"
+            tried.append((m, why))
             break
         if prefer:
             break  # the owner named this model: do not swap it for another
-    return {"ok": False, "detail": why + (" בכל המודלים" if len(models) > 1 and not prefer and "מגביל" in why else ""), "models": models}
+    return {"ok": False, "detail": why + (" בכל המודלים" if len(models) > 1 and not prefer and "מגביל" in why else ""), "models": models,
+            "tried": tried}
+
+
+def tried_he(tried, working=None):
+    """Owner 15.11: the switch says which models did not answer and which one answers now."""
+    rows = [f"❌ {m}: {w}" for m, w in tried or []] + ([f"✅ {working}: עונה עכשיו"] if working else [])
+    return ("\n" + "\n".join(rows)) if len(rows) > 1 or (rows and not working) else ""
 
 
 def provider_check(name, prefer=None):
@@ -1283,7 +1292,7 @@ def switch_provider(name, model=None, chat=None):
     ps = providers()
     c = provider_check(name, model)
     if not c["ok"]:
-        return f"⚪ {ps[name]['label']} לא מחובר: {c['detail']}. לא הוחלף."
+        return f"⚪ {ps[name]['label']} לא מחובר: {c['detail']}. לא הוחלף." + tried_he(c.get("tried"))
     if not model and c.get("working") and c["working"] != ps[name].get("model"):
         model = c["working"]  # the default model is out of quota now: switch to the one that answered
     if model and c["models"] and model not in c["models"]:
@@ -1291,8 +1300,8 @@ def switch_provider(name, model=None, chat=None):
     set_provider(name, model, chat=chat)
     _, cm = active_provider(chat)
     scope = "בקבוצה הזו" if chat else "הגשר"
-    return (f"✅ ספק {scope}: *{ps[name]['label']}*" + (f" · מודל {cm or ps[name].get('model')}" if name != "claude" else "")
-            + (". חזרה לספק המחשב: /ספק כאן איפוס" if chat else ". כל השיחות עוברות דרכו מההודעה הבאה (חוץ מקבוצות עם ספק משלהן). חזרה: /ספק מחשב claude"))
+    return ((f"✅ ספק {scope}: *{ps[name]['label']}*" + (f" · מודל {cm or ps[name].get('model')}" if name != "claude" else "")
+            + (". חזרה לספק המחשב: /ספק כאן איפוס" if chat else ". כל השיחות עוברות דרכו מההודעה הבאה (חוץ מקבוצות עם ספק משלהן). חזרה: /ספק מחשב claude"))) + tried_he(c.get("tried"), c.get("working") if c.get("tried") else None)
 
 
 def effective_model(model):
@@ -3032,7 +3041,8 @@ def enqueue_command(msg_id, text, when, chat=None):
         return
     with adb() as db:
         cid = db.execute("INSERT INTO commands (msg_id, text, at, chat_jid, source, sync) VALUES (?, ?, ?, ?, 'wa', 0)", (msg_id, text, when, chat)).lastrowid
-        ahead = db.execute("SELECT COUNT(*) FROM commands WHERE id < ? AND status IN ('pending', 'running')", (cid,)).fetchone()[0]
+        ahead = db.execute("SELECT COUNT(*) FROM commands WHERE id < ? AND coalesce(chat_jid, ?) = ? AND status IN ('pending', 'running')",
+                           (cid, PRIMARY, chat)).fetchone()[0]  # owner 15.11: only work in the SAME conversation is ahead; other conversations run in parallel
     _ctx.chat, _ctx.src, _ctx.sync = chat, "wa", 0
     try:
         react(msg_id, "👀" if not ahead else "⏳")  # immediate "got it"

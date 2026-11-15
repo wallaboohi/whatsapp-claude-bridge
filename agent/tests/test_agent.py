@@ -83,6 +83,19 @@ def test_queued_message_gets_a_receipt(agent, monkeypatch):
     assert len(said) == 1 and "בתור לפניה: 1" in said[0][0] and said[0][1] == "R2"
 
 
+def test_other_conversation_is_not_ahead(agent, monkeypatch):
+    """Owner 15.11: conversations run in parallel, so work in another group never counts as "ahead"."""
+    mod, _ = agent
+    reacts, said = [], []
+    monkeypatch.setattr(mod, "react", lambda mid, e: reacts.append((mid, e)))
+    monkeypatch.setattr(mod, "reply", lambda text, quoted=None: said.append((text, quoted)))
+    mod.enqueue_command("G1", "a", "2026-11-15 12:00", "group-a@g.us")
+    mod.enqueue_command("G2", "b", "2026-11-15 12:01", "group-b@g.us")
+    mod.enqueue_command("G3", "c", "2026-11-15 12:02", "group-a@g.us")
+    assert reacts == [("G1", "👀"), ("G2", "👀"), ("G3", "⏳")]
+    assert len(said) == 1 and "בתור לפניה: 1" in said[0][0] and said[0][1] == "G3"
+
+
 def test_strings_exist_in_both_languages(agent):
     mod, _ = agent
     src = open(os.path.join(HERE, "agent.py"), encoding="utf-8").read()
@@ -2205,3 +2218,16 @@ def test_probe_falls_back_to_a_model_that_answers(agent, monkeypatch):
     assert r["ok"] and r["working"] == "b" and calls == ["a", "b"]
     calls.clear()
     assert not mod.anthropic_probe(p, "t", prefer="a")["ok"] and calls == ["a"]  # a model the owner named is not swapped
+
+
+def test_switch_reports_which_models_failed_and_which_answers(agent, monkeypatch):
+    mod, db = agent
+    monkeypatch.setattr(mod, "providers", lambda: {"gemini": {"label": "Gemini", "model": "a", "models": ["a", "b"]}})
+    monkeypatch.setattr(mod, "provider_check", lambda n, *a: {"ok": True, "detail": "", "models": ["a", "b"], "working": "b",
+                                                              "tried": [("a", "הספק מגביל קצב כרגע")]})
+    got = []
+    monkeypatch.setattr(mod, "set_provider", lambda n, m, chat=None: got.append(m))
+    monkeypatch.setattr(mod, "active_provider", lambda chat=None: ("gemini", got[-1]))
+    out = mod.switch_provider("gemini")
+    assert got == ["b"] and "❌ a: הספק מגביל קצב כרגע" in out and "✅ b: עונה עכשיו" in out
+    assert mod.tried_he([("a", "x"), ("b", "y")]).count("❌") == 2
