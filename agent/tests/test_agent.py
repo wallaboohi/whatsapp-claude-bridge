@@ -512,16 +512,9 @@ def test_usage_limit_parks_and_requeues_commands(agent, monkeypatch):
         mod.run_command(mod.claim_next(mod.PRIMARY))
     with mod.adb() as db:
         st = [r[0] for r in db.execute("SELECT status FROM commands ORDER BY id")]
-    assert st == ["waiting_limit", "waiting_limit"] and not called, "no Claude run while the limit is on"
-    assert sum("הודעה מהגשר" in t for t in sent) == 2, "owner 13.11: each message is acknowledged once, by the bridge"
-    assert mod.release_limit_waiters() == 0, "still waiting"
-    mod.kv_set("limit_until", (mod.dt.datetime.now() - mod.dt.timedelta(minutes=1)).isoformat(timespec="seconds"))
-    assert mod.release_limit_waiters() == 2
-    resumed = [t for t in sent if "▶️" in t]
-    assert len(resumed) == 1 and "2 הודעות" in resumed[0] and "10:20" in resumed[0], "one notice listing what arrived"
-    with mod.adb() as db:
-        assert [r[0] for r in db.execute("SELECT status FROM commands ORDER BY id")] == ["pending", "pending"]
-
+    # owner 15.11: Claude is the chosen AI and capped: no silent wait, no switch — each message is told to switch AI
+    assert st == ["done", "done"] and not called
+    assert sum("לא עונה עכשיו" in t and "לא עברתי לבינה אחרת" in t for t in sent) == 2
 
 def test_stranded_limit_waiters_are_requeued(agent, monkeypatch):
     """Owner 11.11: the limit flag was cleared but the PC slept / the notice hung before the re-queue, so the commands sat
@@ -559,6 +552,7 @@ def test_requeue_happens_even_if_the_notice_fails(agent, monkeypatch):
 
 def test_limit_hit_during_a_run_parks_the_command(agent, monkeypatch):
     mod, _ = agent
+    monkeypatch.setattr(mod, "active_provider", lambda chat=None: ("auto", None))  # owner 15.11: only the auto ladder waits / switches by itself
     monkeypatch.setattr(mod, "claude_usage", lambda max_age=120: None)  # the bridge words the limit; no real meter call
     sent = []
     monkeypatch.setattr(mod, "send", lambda chat, text, media=None, quoted=None: sent.append(text) or True)
@@ -585,7 +579,7 @@ def test_background_runs_skip_quietly_during_the_limit(agent, monkeypatch):
         raise AssertionError("must not run")
     monkeypatch.setattr(mod, "_run_claude", boom)
     assert mod.claude("x", session=False) is None
-    with _pt.raises(mod.LimitHit):
+    with _pt.raises(mod.AIDown):  # owner 15.11: his own message is told "Claude is not answering", no switch, no silent wait
         mod.claude("x", on_stage=lambda *a: None)
 
 
@@ -2267,3 +2261,21 @@ def test_bridge_command_is_answered_at_once_not_queued(agent, monkeypatch):
     assert not mod.instant_command("c2", "/משהו לא מוכר", mod.PRIMARY)  # unknown: goes to the queue as before
     assert not mod.instant_command("c3", "/מודל אופוס תכין דוח", mod.PRIMARY)  # a request after the switch is real work
     assert not mod.instant_command("c4", "שלום", mod.PRIMARY)
+
+
+def test_chosen_ai_that_fails_is_never_replaced_by_another(agent, monkeypatch):
+    mod, _ = agent
+    import pytest as _pt
+    chat = "g-gemini@g.us"
+    mod.set_provider("gemini", chat=chat)
+    calls = []
+
+    def down(*a, **k):
+        calls.append(getattr(mod._ctx, "force_provider", None))
+        raise mod.ProviderDown("gemini", "rate", 15)
+    monkeypatch.setattr(mod, "_run_claude", down)
+    with _pt.raises(mod.AIDown) as e:
+        mod.claude("x", on_stage=lambda *a: None, chat=chat, session=False)
+    assert calls == [None] and e.value.name == "gemini"  # one try, on Gemini only
+    assert mod.classify_down("You exceeded your current quota, please check your plan and billing details") == ("rate", 15)
+    assert mod.classify_down("insufficient_quota: check your plan and billing details")[0] == "billing"

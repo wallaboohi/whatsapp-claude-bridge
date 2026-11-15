@@ -946,6 +946,8 @@ class ProviderDown(Exception):
 
 def classify_down(text):
     """(reason, minutes to skip the provider) for an error text of a provider run; None when it is not a provider problem."""
+    if RATE_RE.search(text) and "insufficient_quota" not in text and not re.search(r"(?i)insufficient (balance|funds|credit)|402", text):
+        return "rate", 15  # owner 15.11: Gemini's quota text also says "billing details"; OpenAI's insufficient_quota stays billing
     if BILLING_RE.search(text):
         return "billing", 180
     if RATE_RE.search(text):
@@ -1070,8 +1072,18 @@ def _run_auto(*a, **k):
         _ctx.force_provider = _ctx.force_engine = None
 
 
+def ai_down_text(name, why):
+    """Owner 15.11: the chosen AI did not answer — say so and let the owner switch (never a silent switch to another AI)."""
+    ready = [n for n in auto_ladder() if n not in (name, "auto") and provider_ready(n)][:5]
+    return (f"⚠️ *{prov_short(name)} לא עונה עכשיו* ({why}). לא עברתי לבינה אחרת.\n"
+            "כדי להמשיך, החלף בינה מתארחת ושלח שוב את ההודעה"
+            + (": " + " · ".join(f"/{n}" for n in ready) if ready else "."))
+
+
 def _failover_step(e, tried):
     """True when the failed run should be repeated on another provider (the choice is kept in _ctx.force_*)."""
+    if getattr(_ctx, "no_failover", False):
+        return False  # owner 15.11: the owner's own messages never move to another AI by themselves
     active = active_provider()[0]
     forced = getattr(_ctx, "force_provider", None)
     name = getattr(_ctx, "provider_used", None)
@@ -1956,6 +1968,13 @@ def _stage_of(ev):
     return None
 
 
+class AIDown(Exception):
+    """Owner 15.11: the conversation's chosen AI did not answer; no automatic switch to another AI, the owner switches."""
+    def __init__(self, name, why):
+        super().__init__(f"{name}: {why}")
+        self.name, self.why = name, why
+
+
 class LimitHit(Exception):
     """Claude's plan usage limit was hit; `until` = when the agent tries again (reset time + 2 minutes)."""
     def __init__(self, until):
@@ -2798,7 +2817,13 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
     chat = chat or PRIMARY
     interactive = on_stage is not None  # the owner's commands; plugin / background runs skip quietly instead
     _ctx.failover_used, _ctx.failover_why = False, ""
+    chosen = active_provider(chat)[0]
+    _ctx.no_failover = interactive and chosen != "auto"
     lu = limit_until()
+    if lu and _ctx.no_failover:
+        if chosen == "claude":
+            raise AIDown("claude", f"נגמרה המכסה עד {lu:%H:%M}")
+        lu = None  # another AI is chosen here: Claude's quota does not matter
     if lu:
         tgt = failover_target()
         if tgt:  # owner 14.11: the quota is used up, the bridge goes on with the failover target
@@ -2824,8 +2849,18 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
         write_handoff(sid, chat)
         sid = None
     try:
-        res = _run_auto(prompt, model, sid, timeout, on_stage, append=group_prompt(chat), chat=chat, tools=tools, max_budget=max_budget)
-    except Stopped:
+        try:
+            res = _run_auto(prompt, model, sid, timeout, on_stage, append=group_prompt(chat), chat=chat, tools=tools, max_budget=max_budget)
+        except (ProviderDown, LimitHit, AuthError, RuntimeError) as e:
+            if not _ctx.no_failover or (isinstance(e, AuthError) and chosen == "claude"):
+                raise
+            why = ("נגמרה המכסה" + (f" עד {e.until:%H:%M}" if getattr(e, "until", None) else "") if isinstance(e, LimitHit)
+                   else down_why_he(e) if isinstance(e, (ProviderDown, AuthError)) else "לא החזיר תשובה")
+            log("chosen AI did not answer, no switch:", chosen, why)
+            raise AIDown(chosen, why)
+    except (Stopped, AIDown) as e:
+        if isinstance(e, AIDown):
+            raise
         return "⛔ עצרתי את העבודה לבקשתך."
     except LimitHit:
         if interactive:
@@ -3940,7 +3975,12 @@ def run_command(row):
             react(mid, "✅")
             return
         lu = limit_until()
-        if lu and not failover_target():  # no Claude run while the usage limit is on and no failover target: wait for the reset
+        chosen = active_provider(chat)[0]
+        if lu and chosen == "claude":  # owner 15.11: Claude is chosen here and capped: say so, no switch to another AI
+            reply(ai_down_text("claude", f"נגמרה המכסה עד {lu:%H:%M}"), quoted=mid if src == "wa" else None)
+            react(mid, "⚠️")
+            return
+        if lu and chosen == "auto" and not failover_target():  # no Claude run while the usage limit is on and no failover target: wait for the reset
             parked = True
             wait_for_limit(cid, chat, mid, src, lu)
             return
@@ -4009,6 +4049,10 @@ def run_command(row):
         except LimitHit as e:
             parked = True
             wait_for_limit(cid, chat, mid, src, e.until, mid_run=True)
+            return
+        except AIDown as e:
+            reply(ai_down_text(e.name, e.why), quoted=mid if src == "wa" else None)
+            react(mid, "⚠️")
             return
         finally:
             status.finish()

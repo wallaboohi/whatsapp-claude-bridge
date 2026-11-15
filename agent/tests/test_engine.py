@@ -1,3 +1,4 @@
+import pytest
 """Owner 14.11: the agent engine layer and the failover that keeps the bridge answering when Claude's usage quota is used up."""
 import json
 
@@ -62,7 +63,9 @@ def test_a_capped_claude_does_not_stop_the_bridge(agent, monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "_run_claude", fake)
     mod.kv_set("limit_until", (mod.dt.datetime.now() + mod.dt.timedelta(hours=1)).isoformat(timespec="seconds"))
     mod.kv_set(mod.K("session_id", mod.PRIMARY), "claude-session-1")
-    out = mod.claude("שלום", model="opus", on_stage=lambda *a: None, chat=mod.PRIMARY)  # an interactive run: it used to raise LimitHit
+    with pytest.raises(mod.AIDown):  # owner 15.11: the owner's own message is never moved to another AI
+        mod.claude("שלום", model="opus", on_stage=lambda *a: None, chat=mod.PRIMARY)
+    out = mod.claude("שלום", model="opus", chat=mod.PRIMARY)  # a background run (automation) still goes on elsewhere
     assert out == "תשובה מהמנוע החלופי" and seen["engine"] == "qwen" and seen["provider"] == "groq"
     assert mod.kv_get(mod.K("session_id", mod.PRIMARY)) == "claude-session-1"  # the other engine's session never replaces Claude's
     assert "מכסת Claude נגמרה" in mod.ai_tag("opus") and "מנוע Qwen Code" in mod.ai_tag("opus") and "Groq" in mod.ai_tag("opus")
