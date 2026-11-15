@@ -71,6 +71,43 @@ def test_owner_commands_are_durable(agent, monkeypatch):
         assert db.execute("SELECT status FROM commands WHERE msg_id = 'M1'").fetchone()[0] == "pending"
 
 
+def test_availability_command_uses_quota_free_inventory(agent, monkeypatch):
+    mod, _ = agent
+    monkeypatch.setattr(mod, "provider_status", lambda n: {"ok": True, "detail": "בדיקה זולה"})
+    monkeypatch.setattr(mod, "provider_check", lambda *a, **k: pytest.fail("בדיקת הזמינות לא צריכה לקרוא למודל"))
+    monkeypatch.setattr(mod, "engine_ready", lambda n: n == "claude")
+    monkeypatch.setattr(mod, "probe_mcp_server", lambda: (True, "בדיקה תקינה"))
+    monkeypatch.setattr(mod, "mcp_registration_status", lambda: {"בדיקה": True})
+    report = mod.owner_command("/בדוק זמינות")
+    assert "מנועים במחשב הזה" in report and "ספקים" in report and "שרת MCP" in report
+
+
+def test_daily_engine_probe_uses_one_configured_model(agent, monkeypatch):
+    mod, _ = agent
+    monkeypatch.setattr(mod, "providers", lambda: {"test": {"short": "בדיקה", "kind": "anthropic", "model": "model-a",
+                                                                  "base_url": "https://example.test", "models": ["model-a"]}})
+    monkeypatch.setattr(mod, "provider_status", lambda n: {"ok": True, "detail": "נגיש"})
+    calls = []
+    monkeypatch.setattr(mod, "provider_check", lambda n, prefer=None: calls.append((n, prefer)) or {"ok": True})
+    monkeypatch.setattr(mod, "engine_ready", lambda n: False)
+    monkeypatch.setattr(mod, "active_engine", lambda: "claude")
+    monkeypatch.setattr(mod, "probe_mcp_server", lambda: (True, "בדיקה תקינה"))
+    monkeypatch.setattr(mod, "mcp_registration_status", lambda: {})
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
+    report = mod.engine_status_report(live=True)
+    assert calls == [("test", "model-a")]
+    assert "תגובה תקינה" in report
+
+
+def test_hourly_engine_status_is_registered_without_live_probe(agent, monkeypatch):
+    mod, _ = agent
+    monkeypatch.setattr(mod, "engine_status_report", lambda live=False: "snapshot")
+    logs = []
+    monkeypatch.setattr(mod, "log", lambda *a: logs.append(a))
+    mod.hourly_engine_status()
+    assert logs == [("hourly engine status refreshed",)]
+
+
 def test_queued_message_gets_a_receipt(agent, monkeypatch):
     """Owner 14.11: a message behind other work is answered at once with "received, N ahead"; the first one only gets 👀."""
     mod, _ = agent
@@ -2269,6 +2306,22 @@ def test_ensure_cli_mcp_gives_every_agent_cli_the_bridge_whatsapp_tools(agent, m
     assert g["theme"] == "dark" and g["mcpServers"]["whatsapp"]["args"][0].endswith("main.py")
     assert "whatsapp" in json.load(open(home / ".copilot" / "mcp-config.json", encoding="utf-8"))["mcpServers"]
     assert json.load(open(home / ".config" / "opencode" / "opencode.json", encoding="utf-8"))["mcp"]["whatsapp"]["enabled"] is True
+
+
+def test_qwen_mcp_registration_exposes_full_bridge_tool_set(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    home = tmp_path / "home"
+    qwen = home / ".qwen" / "settings.json"
+    qwen.parent.mkdir(parents=True)
+    qwen.write_text(json.dumps({"mcpServers": {"whatsapp": {"includeTools": ["list_messages"]}}}), encoding="utf-8")
+    monkeypatch.setattr(mod.os.path, "expanduser", lambda p: str(home) + p[1:].replace("/", os.sep) if p.startswith("~") else p)
+    monkeypatch.setattr(mod, "ROOT", str(tmp_path))
+    server = tmp_path / "whatsapp-mcp-server"
+    (server / ".venv" / "Scripts").mkdir(parents=True)
+    (server / ".venv" / "Scripts" / "python.exe").write_text("x")
+    assert mod.ensure_qwen_settings()
+    cfg = json.loads(qwen.read_text(encoding="utf-8"))
+    assert "includeTools" not in cfg["mcpServers"]["whatsapp"]
 
 
 def test_restart_line_is_short_and_adb_is_silent(agent, monkeypatch):

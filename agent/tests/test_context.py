@@ -30,7 +30,7 @@ def test_a_fresh_session_gets_the_conversation_and_the_way_to_read_more(agent, m
     assert pack.index("מה המצב של הגשר?") < pack.index("הגשר תקין")  # oldest first
 
 
-def test_qwen_settings_give_read_only_whatsapp_tools_and_keep_the_owners_own_keys(agent, monkeypatch, tmp_path):
+def test_qwen_settings_give_full_bridge_tools_and_keep_the_owners_own_keys(agent, monkeypatch, tmp_path):
     mod, _ = agent
     monkeypatch.setattr(mod.os.path, "expanduser", lambda p: str(tmp_path / p.replace("~/", "")) if p.startswith("~") else p)
     monkeypatch.setattr(mod, "ROOT", str(tmp_path))
@@ -42,9 +42,8 @@ def test_qwen_settings_give_read_only_whatsapp_tools_and_keep_the_owners_own_key
     cur = json.loads((tmp_path / ".qwen" / "settings.json").read_text(encoding="utf-8"))
     assert cur["ui"] == {"theme": "dark"} and "mine" in cur["mcpServers"]  # what was there stays
     wa = cur["mcpServers"]["whatsapp"]
-    assert wa["args"] == ["main.py"] and "send_message" not in wa["includeTools"] and "send_file" not in wa["includeTools"] and "react_to_message" not in wa["includeTools"]
-    assert {"list_messages", "search_all", "get_message_context", "list_chats", "get_status"} <= set(wa["includeTools"])
-    assert "get_group_info" in wa["includeTools"] and "set_group_name" not in wa["includeTools"]
+    assert wa["args"] == ["main.py"] and "includeTools" not in wa
+    assert "includeTools" not in wa  # no MCP tool whitelist: the full bridge tool set is exposed
     assert cur["security"]["auth"]["selectedType"] == "openai" and cur["telemetry"]["enabled"] is False
     assert mod.ensure_qwen_settings() is False  # unchanged: nothing is rewritten
 
