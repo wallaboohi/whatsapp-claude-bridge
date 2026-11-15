@@ -2338,7 +2338,7 @@ def conversation_pack(chat, n=14):
         lines.append(f"[{str(ts)[11:16]}] {who}: {' '.join((text or '').split())[:300]}")
     if lines:
         parts.append("ההודעות האחרונות בשיחה (מהישנה לחדשה):\n" + "\n".join(lines))
-    parts.append("אם צריך עוד הקשר, קרא הודעות לפי דרישה בכלי הווצאפ (list_messages, search_all, get_message_context). אל תשלח הודעות בעצמך.")
+    parts.append("אם צריך עוד הקשר, קרא הודעות לפי דרישה בכלי הווצאפ (list_messages, search_all, get_message_context). תשובתך לשיחה הזו נשלחת אוטומטית, אז אל תשלח אותה בעצמך. הודעה לאדם או לקבוצה אחרת: רק דרך send_message, שיוצר טיוטה עם כרטיס אישור, ורק כשיקיר ביקש (agent/home/AI-KNOWLEDGE.md).")
     return "\n\n".join(parts)
 
 
