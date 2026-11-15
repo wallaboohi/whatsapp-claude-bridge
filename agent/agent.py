@@ -2562,7 +2562,7 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
     mode = "auto" if tools == "" else CFG.get("permission_mode", "auto")
     guest = guest_cfg(chat)
     if guest:  # isolated guest group: never the owner's tools, connectors or browser; owner 13.11: no permission prompt may block its allowed tools (web search was refused headless)
-        mode = guest.get("permission_mode") or "bypassPermissions"
+        mode = guest.get("permission_mode") or "auto"  # owner 15.11: "bypassPermissions" is refused together with --restricted ("not supported in restricted mode") → Claude gave no answer; the allowed tools are listed in --allowedTools below instead
     eng = getattr(_ctx, "force_engine", None) or active_engine()
     if guest or tools == "" or not engine_ready(eng):
         eng = "claude"  # guests and restricted runs keep Claude Code's isolation; an engine that is not installed falls back
@@ -2595,7 +2595,8 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
         if append:
             cmd += ["--append-system-prompt", append]
         if guest:
-            cmd += ["--restricted", "--safe-mode", "--strict-mcp-config", "--tools", GUEST_TOOLS if tools is None else tools]
+            cmd += ["--restricted", "--safe-mode", "--strict-mcp-config", "--tools", GUEST_TOOLS if tools is None else tools,
+                    "--allowedTools", GUEST_TOOLS if tools is None else tools]
         elif tools is not None:
             cmd += ["--tools", tools, "--strict-mcp-config"]  # --tools alone still loads MCP connector tools (e.g. Gmail send)
         elif CFG.get("strict_mcp"):

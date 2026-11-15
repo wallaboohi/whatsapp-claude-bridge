@@ -1694,7 +1694,8 @@ def test_guest_group_isolation(guest, monkeypatch):
     c = seen["cmd"]
     assert seen["cwd"] == str(tmp / "rita") and "--restricted" in c and "--safe-mode" in c and "--strict-mcp-config" in c
     assert c[c.index("--tools") + 1] == mod.GUEST_TOOLS and "Bash" not in mod.GUEST_TOOLS
-    assert c[c.index("--permission-mode") + 1] == "bypassPermissions" and "--chrome" not in c
+    assert c[c.index("--permission-mode") + 1] == "auto" and "--chrome" not in c  # bypassPermissions is refused with --restricted (owner 15.11)
+    assert c[c.index("--allowedTools") + 1] == mod.GUEST_TOOLS
     with pytest.raises(RuntimeError):
         mod._run_claude("hi", "haiku", None, 10, chat=DEV)
     assert seen["cwd"] == mod.HOME and "--restricted" not in seen["cmd"] and "--chrome" in seen["cmd"]
