@@ -5361,7 +5361,7 @@ def peer_watch_step(state, brief, now, cfg, name):
 
 
 def peer_watch():
-    """Every 2 minutes: is each other machine (config peers) up, and is its bridge connected? Alerts go to OUR primary
+    """Every 2 minutes (config peer_watch_seconds): is each other machine (config peers) up, and is its bridge connected? Alerts go to OUR primary
     control group — so a machine whose own bridge is down still gets reported. Config peer_watch (default on)."""
     time.sleep(90)  # let the tunnel come up after a start
     while True:
@@ -5394,7 +5394,8 @@ def peer_watch():
             plugin_hold_watch()
         except Exception:
             log("peer_watch error", traceback.format_exc())
-        time.sleep(120)
+        # owner 16.11: the backup laptop checks every few seconds and takes over at once (config peer_watch_seconds)
+        time.sleep(max(10, int(CFG.get("peer_watch_seconds", 120))))
 
 
 def _ssh(alias, remote_cmd, timeout=120):
