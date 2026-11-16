@@ -96,6 +96,10 @@
  "openrouter_free": {
   "label": "OpenRouter · מודלים חינמיים",
   "short": "OpenRouter חינמי",
+  "aliases": [
+   "openrouter",
+   "openrauter"
+  ],
   "kind": "anthropic",
   "base_url": "https://openrouter.ai/api",
   "key_file": "openrouter.key",
