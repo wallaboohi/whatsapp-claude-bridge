@@ -3919,8 +3919,8 @@ def sync_group_name(chat, model):
                     kv_set(K("name_tpl", chat), tpl)
                     kv_set(K("name_set_at", chat), "0")
             want = tpl.replace("{model}", group_label(model, chat))[:100]
-            if kv_get(K("name_set", chat)) == want:
-                return
+            if kv_get(K("name_set", chat)) == want and (not live or live == want):
+                return  # owner 16.11: a name someone else wrote over ours (the other computer) is put back
             last = kv_get(K("name_set_at", chat))
             if last and time.time() - float(last) < 20:
                 return

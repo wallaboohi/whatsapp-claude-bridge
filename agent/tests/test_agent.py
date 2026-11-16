@@ -1648,6 +1648,24 @@ def test_only_the_answering_computer_renames_a_group(agent, monkeypatch):
     assert calls == [], "the backup never renames the host's group"
 
 
+def test_a_name_overwritten_by_the_other_computer_is_put_back(agent, monkeypatch):
+    mod, db = agent
+    mod.CFG["name_prefix"] = "HW"
+    mod.CFG["group_name_model"] = True
+    g = mod.PRIMARY
+    sent = []
+    monkeypatch.setattr(mod, "bridge", lambda path, body=None, **k: sent.append(body) or {"success": True})
+    monkeypatch.setattr(mod, "group_label", lambda model, chat=None: "אופוס")
+    mod.kv_set(mod.K("name_tpl", g), "HW {model} YB אוטומציה 4M-D")
+    mod.kv_set(mod.K("name_set", g), "HW אופוס YB אוטומציה 4M-D")
+    monkeypatch.setattr(mod, "live_names", lambda: {g: "HW אופוס YB אוטומציה 4M-D"})
+    mod.sync_group_name(g, "opus")
+    assert sent == [], "already right"
+    monkeypatch.setattr(mod, "live_names", lambda: {g: "LAP Gemini YB אוטומציה 4M-D"})
+    mod.sync_group_name(g, "opus")
+    assert sent[-1]["name"] == "HW אופוס YB אוטומציה 4M-D"
+
+
 def test_replay_answers_only_messages_nobody_answered(agent, monkeypatch):
     mod, db = agent
     g = "120363499999@g.us"
