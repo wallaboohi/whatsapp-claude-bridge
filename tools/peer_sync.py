@@ -19,7 +19,8 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PEER = "4-MINE"
-PEER_ROOT = "C:/Users/walla/whatsapp-mcp"
+HOME = os.path.expanduser("~").replace("\\", "/")  # the peer uses the same profile layout
+PEER_ROOT = f"{HOME}/whatsapp-mcp"
 MERGE = ["agent/home/bridge_rules.md", "agent/home/dictionary.md"]
 JSON_MERGE = ["agent/config.json", "agent/groups.json"]  # only keys the other side lacks; values never replaced
 SECRET_WORDS = ("key", "token", "secret", "password", "pass")
@@ -173,7 +174,7 @@ def merge_files(tmp):
 
 PEER_CODE_PS1 = r"""
 $env:Path = 'C:\msys64\ucrt64\bin;' + $env:Path
-Set-Location C:\Users\walla\whatsapp-mcp
+Set-Location "$env:USERPROFILE\whatsapp-mcp"
 $before = git rev-parse HEAD
 git pull --ff-only hub main 2>&1 | Select-Object -Last 1
 $after = git rev-parse HEAD
@@ -183,16 +184,16 @@ if ($go) {
   $py = "import sys; sys.path.insert(0,'.'); import agent; print('rebuild:', repr(agent._rebuild_bridge()))"
   uv run --no-project python -I -X utf8 -c $py 2>&1 | Select-Object -Last 2
 } else { 'no Go change: bridge left running' }
-Get-Content C:\Users\walla\whatsapp-mcp\VERSION
+Get-Content "$env:USERPROFILE\whatsapp-mcp\VERSION"
 """
 
 
 def update_code(tmp):
     ps1 = os.path.join(tmp, "peer_code.ps1")
     open(ps1, "w", encoding="utf-8").write(PEER_CODE_PS1)
-    scp(ps1, f"{PEER}:C:/Users/walla/peer_code_tmp.ps1")
-    print(ssh("powershell -NoProfile -ExecutionPolicy Bypass -File C:/Users/walla/peer_code_tmp.ps1", timeout=900))
-    ssh("del C:\\Users\\walla\\peer_code_tmp.ps1")
+    scp(ps1, f"{PEER}:{HOME}/peer_code_tmp.ps1")
+    print(ssh(f"powershell -NoProfile -ExecutionPolicy Bypass -File {HOME}/peer_code_tmp.ps1", timeout=900))
+    ssh(f"del {HOME}/peer_code_tmp.ps1".replace("/", "\\"))
     print("local VERSION:", open(os.path.join(ROOT, "VERSION")).read().strip())
 
 
