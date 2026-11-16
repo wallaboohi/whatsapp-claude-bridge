@@ -1482,6 +1482,9 @@ def provider_check(name, prefer=None):
     if p["kind"] == "cli":  # agent CLIs bring their own sign-in: installed + login/key is the whole check
         ok = cli_ready(p)
         return {"ok": ok, "detail": "מותקן ומחובר" if ok else f"לא מותקן או לא מחובר: {(p.get('cli') or {}).get('bin')}", "models": list(p.get("models") or [])}
+    if p["kind"] == "opencode":  # no key at all: the free Zen models need only the installed program (owner 16.11: "/opencode" said "missing key secrets/None")
+        ok = bool(opencode_bin())
+        return {"ok": ok, "detail": "מותקן" if ok else "OpenCode לא מותקן במחשב", "models": list(p.get("models") or [])}
     tok = p.get("token") or provider_key(p)
     if not tok:
         return {"ok": False, "detail": f"חסר מפתח: secrets/{p.get('key_file')}", "models": []}
