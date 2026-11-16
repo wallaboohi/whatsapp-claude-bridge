@@ -934,6 +934,7 @@ def provider_host(p, model=None, max_age=20):
 AUTO_LADDER = ("claude", "gemini", "groq", "openrouter_free", "deepseek", "openai")
 BILLING_RE = re.compile(r"(?i)(insufficient (balance|funds|credit)|no credits|credit balance|billing|payment required|\b402\b)")
 RATE_RE = re.compile(r"(?i)(\b429\b|rate.?limit|quota|too many requests|overloaded|\b50[234]\b|resource.?exhausted|\b413\b|request too large|tokens per minute|\b410\b)")
+QUOTA_RE = re.compile(r"(?i)(usage limit|hit your [^\n]{0,40}limit|(monthly|daily|weekly) quota|exhausted your|plan limit|try again at)")  # owner 16.11: Codex / Copilot / Gemini CLI say a periodic quota ran out in these words
 DENIED_RE = re.compile(r"(?i)(\b40[13]\b|unauthori[sz]ed|invalid api key|authentication)")
 DOWN_RE = re.compile(r"(?i)(connection refused|econnrefused|enotfound|fetch failed|timed out|unreachable|socket hang up)")
 REJECT_RE = re.compile(r"(?i)((api error|http|status|code)\D{0,10}\b400\b|\b400 bad request|bad input|bad request|invalid request|oneof at)")  # the provider refused the request itself (owner 14.11: Cloudflare 400); a bare "400" in other text is not one
@@ -943,13 +944,15 @@ ERROR_ANSWER_RE = re.compile(r"(?is)^\s*(API Error\b|Failed to authenticate|Erro
 
 class ProviderDown(Exception):
     """A provider answered with a limit / billing / key / connection error: auto skips it for a while."""
-    def __init__(self, name, why, minutes):
+    def __init__(self, name, why, minutes, raw=""):
         super().__init__(f"{name}: {why}")
-        self.name, self.why, self.minutes = name, why, minutes
+        self.name, self.why, self.minutes, self.raw = name, why, minutes, raw
 
 
 def classify_down(text):
     """(reason, minutes to skip the provider) for an error text of a provider run; None when it is not a provider problem."""
+    if QUOTA_RE.search(text) and "insufficient_quota" not in text and not re.search(r"(?i)insufficient (balance|funds|credit)|402", text):
+        return "quota", 60
     if RATE_RE.search(text) and "insufficient_quota" not in text and not re.search(r"(?i)insufficient (balance|funds|credit)|402", text):
         return "rate", 15  # owner 15.11: Gemini's quota text also says "billing details"; OpenAI's insufficient_quota stays billing
     if BILLING_RE.search(text):
@@ -969,6 +972,7 @@ def classify_down(text):
 ERROR_HE = {
     "billing": ("היתרה בחשבון אצל הספק נגמרה או שיש בעיית חיוב", "מדלג עליו שלוש שעות ועובר לבינה הבאה בסולם", "לבדוק יתרה וחיוב בחשבון של הספק"),
     "rate": ("הספק מגביל כמה בקשות או טוקנים מותר לשלוח בדקה או ביום, או שהוא עמוס כרגע", "מדלג עליו 15 דקות ועובר לבינה הבאה בסולם", "לחכות, או לבחור בינה אחרת עם /מודל חינמי"),
+    "quota": ("מכסת השימוש של הבינה נגמרה (יומית, חודשית או לפי התוכנית), והיא תחזור רק באיפוס המכסה אצל הספק", "מדלג עליה שעה ועובר לבינה הבאה בסולם", "לחכות לאיפוס המכסה, לשדרג את התוכנית, או לבחור בינה אחרת"),
     "key": ("הספק דחה את המפתח (אין הרשאה)", "מדלג עליו שעתיים ועובר לבינה הבאה בסולם", "לבדוק או להחליף את המפתח של הספק"),
     "unreachable": ("אי אפשר להתחבר לספק: הוא לא עונה, או שאין חיבור לרשת", "מדלג עליו 5 דקות ועובר לבינה הבאה בסולם", "לבדוק חיבור לאינטרנט"),
     "rejected": ("הספק קיבל את הבקשה ודחה אותה כי הפורמט שלה לא מתאים לו (שגיאה 400). זו תקלה בגשר או בשרת התרגום ולא משהו שעשית", "מדלג עליו חצי שעה ועובר לבינה הבאה בסולם", "לספר לי כאן שזה קרה, כדי שאתקן את ההתאמה לספק הזה"),
@@ -988,6 +992,24 @@ def explain_error(text, provider=None):
     code = re.search(r"\b([45]\d\d)\b", raw)
     return (f"⚠️ *לא הצלחתי לענות לך הפעם.*\n*מה קרה:* {what}.\n*איפה:* {where}.\n*מה הגשר עושה:* {does}.\n*מה אפשר לעשות:* {todo}.\n"
             f"_פרטים טכניים{(' (קוד ' + code.group(1) + ')') if code else ''}: {raw[:160]}_")
+
+
+CODE_HE = {400: "הבקשה נדחתה כי הפורמט לא מתאים לספק", 401: "המפתח או ההתחברות נדחו", 402: "אין יתרה או שיש בעיית חיוב",
+           403: "אין הרשאה", 404: "המודל או הכתובת לא נמצאו", 408: "הספק לא ענה בזמן", 410: "המודל הוצא משימוש",
+           413: "הבקשה גדולה מדי למודל (מגבלת טוקנים)", 429: "יותר מדי בקשות, או שהמכסה נגמרה", 500: "תקלה פנימית אצל הספק",
+           502: "הספק לא זמין כרגע", 503: "הספק עמוס או לא זמין", 504: "הספק לא ענה בזמן", 529: "הספק עמוס"}
+
+
+def error_line_he(text, provider=None):
+    """One Hebrew line for a provider error: the provider's code with its meaning, what it means for the bridge, and what the bridge does.
+    Never English (owner 16.11: every AI's fault numbers are passed on and translated)."""
+    raw = re.sub(r"\s+", " ", text or "").strip()
+    reason = "login" if LOGIN_RE.search(raw) else (classify_down(raw) or ("", 0))[0]
+    what, does, _todo = ERROR_HE.get(reason, ("שגיאה שאני לא מכיר", "מנסה בינה אחרת אם יש", ""))
+    m = re.search(r"(?<![\w.-])([45]\d\d)(?![\w.-])", raw)
+    code = int(m.group(1)) if m else None
+    head = (f"קוד {code} ({CODE_HE[code]})" if code in CODE_HE else f"קוד {code}") if code else "בלי קוד שגיאה"
+    return f"{head}: {what}. הגשר: {does}."
 
 
 def auto_ladder():
@@ -1046,6 +1068,95 @@ def provider_status(name):
     return {"ok": True, "detail": "הגדרה ומפתח זמינים; אין בדיקת רשת זולה"}
 
 
+PROBE_PROMPT = "ענה במילה אחת בלבד: שלום"
+
+
+def _probe_http(p):
+    """One real request to an API provider, through the same address and key the bridge uses; (answered, raw error text)."""
+    m = p.get("model") or ""
+    h = provider_host(p, m) if (p.get("hosts") or p.get("probe") == "ollama") else None
+    base = ((h or {}).get("url") or p.get("base_url") or ((p.get("hosts") or [{}])[0]).get("url") or "").rstrip("/")
+    tok = p.get("token") or provider_key(p) or ""
+    body = json.dumps({"model": m, "max_tokens": 200, "messages": [{"role": "user", "content": PROBE_PROMPT}]}).encode()
+    req = urllib.request.Request(base + "/v1/messages", body, {"content-type": "application/json", "x-api-key": tok,
+                                 "Authorization": "Bearer " + tok, "anthropic-version": "2023-06-01"})
+    try:
+        d = json.loads(urllib.request.urlopen(req, timeout=90).read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        return False, f"HTTP {e.code} " + e.read().decode("utf-8", "replace")[:300]
+    except Exception as e:
+        return False, f"connection failed: {type(e).__name__}: {e}"
+    ok = any((c.get("text") or c.get("thinking") or "").strip() for c in d.get("content") or [])
+    return ok, "" if ok else "the answer had no content"
+
+
+def provider_probe(name, timeout=90):
+    """Owner 16.11: availability (no quota) and a real answer for one provider, through the bridge's own paths. Returns
+    {"name","available","avail_detail","answered" (True / False / None = not testable),"seconds","reason","he" (Hebrew line for a fault),"raw"}."""
+    p = providers().get(name) or {}
+    st = provider_status(name)
+    res = {"name": name, "available": bool(st["ok"]), "avail_detail": st["detail"], "answered": None, "seconds": 0.0, "reason": "", "he": "", "raw": ""}
+    kind = p.get("kind")
+    if kind in ("claude", "auto"):
+        res["he"] = "נבדק דרך מד השימוש והסולם, בלי שליחת הודעה"
+        return res
+    if not st["ok"]:
+        res["he"] = st["detail"]
+        return res
+    t0, raw = time.time(), ""
+    try:
+        if kind == "cli":
+            _ctx.probe = True
+            try:
+                _run_cli(name, p, PROBE_PROMPT, None, None, None, None, timeout)
+                res["answered"] = True
+            finally:
+                _ctx.probe = False
+        elif kind == "opencode":
+            r = subprocess.run([opencode_bin(), "run", "--auto", "--format", "json", "-m", p.get("model") or ""], input=PROBE_PROMPT, capture_output=True,
+                               text=True, encoding="utf-8", errors="replace", timeout=timeout, creationflags=NO_WINDOW)
+            res["answered"] = r.returncode == 0 and bool((r.stdout or "").strip())
+            raw = "" if res["answered"] else ((r.stderr or "") + (r.stdout or "")).strip()[-400:]
+        else:
+            res["answered"], raw = _probe_http(p)
+    except ProviderDown as e:
+        res["answered"], raw = False, e.raw or e.why
+    except subprocess.TimeoutExpired:
+        res["answered"], raw = False, f"408 timed out: no answer within {timeout} seconds"
+    except Exception as e:
+        res["answered"], raw = False, str(e)
+    res["seconds"] = round(time.time() - t0, 1)
+    res["raw"] = raw[-300:]
+    if res["answered"] is False:
+        res["reason"] = (classify_down(raw) or ("", 0))[0]
+        res["he"] = error_line_he(raw, name)
+    return res
+
+
+def probe_report(live=True):
+    """The report of /בדוק מענה: for every provider its availability and (live) a real answer, or the fault translated to Hebrew."""
+    names = [n for n in providers() if n != "auto"]
+    if live:
+        import concurrent.futures as cf
+        with cf.ThreadPoolExecutor(max_workers=6) as ex:
+            results = list(ex.map(provider_probe, names))
+    else:
+        results = []
+        for n in names:
+            st = provider_status(n)
+            results.append({"available": bool(st["ok"]), "answered": None, "he": st["detail"], "seconds": 0})
+    rows = ["🔎 *בדיקת בינות: זמינות ומענה*", ""]
+    for n, r in zip(names, results):
+        av = "✅ זמין" if r["available"] else "⚪ לא זמין"
+        if r["answered"] is True:
+            rows.append(f"*{prov_short(n)}*: {av} · ✅ ענה ({r['seconds']} שניות)")
+        elif r["answered"] is False:
+            rows.append(f"*{prov_short(n)}*: {av} · ⛔ לא ענה\n   {r['he']}")
+        else:
+            rows.append(f"*{prov_short(n)}*: {av} · — {r['he'] or 'לא נבדק'}")
+    return "\n".join(rows)
+
+
 def engine_status_report(live=False):
     """Inventory engines/providers without quota; optionally run one daily real provider check per provider."""
     rows = [f"🧰 מנועים במחשב הזה (פעיל: {ENGINES[active_engine()]['label']}):"]
@@ -1058,12 +1169,12 @@ def engine_status_report(live=False):
         if name == "auto":
             continue
         state = provider_status(name)
-        if live and state["ok"] and p.get("base_url") and p.get("models") and p.get("probe") != "ollama":
-            # One selected model per response-capable API provider. Other kinds receive a quota-free connection check only.
-            check = provider_check(name, (p.get("model") or None))
-            state = {"ok": bool(check.get("ok")), "detail": "תגובה תקינה" if check.get("ok") else check.get("detail", "לא ענה")}
-        elif live and state["ok"]:
-            state = {"ok": True, "detail": "חיבור/חשבון זמין; סוג זה אינו תומך בבדיקת תגובה יומית חסכונית"}
+        if live and state["ok"]:  # owner 16.11: a real answer from every provider, its fault translated
+            pr = provider_probe(name)
+            if pr["answered"] is True:
+                state = {"ok": True, "detail": f"זמין וענה ({pr['seconds']} שניות)"}
+            elif pr["answered"] is False:
+                state = {"ok": False, "detail": "זמין אבל לא ענה: " + pr["he"]}
         results[name] = state
         rows.append(f"{'✅' if state['ok'] else '⚪'} {prov_short(name)}: {state['detail']}")
     mcp_ok, mcp_detail = probe_mcp_server()
@@ -1134,7 +1245,7 @@ def down_why_he(e):
     if isinstance(e, AuthError):
         return "המפתח או החיבור נדחו"
     why = str(getattr(e, "why", "") or "")
-    return {"billing": "אין יתרה", "rate": "נגמרה המכסה או עומס", "key": "המפתח נדחה", "unreachable": "אין חיבור", "error": "לא החזיר תשובה"}.get(why, why or "תקלה")
+    return {"billing": "אין יתרה", "rate": "נגמרה המכסה או עומס", "quota": "נגמרה המכסה", "key": "המפתח נדחה", "unreachable": "אין חיבור", "error": "לא החזיר תשובה"}.get(why, why or "תקלה")
 
 
 def local_last_resort(tried=()):
@@ -2532,7 +2643,9 @@ def qwen_cmd_env(name, model, append):
     except Exception as e:
         log("qwen settings failed", e)
     base, key, m = ep
-    cmd = [shutil.which("qwen") or "qwen", "-y", "-o", "stream-json", "-m", m]
+    # owner 16.11: qwen is an npm .cmd shim; cmd.exe refuses a command line over 8191 characters ("The command line is too long"
+    # with the ~11K-character bridge rules), so run node on its script directly (same as the CLI providers)
+    cmd = npm_direct(shutil.which("qwen") or "qwen") + ["-y", "-o", "stream-json", "-m", m]
     if append:
         cmd += ["--append-system-prompt", append]
     env = dict(os.environ, OPENAI_API_KEY=key or "none", OPENAI_BASE_URL=base, OPENAI_MODEL=m, QWEN_CODE_SUPPRESS_YOLO_WARNING="1")
@@ -2607,7 +2720,8 @@ def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
     if not exe:
         raise ProviderDown(name, "unreachable", 30)
     append = ((append or "") + "\n\n" + HEBREW_RULE).strip()  # owner 14.11: the CLIs never got the Hebrew rule (they leave before it is added)
-    full = ((append + "\n\n") if append else "") + conversation_pack(chat or PRIMARY) + "\n\n---\nההודעה הנוכחית (ענה עליה):\n" + prompt + HEBREW_TAIL
+    pack = "" if getattr(_ctx, "probe", False) else conversation_pack(chat or PRIMARY) + "\n\n---\nההודעה הנוכחית (ענה עליה):\n"
+    full = ((append + "\n\n") if append else "") + pack + prompt + HEBREW_TAIL
     cmd = npm_direct(exe) + list(c.get("args") or [])
     m = model or p.get("model")
     if m and c.get("model_flag"):
@@ -2662,7 +2776,7 @@ def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
     if not text:
         bad = classify_down(err) or (("rate", 15) if re.search(r"429|quota|exhausted|rate.?limit", err, re.I) else None)             or (("key", 120) if re.search(r"login|log in|sign.?in|auth|401|403|credential", err, re.I) else None)
         if bad:
-            raise ProviderDown(name, bad[0], bad[1])
+            raise ProviderDown(name, bad[0], bad[1], raw=err.strip()[-400:])
         raise RuntimeError(f"{name} returned no answer: {err.strip()[-200:]}")
     with adb() as db:
         db.execute("INSERT INTO claude_runs (at, session, cost, input_tokens, output_tokens, seconds, ok, model, cum, chat) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -3835,6 +3949,8 @@ def owner_command(text, chat=None):
     """Slash commands answered locally (no Claude run, no cost), for this conversation. Returns reply text or None."""
     if re.match(r"^/\s*(בדוק\s+זמינות|זמינות)\s*$", text.strip()):
         return engine_status_report(live=False)
+    if re.match(r"^/\s*(בדוק\s+מענה|בדיקת\s+בינות|מענה)\s*$", text.strip()):  # owner 16.11: availability + a real answer from every AI
+        return probe_report(live=True)
     if re.match(r"^/(מחכים|waiting)\s*$", text.strip()):
         return waiting_now()
     if re.match(r"^/\s*(בריאות|health)\s*$", text.strip()):

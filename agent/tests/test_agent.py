@@ -88,15 +88,15 @@ def test_daily_engine_probe_uses_one_configured_model(agent, monkeypatch):
                                                                   "base_url": "https://example.test", "models": ["model-a"]}})
     monkeypatch.setattr(mod, "provider_status", lambda n: {"ok": True, "detail": "נגיש"})
     calls = []
-    monkeypatch.setattr(mod, "provider_check", lambda n, prefer=None: calls.append((n, prefer)) or {"ok": True})
+    monkeypatch.setattr(mod, "_probe_http", lambda p: calls.append(p.get("model")) or (True, ""))  # owner 16.11: one real request per provider
     monkeypatch.setattr(mod, "engine_ready", lambda n: False)
     monkeypatch.setattr(mod, "active_engine", lambda: "claude")
     monkeypatch.setattr(mod, "probe_mcp_server", lambda: (True, "בדיקה תקינה"))
     monkeypatch.setattr(mod, "mcp_registration_status", lambda: {})
     monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
     report = mod.engine_status_report(live=True)
-    assert calls == [("test", "model-a")]
-    assert "תגובה תקינה" in report
+    assert calls == ["model-a"]
+    assert "זמין וענה" in report
 
 
 def test_hourly_engine_status_is_registered_without_live_probe(agent, monkeypatch):

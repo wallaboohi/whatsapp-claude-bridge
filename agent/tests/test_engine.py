@@ -116,11 +116,26 @@ def test_guests_and_restricted_runs_keep_claude_code(agent, monkeypatch, tmp_pat
     assert mod._ctx.engine_used == "claude"
 
 
+def test_qwen_npm_shim_runs_through_node_not_cmd(agent, monkeypatch, tmp_path):
+    """16.11: qwen.cmd goes through cmd.exe, which refuses a command line over 8191 characters ("The command line is too long" with
+    the bridge rules as the system prompt): the shim must be replaced by node + its script, like the CLI providers."""
+    mod, _ = agent
+    _keys(mod, monkeypatch, "groq")
+    js = tmp_path / "node_modules" / "@qwen-code" / "qwen-code" / "cli.js"
+    js.parent.mkdir(parents=True)
+    js.write_text("//", encoding="utf-8")
+    shim = tmp_path / "qwen.cmd"
+    shim.write_text('@ECHO off'+chr(13)+chr(10)+'"%_prog%"  "%dp0%\\node_modules\\@qwen-code\\qwen-code\\cli.js" %*'+chr(13)+chr(10), encoding='utf-8')
+    monkeypatch.setattr(mod.shutil, "which", lambda n: str(shim) if n == "qwen" else "node.exe" if n == "node" else None)
+    cmd, _env, _m = mod.qwen_cmd_env("groq", None, "א" * 11000)
+    assert cmd[0] == "node.exe" and cmd[1] == str(js) and not any(c.lower().endswith(".cmd") for c in cmd)
+
+
 def test_qwen_command_uses_the_provider_endpoint_without_a_translator(agent, monkeypatch):
     mod, _ = agent
     _keys(mod, monkeypatch, "groq")
     cmd, env, m = mod.qwen_cmd_env("groq", None, "ענה בעברית")
-    assert cmd[1:3] == ["-y", "-o"] and "--append-system-prompt" in cmd and m == "openai/gpt-oss-120b"
+    assert "-y" in cmd and cmd[cmd.index("-y") + 1] == "-o" and "--append-system-prompt" in cmd and m == "openai/gpt-oss-120b"
     assert env["OPENAI_BASE_URL"] == "https://api.groq.com/openai/v1" and env["OPENAI_API_KEY"] == "k" and env["OPENAI_MODEL"] == m
     monkeypatch.setattr(mod, "provider_host", lambda p, m=None, max_age=20: {"url": "http://127.0.0.1:11435", "label": "לפטופ"})
     cmd, env, m = mod.qwen_cmd_env("ollama", "bridge-qwen3-4b:latest", None)
