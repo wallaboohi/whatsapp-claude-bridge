@@ -1258,6 +1258,9 @@ def test_group_name_single_source_and_owner_rename(agent, monkeypatch):
     assert mod.template_after_first_word("פיתוח הכלי שלי") == "LP פיתוח {model} הכלי שלי"
     assert mod.template_after_first_word("LP גשר אופוס דב") == "LP גשר {model} דב"
     assert mod.template_after_first_word("אוטומציה 4M-D · {model}") == "LP אוטומציה {model} 4M-D"
+    mod.CFG["name_prefix"] = "HW"  # owner 16.11: the desktop's groups start with HW, the laptop's prefix is replaced
+    assert mod.template_after_first_word("LP YB סונט אוטומציה 4M-D") == "HW YB {model} אוטומציה 4M-D"
+    mod.CFG["name_prefix"] = "LP"
     assert mod.name_core("LP גשר אופוס דב") == "גשר דב"
     sent = []
     monkeypatch.setattr(mod, "bridge", lambda path, body, timeout=0: sent.append(body) or {"success": True})

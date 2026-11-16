@@ -3608,6 +3608,7 @@ def group_name_template(chat):
 
 
 _MODEL_WORDS = {"קלאוד", "{model}", *MODEL_HE.values()}
+_COMPUTER_PREFIXES = {"LP", "HW"}  # owner 16.11: LP = laptop, HW = desktop; a prefix of the other computer is never part of the name
 
 
 def name_prefix():
@@ -3626,7 +3627,7 @@ def _name_words(name):
     for s in sorted((s for s in shorts if " " in s), key=len, reverse=True):  # a two-word short ("OpenRouter חינמי", 14.11) is removed whole, else the name grew every minute
         name = re.sub(r"(?<!\S)" + r"\s+".join(map(re.escape, s.split())) + r"(?!\S)", " ", name, flags=re.I)
     return [w for w in name.split()
-            if w not in _MODEL_WORDS and w != pre and ":" not in w and not w.lower().startswith("bridge-") and w.lower() not in shorts]
+            if w not in _MODEL_WORDS and w != pre and w not in _COMPUTER_PREFIXES and ":" not in w and not w.lower().startswith("bridge-") and w.lower() not in shorts]
 
 
 def name_core(name):
