@@ -1151,15 +1151,15 @@ def test_group_name_follows_model(agent, monkeypatch):
         return {"success": True}
     monkeypatch.setattr(mod, "bridge", fake_bridge)
     mod.CFG["group_name_model"] = True
-    mod.CFG["name_prefix"] = "LP"
+    mod.CFG["name_prefix"] = "LAP"
     mod.sync_group_name(mod.PRIMARY, "claude-opus-5-5")
     names = [b["name"] for p, b in calls if p == "/set_group"]
-    assert names == ["LP \u05d2\u05e9\u05e8 \u05d0\u05d5\u05e4\u05d5\u05e1 \u05d5\u05d5\u05e6\u05d0\u05e4"], names  # גשר אופוס ווצאפ
+    assert names == ["LAP אופוס גשר ווצאפ"], names  # LAP אופוס גשר ווצאפ
     mod.sync_group_name(mod.PRIMARY, "opus")  # same name: no second rename
     assert len([1 for p, b in calls if p == "/set_group"]) == 1
     mod.kv_set(mod.K("name_set_at", mod.PRIMARY), "0")
     mod.sync_group_name(mod.PRIMARY, "sonnet")
-    assert [b["name"] for p, b in calls if p == "/set_group"][-1].split()[2] == "\u05e1\u05d5\u05e0\u05d8"  # סונט
+    assert [b["name"] for p, b in calls if p == "/set_group"][-1].split()[1] == "\u05e1\u05d5\u05e0\u05d8"  # סונט
 
 
 def test_sunglasses_reads_last_answer(agent, monkeypatch, tmp_path):
@@ -1254,21 +1254,23 @@ def test_group_name_single_source_and_owner_rename(agent, monkeypatch):
     # only the model differs -> same name; a real rename -> model goes after the first word
     assert mod.name_core("גשר סונט ויוי") == mod.name_core("גשר {model} ויוי")
     assert mod.name_core("אוטומציה 4M-D · הייקו") == mod.name_core("אוטומציה 4M-D · {model}")
-    mod.CFG["name_prefix"] = "LP"  # owner 09.11: computer prefix first, model after the first word, for every group
-    assert mod.template_after_first_word("פיתוח הכלי שלי") == "LP פיתוח {model} הכלי שלי"
-    assert mod.template_after_first_word("LP גשר אופוס דב") == "LP גשר {model} דב"
-    assert mod.template_after_first_word("אוטומציה 4M-D · {model}") == "LP אוטומציה {model} 4M-D"
-    mod.CFG["name_prefix"] = "HW"  # owner 16.11: the desktop's groups start with HW, the laptop's prefix is replaced
-    assert mod.template_after_first_word("LP YB סונט אוטומציה 4M-D") == "HW YB {model} אוטומציה 4M-D"
-    mod.CFG["name_prefix"] = "LP"
+    mod.CFG["name_prefix"] = "LAP"  # owner 16.11: computer prefix (HW desktop, LAP laptop), then the provider, then the whole name
+    assert mod.template_after_first_word("פיתוח הכלי שלי") == "LAP {model} פיתוח הכלי שלי"
+    assert mod.template_after_first_word("LP גשר אופוס דב") == "LAP {model} גשר דב"
+    assert mod.template_after_first_word("אוטומציה 4M-D · {model}") == "LAP {model} אוטומציה 4M-D"
+    mod.CFG["name_prefix"] = "HW"
+    assert mod.template_after_first_word("LP YB סונט אוטומציה 4M-D") == "HW {model} YB אוטומציה 4M-D"
+    assert mod.template_after_first_word("LP HW סונט YB אוטומציה 4M-D") == "HW {model} YB אוטומציה 4M-D"  # the broken name of 16.11 is repaired
+    mod.CFG["name_prefix"] = "LP"  # the old laptop value is read as LAP
+    assert mod.name_prefix() == "LAP"
     assert mod.name_core("LP גשר אופוס דב") == "גשר דב"
     sent = []
     monkeypatch.setattr(mod, "bridge", lambda path, body, timeout=0: sent.append(body) or {"success": True})
     mod.kv_set(mod.K("name_tpl", g), "גשר {model} ויוי")  # an old template (no prefix) is upgraded
     mod.kv_set(mod.K("name_set", g), "גשר אופוס ויוי")
     mod.sync_group_name(g, "opus")
-    assert sent[-1]["name"] == "LP גשר אופוס ויוי"
-    db.execute("UPDATE chats SET name = 'LP גשר אופוס ויוי' WHERE jid = ?", (g,))
+    assert sent[-1]["name"] == "LAP אופוס גשר ויוי"
+    db.execute("UPDATE chats SET name = 'LAP אופוס גשר ויוי' WHERE jid = ?", (g,))
     db.commit()
     mod._live_cache[0] = 0
     mod.kv_set(mod.K("name_set_at", g), "0")
@@ -1278,8 +1280,8 @@ def test_group_name_single_source_and_owner_rename(agent, monkeypatch):
     db.commit()
     mod._live_cache[0] = 0
     mod.sync_group_name(g, "opus")
-    assert sent[-1]["name"] == "LP ויוי אופוס פיתוח"
-    assert mod.kv_get(mod.K("name_tpl", g)) == "LP ויוי {model} פיתוח"
+    assert sent[-1]["name"] == "LAP אופוס ויוי פיתוח"
+    assert mod.kv_get(mod.K("name_tpl", g)) == "LAP {model} ויוי פיתוח"
 
 
 def test_push_alerts_queue_merge_and_usage(agent, monkeypatch):
@@ -2091,13 +2093,13 @@ def test_group_name_never_keeps_a_model_id_and_english_is_translated(agent, monk
     pre = mod.name_prefix()
     junk = f"{pre} אוטומציה אופוס bridge-qwen3-4b:latest bridge-qwen3-4b:latest bridge-qwen3-4b:latest 4M-D"
     assert mod._name_words(junk) == ["אוטומציה", "4M-D"]
-    assert mod.template_after_first_word(junk) == f"{pre} אוטומציה {{model}} 4M-D"  # the grown name is cleaned back
+    assert mod.template_after_first_word(junk) == f"{pre} {{model}} אוטומציה 4M-D"  # the grown name is cleaned back
     # a provider whose short name is two words ("OpenRouter חינמי") is a model word too: no owner rename is detected (14.11)
     real_providers = mod.providers
     monkeypatch.setattr(mod, "providers", lambda: {"openrouter_free": {"short": "OpenRouter חינמי"}, "nvidia": {"short": "NVIDIA"}})
     assert mod.name_core(f"{pre} Claude OpenRouter חינמי פרטי") == mod.name_core(f"{pre} Claude {{model}} פרטי") == "Claude פרטי"
     grown = f"{pre} Claude OpenRouter חינמי OpenRouter חינמי OpenRouter חינמי פרטי"
-    assert mod.template_after_first_word(grown) == f"{pre} Claude {{model}} פרטי"
+    assert mod.template_after_first_word(grown) == f"{pre} {{model}} Claude פרטי"
     assert mod.name_core(f"{pre} Claude NVIDIA פרטי") == "Claude פרטי" and mod.name_core("גשר חינמי ויוי") == "גשר חינמי ויוי"  # one word alone stays
     monkeypatch.setattr(mod, "providers", real_providers)
     # the name follows the AI that really answered: a failover answer is kept until the owner switches provider (14.11)

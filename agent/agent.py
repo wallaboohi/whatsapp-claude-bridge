@@ -3608,13 +3608,15 @@ def group_name_template(chat):
 
 
 _MODEL_WORDS = {"קלאוד", "{model}", *MODEL_HE.values()}
-_COMPUTER_PREFIXES = {"LP", "HW"}  # owner 16.11: LP = laptop, HW = desktop; a prefix of the other computer is never part of the name
+_COMPUTER_PREFIXES = {"LP", "LAP", "HW"}  # owner 16.11: LAP = laptop (LP is the old form), HW = desktop; a prefix of the other computer is never part of the name
 
 
 def name_prefix():
     """Owner 09.11: two letters of the computer at the start of every group name it answers in (config name_prefix,
     else the first two letters of host_label / the host name)."""
     p = str(CFG.get("name_prefix") or "").strip()
+    if p.upper() == "LP":
+        p = "LAP"
     if not p:
         p = re.sub(r"[^A-Za-z0-9]", "", CFG.get("host_label") or socket.gethostname())[:2].upper()
     return p
@@ -3637,11 +3639,11 @@ def name_core(name):
 
 def template_after_first_word(name):
     """Owner rule 09.11: whatever name he gives — the computer prefix first, then his first word, the model, and the rest
-    ("גשר ויוי" → "LP גשר {model} ויוי")."""
+    ("גשר ויוי" → "LAP {model} גשר ויוי"). Owner 16.11: computer prefix (HW desktop, LAP laptop), then the provider, then the whole name."""
     words = _name_words(name)
     if not words:
         return ""
-    return " ".join([w for w in (name_prefix(), words[0], "{model}", *words[1:]) if w])
+    return " ".join([w for w in (name_prefix(), "{model}", *words) if w])
 
 
 def group_label(model, chat=None):
