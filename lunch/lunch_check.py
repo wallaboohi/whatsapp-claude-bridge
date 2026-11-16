@@ -126,7 +126,7 @@ def latest_schedule():
     """סידור העבודה האחרון שנשלח לקבוצה (קריאה בלבד מ-messages.db)."""
     import sqlite3
     c = sqlite3.connect(f"file:{SCHEDULE_DB}?mode=ro", uri=True)
-    row = c.execute("select content from messages where content like '%סידור עבודה למחר%' order by timestamp desc limit 1").fetchone()
+    row = c.execute("select content from messages where content like '%סידור עבודה למחר%' and content not like '🤖%' and content not like '%_🧠%' order by timestamp desc limit 1").fetchone()
     c.close()
     return row[0] if row else ""
 
