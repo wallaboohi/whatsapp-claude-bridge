@@ -96,10 +96,6 @@
  "openrouter_free": {
   "label": "OpenRouter · מודלים חינמיים",
   "short": "OpenRouter חינמי",
-  "aliases": [
-   "openrouter",
-   "openrauter"
-  ],
   "kind": "anthropic",
   "base_url": "https://openrouter.ai/api",
   "key_file": "openrouter.key",
@@ -117,6 +113,8 @@
   "aliases": [
    "חינמי",
    "openrouter-free",
+   "openrouter",
+   "openrauter",
    "free"
   ],
   "how": "אותו מפתח של OpenRouter (secrets/openrouter.key). רק מודלים עם סיומת :free, עם תמיכה בכלים; הרשימה נמשכת חיה מהקטלוג של OpenRouter ומתעדכנת לבד. מכסה: 20 בקשות לדקה, ו-50 ליום (1,000 ליום אחרי רכישת קרדיט של 10 דולר).",
