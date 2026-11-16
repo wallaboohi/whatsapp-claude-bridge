@@ -44,9 +44,9 @@ def test_probe_reports_a_cli_that_ran_out_of_quota(agent, monkeypatch):
 def test_probe_reports_an_api_provider_answer_and_fault(agent, monkeypatch):
     mod, _ = agent
     monkeypatch.setattr(mod, "provider_status", lambda n: {"ok": True, "detail": "זמין"})
-    monkeypatch.setattr(mod, "_probe_http", lambda p: (True, ""))
+    monkeypatch.setattr(mod, "_probe_http", lambda p, big=False: (True, ""))
     assert mod.provider_probe("groq")["answered"] is True
-    monkeypatch.setattr(mod, "_probe_http", lambda p: (False, "HTTP 429 rate limit exceeded"))
+    monkeypatch.setattr(mod, "_probe_http", lambda p, big=False: (False, "HTTP 429 rate limit exceeded"))
     r = mod.provider_probe("groq")
     assert r["answered"] is False and "קוד 429 (" in r["he"]
 
@@ -107,7 +107,7 @@ def test_switch_message_gives_reason_code_and_groups_every_ai(agent, monkeypatch
     out = mod.ai_down_text("copilot", "x", FAULTS["copilot"][0])
     assert "*Copilot לא עונה:* מכסת השימוש נגמרה" in out and "לא עברתי לבינה אחרת" in out
     assert "✅ *ענו לאחרונה:*" in out and "/3 " in out
-    assert "⛔ *מחוברים ולא עונים:*" in out and "Codex (מכסת השימוש נגמרה, חוזרת ב-14.12)" in out
+    assert "⛔ *מחוברים ולא עונים:*" in out and "/11 *Codex*" in out and "(מכסת השימוש נגמרה, חוזרת ב-14.12)" in out
     assert "(מגבלת קצב או עומס אצל הספק (קוד 429)" in out
     assert "⚪ *לא מחוברים במחשב הזה:*" in out and "/8 " in out
     assert "❔ *מוכנים, עוד לא נבדקו:*" in out

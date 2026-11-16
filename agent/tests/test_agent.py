@@ -88,7 +88,7 @@ def test_daily_engine_probe_uses_one_configured_model(agent, monkeypatch):
                                                                   "base_url": "https://example.test", "models": ["model-a"]}})
     monkeypatch.setattr(mod, "provider_status", lambda n: {"ok": True, "detail": "נגיש"})
     calls = []
-    monkeypatch.setattr(mod, "_probe_http", lambda p: calls.append(p.get("model")) or (True, ""))  # owner 16.11: one real request per provider
+    monkeypatch.setattr(mod, "_probe_http", lambda p, big=False: calls.append(p.get("model")) or (True, ""))  # owner 16.11: one real request per provider
     monkeypatch.setattr(mod, "engine_ready", lambda n: False)
     monkeypatch.setattr(mod, "active_engine", lambda: "claude")
     monkeypatch.setattr(mod, "probe_mcp_server", lambda: (True, "בדיקה תקינה"))
@@ -2057,6 +2057,7 @@ def test_provider_layer(agent, monkeypatch):
     """Owner 13.11: the bridge's provider (not a group's) — another model server behind the same engine; the subscription
     limit binds only while the subscription is the provider."""
     mod, _ = agent
+    monkeypatch.setattr(mod, "provider_probe", lambda n, timeout=90, big=False: {"answered": None, "seconds": 0, "he": ""})  # no real request on a switch
     assert mod.active_provider() == ("claude", None) and mod.provider_env() == (None, None)
     env, m = mod.provider_env("ollama")
     assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:11434" and env["ANTHROPIC_API_KEY"] == "" and m == "bridge-qwen3-4b:latest"
@@ -2075,6 +2076,7 @@ def test_provider_layer(agent, monkeypatch):
 
 def test_provider_command_can_target_current_group_only(agent, monkeypatch, tmp_path):
     mod, _ = agent
+    monkeypatch.setattr(mod, "provider_probe", lambda n, timeout=90, big=False: {"answered": None, "seconds": 0, "he": ""})  # no real request on a switch
     monkeypatch.setattr(mod, "PROVIDER_FILE", str(tmp_path / "provider.json"))
     monkeypatch.setattr(mod, "provider_check", lambda n, *a: {"ok": True, "detail": "", "models": ["bridge-qwen3-4b", "qwen3:4b-instruct"]})
     chat = mod.PRIMARY
@@ -2158,6 +2160,7 @@ def test_conflict_merge_goes_to_another_provider_when_claude_is_limited(agent, m
 
 def test_switch_words_and_the_answer_tag(agent, monkeypatch, tmp_path):
     mod, _ = agent
+    monkeypatch.setattr(mod, "provider_probe", lambda n, timeout=90, big=False: {"answered": None, "seconds": 0, "he": ""})  # no real request on a switch
     monkeypatch.setattr(mod, "PROVIDER_FILE", str(tmp_path / "provider.json"))
     assert mod.resolve_ai_word("גמיני") == ("gemini", None) and mod.resolve_ai_word("GROQ") == ("groq", None)
     assert mod.resolve_ai_word("דיפסיק") is None and mod.resolve_ai_word("api") is None  # the paid providers were removed
@@ -2643,7 +2646,7 @@ def test_switch_reports_which_models_failed_and_which_answers(agent, monkeypatch
     got = []
     monkeypatch.setattr(mod, "set_provider", lambda n, m, chat=None: got.append(m))
     monkeypatch.setattr(mod, "active_provider", lambda chat=None: ("gemini", got[-1]))
-    monkeypatch.setattr(mod, "provider_probe", lambda n, timeout=90: {"answered": True, "seconds": 2.0, "he": ""})
+    monkeypatch.setattr(mod, "provider_probe", lambda n, timeout=90, big=False: {"answered": True, "seconds": 2.0, "he": ""})
     out = mod.switch_provider("gemini")
     assert got == ["b"] and "❌ a: הספק מגביל קצב כרגע" in out and "✅ b: עונה עכשיו" in out
     assert "ענה עכשיו בבדיקה תוך 2 שניות" in out  # owner 16.11: no need to ask "זמין?" after the switch
@@ -2656,7 +2659,7 @@ def test_switch_to_an_ai_that_does_not_answer_is_refused_with_the_reason(agent, 
     monkeypatch.setattr(mod, "provider_check", lambda n, *a: {"ok": True, "detail": "", "models": []})
     got = []
     monkeypatch.setattr(mod, "set_provider", lambda *a, **k: got.append(a))
-    monkeypatch.setattr(mod, "provider_probe", lambda n, timeout=90: {"answered": False, "seconds": 3, "he": "מגבלת קצב (קוד 429)"})
+    monkeypatch.setattr(mod, "provider_probe", lambda n, timeout=90, big=False: {"answered": False, "seconds": 3, "he": "מגבלת קצב (קוד 429)"})
     monkeypatch.setattr(mod, "ai_status_lines", lambda skip=(): ["☁️ /1 Claude"])
     out = mod.switch_provider("groq")
     assert not got and "לא הוחלף" in out and "קוד 429" in out and "/1 Claude" in out
@@ -2748,3 +2751,25 @@ def test_old_message_already_answered_by_the_other_computer_is_skipped(agent):
     db.execute("INSERT INTO messages VALUES ('A2', ?, 'me', ?, ?, 1, '', '')", (mod.PRIMARY, "🤖 _🧠 Claude_\nx", fresh))
     db.commit()
     assert mod.answered_elsewhere(mod.PRIMARY, fresh) is False
+
+
+def test_model_words_work_as_direct_commands_and_short_model_names_and_big_probe(agent, monkeypatch):
+    mod, db = agent
+    monkeypatch.setattr(mod, "sync_group_name", lambda *a, **k: None)
+    got = []
+    monkeypatch.setattr(mod, "set_override", lambda name, hours, chat=None: got.append(name))
+    for w in ("/sonnet", "/opus", "/haiku", "/סונט"):
+        out = mod.owner_command(w, "c1")
+        assert out and "המודל הוחלף" in out
+    assert got == ["sonnet", "opus", "haiku", "sonnet"]
+    # the switch check sends a message the size of a real one
+    assert len(mod.probe_prompt(True)) > 8000 and mod.probe_prompt(False) == mod.PROBE_PROMPT and mod.probe_prompt(True).endswith(mod.PROBE_PROMPT)
+    # a short model name from the list is accepted
+    monkeypatch.setattr(mod, "providers", lambda: {"groq": {"label": "Groq", "short": "Groq", "model": "openai/gpt-oss-120b"}})
+    monkeypatch.setattr(mod, "provider_check", lambda n, *a: {"ok": True, "detail": "", "models": ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]})
+    sets = []
+    monkeypatch.setattr(mod, "set_provider", lambda n, m, chat=None: sets.append(m))
+    monkeypatch.setattr(mod, "active_provider", lambda chat=None: ("groq", sets[-1]))
+    monkeypatch.setattr(mod, "provider_probe", lambda n, timeout=90, big=False: {"answered": True, "seconds": 1, "he": ""})
+    mod.switch_provider("groq", "gpt-oss-20b")
+    assert sets == ["openai/gpt-oss-20b"]

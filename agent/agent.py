@@ -1178,13 +1178,25 @@ def provider_status(name):
 PROBE_PROMPT = "ענה במילה אחת בלבד: שלום"
 
 
-def _probe_http(p):
+PROBE_FILLER = "הנחיות הגשר, כללי הבסיס, ההקשר של השיחה והיסטוריית ההודעות נשלחים עם כל הודעה אמיתית. "
+
+
+def probe_prompt(big=False):
+    """Owner 16.11 21:38: the switch check sends a message the size of a real one (a one-word probe passed on Groq while the owner's
+    real message hit its per-minute token limit). config switch_probe_chars (default 9000)."""
+    if not big:
+        return PROBE_PROMPT
+    n = int(CFG.get("switch_probe_chars", 9000))
+    return (PROBE_FILLER * (n // len(PROBE_FILLER) + 1))[:n] + "\n\n" + PROBE_PROMPT
+
+
+def _probe_http(p, big=False):
     """One real request to an API provider, through the same address and key the bridge uses; (answered, raw error text)."""
     m = p.get("model") or ""
     h = provider_host(p, m) if (p.get("hosts") or p.get("probe") == "ollama") else None
     base = ((h or {}).get("url") or p.get("base_url") or ((p.get("hosts") or [{}])[0]).get("url") or "").rstrip("/")
     tok = p.get("token") or provider_key(p) or ""
-    body = json.dumps({"model": m, "max_tokens": 200, "messages": [{"role": "user", "content": PROBE_PROMPT}]}).encode()
+    body = json.dumps({"model": m, "max_tokens": 200, "messages": [{"role": "user", "content": probe_prompt(big)}]}).encode()
     req = urllib.request.Request(base + "/v1/messages", body, {"content-type": "application/json", "x-api-key": tok,
                                  "Authorization": "Bearer " + tok, "anthropic-version": "2023-06-01"})
     try:
@@ -1197,7 +1209,7 @@ def _probe_http(p):
     return ok, "" if ok else "the answer had no content"
 
 
-def provider_probe(name, timeout=90):
+def provider_probe(name, timeout=90, big=False):
     """Owner 16.11: availability (no quota) and a real answer for one provider, through the bridge's own paths. Returns
     {"name","available","avail_detail","answered" (True / False / None = not testable),"seconds","reason","he" (Hebrew line for a fault),"raw"}."""
     p = providers().get(name) or {}
@@ -1215,17 +1227,17 @@ def provider_probe(name, timeout=90):
         if kind == "cli":
             _ctx.probe = True
             try:
-                _run_cli(name, p, PROBE_PROMPT, None, None, None, None, timeout)
+                _run_cli(name, p, probe_prompt(big), None, None, None, None, timeout)
                 res["answered"] = True
             finally:
                 _ctx.probe = False
         elif kind == "opencode":
-            r = subprocess.run([opencode_bin(), "run", "--auto", "--format", "json", "-m", p.get("model") or ""], input=PROBE_PROMPT, capture_output=True,
+            r = subprocess.run([opencode_bin(), "run", "--auto", "--format", "json", "-m", p.get("model") or ""], input=probe_prompt(big), capture_output=True,
                                text=True, encoding="utf-8", errors="replace", timeout=timeout, creationflags=NO_WINDOW)
             res["answered"] = r.returncode == 0 and bool((r.stdout or "").strip())
             raw = "" if res["answered"] else ((r.stderr or "") + (r.stdout or "")).strip()[-400:]
         else:
-            res["answered"], raw = _probe_http(p)
+            res["answered"], raw = _probe_http(p, big)
     except ProviderDown as e:
         res["answered"], raw = False, e.raw or e.why
     except subprocess.TimeoutExpired:
@@ -2063,10 +2075,14 @@ def switch_provider(name, model=None, chat=None):
         return f"⚪ {ps[name]['label']} לא מחובר: {c['detail']}. לא הוחלף." + tried_he(c.get("tried"))
     if not model and c.get("working") and c["working"] != ps[name].get("model"):
         model = c["working"]  # the default model is out of quota now: switch to the one that answered
+    if model and c["models"] and model not in c["models"]:  # owner 16.11: the short name shown in the list (gpt-oss-20b) is accepted too
+        short = [x for x in c["models"] if x.lower().split("/")[-1].split(":")[0] == model.lower().split("/")[-1].split(":")[0]]
+        if len(short) == 1:
+            model = short[0]
     if model and c["models"] and model not in c["models"]:
         return f"המודל {model} לא נמצא אצל {ps[name]['label']}. יש: " + ", ".join(c["models"][:15])
     # owner 16.11 20:12: the switch itself checks for a real answer, so "זמין?" after every switch is not needed
-    pr = provider_probe(name, timeout=int(CFG.get("switch_probe_seconds", 60))) if CFG.get("switch_probe", True) else {"answered": None}
+    pr = provider_probe(name, timeout=int(CFG.get("switch_probe_seconds", 60)), big=not provider_is_local(name)) if CFG.get("switch_probe", True) else {"answered": None}
     if pr["answered"] is False:
         return (f"⛔ *{prov_short(name)}* מחובר אבל לא ענה עכשיו בבדיקה: {pr['he'] or 'לא עונה'}. לא הוחלף.\n\n"
                 + "\n".join(ai_status_lines(skip=(name,))) + "\n\nבחר אחרת עם / ומספר.")
@@ -4633,6 +4649,9 @@ def owner_command(text, chat=None):
         name, model = hit or (fz, None)
         note = "" if hit else f"🔎 הבנתי /{m.group(1)} כ-*{prov_short(fz)}* (/{provider_number(fz)}).\n"
         return note + switch_provider(name, model, chat=cur_chat())  # owner 15.11: the one-word switch is per group too
+    m = re.match(r"^/\s*(sonnet|opus|haiku|fable|סונט|אופוס|הייקו|חייקו|פייבל)\s*$", text.strip(), re.I)
+    if m:  # owner 16.11 21:38: /sonnet = /מודל sonnet (the model of this conversation)
+        text = "/מודל " + m.group(1).lower()
     m = re.match(r"^/\s*(מודלים|מודל|models|model|סשן|session)\s*(.*)$", text.strip(), re.S)
     if not m:
         return None
