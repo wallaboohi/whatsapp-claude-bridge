@@ -2194,7 +2194,10 @@ def test_auto_ladder_goes_fast_to_slow_and_skips_what_is_down(agent, monkeypatch
     mod.auto_cool("groq", 10, "rate")
     assert mod.auto_pick() == "gemini" and mod.provider_cooled("groq")
     mod.kv_set("cool:groq", (mod.dt.datetime.now() - mod.dt.timedelta(minutes=1)).isoformat(timespec="seconds"))
-    assert mod.auto_pick() == "groq"  # the wait is over
+    # owner 16.11: the wait is over, but a provider the bridge saw fail does not get priority again before a live check
+    assert mod.auto_pick() == "gemini" and mod.recent_fail("groq")
+    mod.ai_state_set("groq", True)  # a live answer
+    assert mod.auto_pick() == "groq"  # back to the ladder order
     assert mod.auto_pick(skip=("gemini", "groq")) == "nvidia"  # openrouter_free has no key
     assert mod.auto_pick(skip=("gemini", "groq", "nvidia")) is None
     assert "openai" not in mod.auto_ladder() and "deepseek" not in mod.auto_ladder()  # free providers only
@@ -2203,6 +2206,68 @@ def test_auto_ladder_goes_fast_to_slow_and_skips_what_is_down(agent, monkeypatch
         assert mod.auto_ladder() == ["nvidia", "claude"] and mod.auto_pick() == "nvidia"
     finally:
         mod.CFG.pop("auto_ladder")
+
+
+def test_the_switch_is_by_measurement_quota_and_fresh_failures(agent, monkeypatch):
+    """Owner 16.11: the pick is not a fixed order — a slow provider, one near its daily quota and one the bridge saw fail
+    wait behind the healthy ones, and a short message keeps the Claude subscription free for real work."""
+    mod, _ = agent
+    _keys(mod, monkeypatch, "gemini", "groq", "nvidia")
+    now = mod.dt.datetime.now()
+    mod.kv_set("limit_until", (now + mod.dt.timedelta(hours=1)).isoformat(timespec="seconds"))  # Claude is capped
+    assert mod.auto_pick() == "groq"  # nothing measured: the ladder order
+    mod.latency_add("groq", 60)  # groq answered slowly in the last hour
+    assert mod.auto_pick() == "gemini" and mod.latency_median("groq") == 60
+    mod.kv_set("lat:groq", "[]")
+    mod.CFG["providers"] = {"groq": {"daily_limit": 10}}
+    try:
+        mod.kv_set(f"quota:{mod.dt.date.today().isoformat()}:groq", 9)  # 90% of the daily quota
+        assert mod.auto_pick() == "gemini" and mod.quota_near("groq")
+    finally:
+        mod.CFG.pop("providers")
+        mod.kv_set(f"quota:{mod.dt.date.today().isoformat()}:groq", 0)
+    mod.soft_cool("groq", 10, "slow")  # slow: pushed back, still a possible answer
+    assert mod.auto_pick() == "gemini" and mod.soft_cooled("groq") and mod.provider_ready("groq")
+    mod.kv_set("soft:groq", "")
+    mod.kv_set("limit_until", "")  # the subscription is back
+    mod.set_provider("claude")
+    assert mod.auto_pick(light=True) == "groq"  # a short message on auto: a free provider, not the subscription
+    assert mod.auto_pick() == "claude"  # real work keeps the subscription first
+
+
+def test_a_dead_translator_is_not_four_dead_rungs(agent, monkeypatch):
+    mod, _ = agent
+    _keys(mod, monkeypatch, "gemini", "groq", "nvidia")
+    mod.kv_set("limit_until", (mod.dt.datetime.now() + mod.dt.timedelta(hours=1)).isoformat(timespec="seconds"))
+    monkeypatch.setattr(mod, "reachable", lambda url, timeout=3: "8799" not in str(url))
+    mod._translator.update(at=0.0, ok=False)
+    assert mod.translator_url(mod.providers()["groq"]) and not mod.translator_up()
+    assert mod.auto_pick() == "groq"  # every rung behind the dead translator waits, and the first one fails at once
+    with pytest.raises(mod.ProviderDown):
+        mod.provider_env("groq")  # not after a network timeout
+
+
+def test_the_wait_after_a_failure_is_the_servers_own_reset(agent):
+    """Owner 16.11: a sign-in / quota failure waits quietly for as long as the server itself says, not a fixed two hours."""
+    mod, _ = agent
+    assert mod.reset_minutes("Please try again at Dec 14th, 2026", 120) == 60 * 24 * 14  # a real date, capped at two weeks
+    assert mod.reset_minutes("Please retry in 16m7.9s.", 120) == 16
+    assert mod.reset_minutes("retry in 2h5m", 120) == 125
+    assert mod.reset_minutes("nothing it says", 120) == 120
+    mod._ctx.run_seconds = 90  # the run itself took a minute and a half: slow, not dead
+    mod._cool_after("groq", mod.ProviderDown("groq", "unreachable", 30))
+    assert mod.soft_cooled("groq") and not mod.provider_cooled("groq")
+
+
+def test_every_switch_line_carries_command_and_models(agent):
+    mod, _ = agent
+    line = mod.provider_line("gemini")
+    assert "/3 *Gemini*" in line and "/gemini" in line and "/ג'מיני" in line and "gemini-flash-lite-latest" in line
+    mod.ai_state_set("gemini", True)
+    rows = "\n".join(mod.ai_status_lines())
+    assert "/3 *Gemini*" in rows and "/ג'מיני" in rows
+    mod.failover_note("מכסת השימוש נגמרה", "claude", "groq")
+    assert "מעברים בין בינות: 1" in mod.failover_line_he() and "Claude → Groq" in mod.failover_line_he()
 
 
 def test_classify_down_texts(agent):
@@ -2230,7 +2295,8 @@ def test_auto_run_moves_to_the_next_provider(agent, monkeypatch):
     monkeypatch.setattr(mod, "_run_claude", fake)
     mod.kv_set("limit_until", (mod.dt.datetime.now() + mod.dt.timedelta(hours=1)).isoformat(timespec="seconds"))
     assert mod._run_auto("p", None, None, 5) == {"result": "ok"}
-    assert used == ["groq", "gemini"] and mod.provider_cooled("groq") and not mod.provider_cooled("gemini")
+    # owner 16.11: a rate-limited model is not a dead provider — the same AI is tried with its next model first
+    assert used == ["groq", "groq"] and not mod.provider_cooled("groq") and mod._ctx.force_model is None
     # nobody is left: the failure goes up as before
     mod.kv_set("cool:gemini", "")
     monkeypatch.setattr(mod, "_run_claude", lambda *a, **k: (_ for _ in ()).throw(mod.ProviderDown(mod._ctx.provider_used or "gemini", "billing", 180)))
@@ -2263,7 +2329,11 @@ def test_every_answer_says_where_the_model_runs(agent, monkeypatch, tmp_path):
     assert "🏠 מקומי, לפטופ" in mod.ai_tag("opus")
     mod.set_provider("groq")
     assert "☁️ מרוחק" in mod.ai_tag("opus")
-    assert mod.providers_text().count("🏠") == 1 and "☁️" in mod.providers_text()  # one local provider, the rest remote
+    t = mod.providers_text()  # owner 16.11: two titled sections, remote first, the one local provider under the local heading
+    assert t.count("🏠") == 2 and t.index(mod.REMOTE_HEAD) < t.index(mod.LOCAL_HEAD) < t.index("(ollama)")
+    assert t.index("(groq)") < t.index(mod.LOCAL_HEAD)
+    rows = mod.ai_status_lines()
+    assert rows[0] == mod.REMOTE_HEAD and mod.LOCAL_HEAD in rows and "Ollama" in " ".join(rows[rows.index(mod.LOCAL_HEAD):])
 
 
 def test_group_name_never_keeps_a_model_id_and_english_is_translated(agent, monkeypatch):
@@ -2326,6 +2396,7 @@ def test_provider_per_conversation_and_failover_explains(agent, monkeypatch, tmp
         monkeypatch.setattr(mod, "engine_ready", lambda e: False)
         mod._ctx.force_provider = mod._ctx.force_engine = None
         mod._ctx.failover_used = False
+        mod._ctx.models_tried = list(mod.providers()["groq"]["models"])  # every model of the chosen AI already tried
         assert mod._failover_step(mod.ProviderDown("groq", "rate", 15), []) is True
         assert mod._ctx.force_provider == "nvidia" and mod._ctx.force_engine == "claude" and mod._ctx.failover_used
         assert "Groq" in mod._ctx.failover_why and "מכסה" in mod._ctx.failover_why
@@ -2348,6 +2419,7 @@ def test_failover_ends_on_the_local_models(agent, monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "auto_pick", lambda skip=(): None)
     monkeypatch.setattr(mod, "provider_ready", lambda n: n == "ollama")
     monkeypatch.setattr(mod, "engine_ready", lambda e: False)
+    mod._ctx.models_tried = list(mod.providers()["groq"]["models"])  # no model of the chosen AI is left to try
     try:
         assert mod._failover_step(mod.ProviderDown("groq", "rate", 15), []) is True
         assert mod._ctx.force_provider == "ollama" and "Groq" in mod._ctx.failover_why

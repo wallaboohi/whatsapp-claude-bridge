@@ -1031,6 +1031,112 @@ def auto_cool(name, minutes, why=""):
     log("auto: skipping", name, f"for {minutes} min", why)
 
 
+def soft_cool(name, minutes=10, why="slow"):
+    """Owner 16.11: a slow provider is not a dead one — it is pushed to the end for a few minutes and stays the last resort,
+    instead of burning a real wait that would take it out of the ladder for an hour."""
+    kv_set("soft:" + name, (dt.datetime.now() + dt.timedelta(minutes=minutes)).isoformat(timespec="seconds"))
+    log("auto: slow, pushed back", name, f"for {minutes} min", why)
+
+
+def soft_cooled(name):
+    v = kv_get("soft:" + name) or ""
+    try:
+        return bool(v) and dt.datetime.fromisoformat(v) > dt.datetime.now()
+    except ValueError:
+        return False
+
+
+def latency_add(name, seconds):
+    """Owner 16.11: how long a provider really took, kept per provider (the last 20 runs), so the pick is by measurement."""
+    if not name or not seconds or seconds <= 0:
+        return
+    try:
+        rows = [r for r in json.loads(kv_get("lat:" + name) or "[]") if isinstance(r, dict)]
+    except ValueError:
+        rows = []
+    rows = rows[-19:] + [{"at": dt.datetime.now().isoformat(timespec="seconds"), "s": round(float(seconds), 1)}]
+    kv_set("lat:" + name, json.dumps(rows))
+
+
+def latency_median(name, minutes=60):
+    """Median answer time of a provider in the last hour; None when nothing was measured (then the ladder order decides)."""
+    try:
+        rows = [r for r in json.loads(kv_get("lat:" + name) or "[]") if isinstance(r, dict) and r.get("s")]
+    except ValueError:
+        return None
+    cut = dt.datetime.now() - dt.timedelta(minutes=minutes)
+    try:
+        vals = sorted(float(r["s"]) for r in rows if dt.datetime.fromisoformat(r["at"]) >= cut)
+    except (KeyError, ValueError):
+        return None
+    return vals[len(vals) // 2] if vals else None
+
+
+def _note_answer(name, seconds):
+    """Owner 16.11: one request that was answered — its real time, today's quota use, and a fresh "answers" state for the list."""
+    try:
+        latency_add(name or "claude", seconds)
+        quota_note(name or "claude")
+        ai_state_set(name or "claude", True)
+    except Exception as e:
+        log("note answer failed", e)
+
+
+def quota_limit(name):
+    """The daily request budget of a provider from providers.json (daily_limit); 0 = not counted."""
+    try:
+        return int((providers().get(name) or {}).get("daily_limit") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def quota_used(name):
+    return int(kv_get(f"quota:{dt.date.today().isoformat()}:{name}") or 0)
+
+
+def quota_note(name, count=1):
+    """Owner 16.11: count today's requests per provider, so a free quota is not used up by noon and missed when Claude is capped."""
+    if name and quota_limit(name):
+        kv_set(f"quota:{dt.date.today().isoformat()}:{name}", quota_used(name) + max(0, int(count)))
+
+
+def quota_near(name, share=0.8):
+    lim = quota_limit(name)
+    return bool(lim) and quota_used(name) >= lim * share
+
+
+def recent_fail(name, hours=3):
+    """Owner 16.11: the bridge itself saw this provider fail lately (or the daily check found none of its models answering) — it
+    still answers when nothing better is ready, but it never gets priority again before a live check shows it answers."""
+    st = ai_state_get(name, hours=hours)
+    if st:
+        return not st["ok"]
+    try:
+        snap = json.loads(kv_get("model_answers") or "{}").get(name) or {}
+    except ValueError:
+        return False
+    return bool(snap) and not any((r or {}).get("ok") for r in snap.values())
+
+
+def translator_url(p):
+    """The local translator address of a provider (http://127.0.0.1:8799/p/...), or '' when the provider is called directly."""
+    url = (p or {}).get("base_url") or ""
+    return url if re.match(r"https?://(127\.0\.0\.1|localhost):8799(?:/|$)", url) else ""
+
+
+_translator = {"at": 0.0, "ok": True}
+
+
+def translator_up(max_age=30):
+    """Owner 16.11: one cheap check of the local translator, so a dead translator is not four dead rungs in a row."""
+    now = time.time()
+    if now - _translator["at"] < max_age:
+        return _translator["ok"]
+    ok = reachable("http://127.0.0.1:8799", timeout=2)
+    _translator.update(at=now, ok=ok)
+    return ok
+
+
 def provider_ready(name):
     """Cheap readiness (no network): not cooling down, a key is saved where one is needed, the subscription's limit is not on."""
     p = providers().get(name) or {}
@@ -1148,15 +1254,19 @@ def probe_report(live=True):
         for n in names:
             st = provider_status(n)
             results.append({"available": bool(st["ok"]), "answered": None, "he": st["detail"], "seconds": 0})
-    rows = ["🔎 *בדיקת בינות: זמינות ומענה*", ""]
-    for n, r in zip(names, results):
-        av = "✅ זמין" if r["available"] else "⚪ לא זמין"
-        if r["answered"] is True:
-            rows.append(f"/{provider_number(n)} *{prov_short(n)}*: {av} · ✅ ענה ({r['seconds']} שניות)")
-        elif r["answered"] is False:
-            rows.append(f"/{provider_number(n)} *{prov_short(n)}*: {av} · ⛔ לא ענה\n   {r['he']}")
-        else:
-            rows.append(f"/{provider_number(n)} *{prov_short(n)}*: {av} · — {r['he'] or 'לא נבדק'}")
+    rows = ["🔎 *בדיקת בינות: זמינות ומענה*"]
+    res = dict(zip(names, results))
+    for head, group in split_by_place(names):
+        rows += ["", head]
+        for n in group:
+            r = res[n]
+            av = "✅ זמין" if r["available"] else "⚪ לא זמין"
+            if r["answered"] is True:
+                rows.append(f"{provider_line(n)}: {av} · ✅ ענה ({r['seconds']} שניות)")
+            elif r["answered"] is False:
+                rows.append(f"{provider_line(n)}: {av} · ⛔ לא ענה\n   {r['he']}")
+            else:
+                rows.append(f"{provider_line(n)}: {av} · — {r['he'] or 'לא נבדק'}")
     return "\n".join(rows)
 
 
@@ -1330,6 +1440,50 @@ def prov_short(name):
     return p.get("short") or (p.get("label") or name).split("·")[0].strip()
 
 
+def provider_switch_words(name):
+    """Owner 16.11: the switch words of a provider — its number, the English spelling and the Hebrew one (/3 /gemini /ג'מיני)."""
+    p = providers().get(name) or {}
+    out = [f"/{provider_number(name)}"]
+    eng = next((str(a) for a in (p.get("aliases") or []) if re.fullmatch(r"[A-Za-z0-9_.-]+", str(a))), name.replace("_", "-"))
+    out.append("/" + eng)
+    heb = next((str(a) for a in (p.get("aliases") or []) if re.search(r"[\u0590-\u05FF]", str(a))), "")
+    if heb:
+        out.append("/" + heb)
+    return out
+
+
+def provider_models(name, limit=2):
+    """The models a provider answers with (short names, the first ones); [] when it brings its own model (Codex, Copilot)."""
+    p = providers().get(name) or {}
+    ms = p.get("models") or ([p.get("model")] if p.get("model") else [])
+    return [str(m).split("/")[-1] for m in ms[:limit] if m]
+
+
+def provider_is_local(name):
+    """Runs on the owner's computers (Ollama) rather than in a provider's cloud; from the config only, no network probe."""
+    p = providers().get(name) or {}
+    return p.get("where") == "local" or bool(p.get("hosts"))
+
+
+LOCAL_HEAD = "🏠 *מקומי* (רץ על המחשבים שלך, חינם, איטי)"
+REMOTE_HEAD = "☁️ *מרוחק* (רץ בענן של הספק)"
+
+
+def split_by_place(names):
+    """Owner 16.11: every list of AIs is split clearly into remote and local: [(heading, names)], empty groups dropped."""
+    rem = [n for n in names if not provider_is_local(n)]
+    loc = [n for n in names if provider_is_local(n)]
+    return [(h, ns) for h, ns in ((REMOTE_HEAD, rem), (LOCAL_HEAD, loc)) if ns]
+
+
+def provider_line(name):
+    """Owner 16.11: one provider in a switch list — where it runs, its number and command, English and Hebrew, and its models."""
+    words = provider_switch_words(name)
+    ms = provider_models(name, 2)
+    return (f"{'🏠' if provider_is_local(name) else '☁️'} {words[0]} *{prov_short(name)}*" + (" " + " ".join(words[1:]) if len(words) > 1 else "")
+            + (f" · {', '.join(ms)}" if ms else ""))
+
+
 def down_why_he(e):
     """A short Hebrew reason for a provider failure (shown in the answer's first line)."""
     if isinstance(e, LimitHit):
@@ -1345,12 +1499,38 @@ def local_last_resort(tried=()):
     return "ollama" if "ollama" not in tried and provider_ready("ollama") else None
 
 
-def auto_pick(skip=()):
-    """The first provider of the cost ladder that is ready (None when none is)."""
+def auto_pick(skip=(), light=False):
+    """The provider that should answer now. Owner 16.11: by measurement (median answer time of the last hour), with the ladder
+    as the order and the tie-break. A provider the bridge saw fail lately, one near its daily quota, a slow one pushed back and
+    the rungs behind a dead translator wait behind the healthy ones — but they still answer when nothing better is ready.
+    light=True (a short message) prefers a free provider, so the Claude subscription is kept for real work."""
+    light = light or bool(getattr(_ctx, "light_task", False))
+    skip = tuple(skip) + tuple(getattr(_ctx, "auto_skip", ()) or ())
+    dead_proxy = not translator_up()
+    scored, i = [], 0
     for n in auto_ladder():
-        if n not in skip and provider_ready(n):
-            return n
-    return None
+        i += 1
+        if n in skip or not provider_ready(n):
+            continue
+        p = providers().get(n) or {}
+        pen = 0
+        if recent_fail(n):
+            pen += 1000
+        if quota_near(n):
+            pen += 600
+        if soft_cooled(n):
+            pen += 300
+        if dead_proxy and translator_url(p):
+            pen += 5000
+        if light and (p.get("cost") or "") != "חינם":
+            pen += 2000
+        med = latency_median(n)
+        if med is not None:  # owner 16.11: a provider measured slow in the last hour waits behind the healthy ones
+            pen += 0 if med <= 15 else 200 if med <= 45 else 500
+        scored.append((pen, i, n))
+    if not scored:
+        return None
+    return sorted(scored)[0][2]
 
 
 def _run_auto(*a, **k):
@@ -1377,6 +1557,9 @@ def _run_auto(*a, **k):
                     _ctx.force_engine = "claude"
     finally:
         _ctx.force_provider = _ctx.force_engine = None
+        _ctx.force_model = None
+        _ctx.models_tried = []
+        _ctx.light_task = False
 
 
 MONTHS_EN = {m: i + 1 for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"))}
@@ -1396,6 +1579,31 @@ def retry_hint_he(raw):
         mins = int(m.group(1) or 0) * 60 + int(m.group(2) or 0)
         return f"חוזרת בעוד כ-{mins} דקות" if mins < 120 else f"חוזרת בעוד כ-{mins // 60} שעות"
     return ""
+
+
+def reset_minutes(raw, default=120):
+    """Owner 16.11: how many minutes to stay quiet, from what the server itself reports — "try again at Dec 14th, 2026",
+    "retry in 16m", "retry in 2h5m", "resets at 14:00"; the default when it says nothing usable."""
+    raw = raw or ""
+    now = dt.datetime.now()
+    m = re.search(r"try again at ([A-Za-z]{3})[a-z]* (\d{1,2})(?:st|nd|rd|th)?,? (\d{4})(?:[ T](\d{1,2}):(\d{2}))?", raw)
+    if m and m.group(1).lower() in MONTHS_EN:
+        try:
+            at = dt.datetime(int(m.group(3)), MONTHS_EN[m.group(1).lower()], int(m.group(2)),
+                             int(m.group(4) or 7), int(m.group(5) or 0))
+            return max(1, min(60 * 24 * 14, int((at - now).total_seconds() // 60) + 1))
+        except ValueError:
+            pass
+    m = re.search(r"retry (?:in|after) (?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?", raw, re.I)
+    if m and (m.group(1) or m.group(2)):
+        return max(1, int(m.group(1) or 0) * 60 + int(m.group(2) or 0))
+    m = re.search(r"resets? (?:at|in) (\d{1,2}):(\d{2})", raw, re.I)
+    if m:
+        at = now.replace(hour=int(m.group(1)) % 24, minute=int(m.group(2)) % 60, second=0, microsecond=0)
+        if at <= now:
+            at += dt.timedelta(days=1)
+        return max(1, int((at - now).total_seconds() // 60) + 1)
+    return default
 
 
 def error_code(raw):
@@ -1425,12 +1633,18 @@ def ai_state_get(name, hours=12):
 
 
 def ai_status_lines(skip=()):
-    """The numbered switch list in groups: answered lately, connected but not answering (with the reason), ready but unchecked, not connected."""
+    """The numbered switch list in groups, remote first then local (owner 16.11), each by what the bridge saw: answered lately,
+    connected but not answering (with the reason), ready but unchecked, not connected."""
+    rows = []
+    for head, group in split_by_place([n for n in provider_order() if n not in skip and n != "auto"]):
+        rows += [head] + _ai_status_rows(group)
+    return rows
+
+
+def _ai_status_rows(names):
     ok, bad, unknown, off = [], [], [], []
-    for n in provider_order():
-        if n in skip or n == "auto":
-            continue
-        tag, st = f"/{provider_number(n)} {prov_short(n)}", ai_state_get(n)
+    for n in names:
+        tag, st = provider_line(n), ai_state_get(n)
         if st and not st["ok"]:
             why = REASON_SHORT_HE.get(st["reason"], "לא עונה") + (f" (קוד {st['code']})" if st.get("code") else "") + (f", {st['hint']}" if st.get("hint") else "")
             bad.append(f"{tag} ({why})")
@@ -1463,10 +1677,88 @@ def ai_down_text(name, why, raw="", reason=""):
             + "\n".join(ai_status_lines(skip=(name,))) + "\n\nכל הרשימה: /ספק · בדיקת מענה לכולן: /בדוק מענה")
 
 
+def _try_next_model(e):
+    """Owner 16.11: a model that is out of quota, rate-limited or not found is not a dead provider — the next model of the same
+    provider is tried first, and only then the switch to another AI."""
+    if not isinstance(e, ProviderDown) or e.why in ("key", "billing", "login"):
+        return False
+    name = getattr(_ctx, "provider_used", None) or active_provider()[0]
+    p = providers().get(name) or {}
+    ms = [m for m in (p.get("models") or []) if m]
+    if len(ms) < 2:
+        return False
+    done = list(getattr(_ctx, "models_tried", None) or [])
+    cur = getattr(_ctx, "force_model", None) or p.get("model") or ms[0]
+    left = [m for m in ms if m != cur and m not in done]
+    if not left:
+        return False
+    _ctx.models_tried = done + [cur]
+    _ctx.force_model, _ctx.force_provider = left[0], name
+    log("auto: same provider, next model", name, cur, "->", left[0])
+    return True
+
+
+def _cool_after(name, e):
+    """Owner 16.11: how long a failed provider waits — the reset the server itself reported when it gives one; a slow answer
+    is only pushed to the back for a few minutes, not taken out of the ladder for an hour."""
+    raw = getattr(e, "raw", "") or str(e)
+    if isinstance(e, AuthError):
+        auto_cool(name, reset_minutes(raw, 120), "sign-in")
+    elif isinstance(e, LimitHit):
+        until = getattr(e, "until", None)
+        mins = max(1, int((until - dt.datetime.now()).total_seconds() // 60)) if until else reset_minutes(raw, 15)
+        auto_cool(name, min(mins, 60 * 24 * 7), "quota")
+    elif isinstance(e, ProviderDown):
+        if e.why in ("unreachable", "error") and getattr(_ctx, "run_seconds", 0) >= 45:
+            soft_cool(name, 10, e.why)  # slow is not dead
+        else:
+            auto_cool(name, e.minutes, e.why)
+    else:
+        auto_cool(name, 15, "limit")
+
+
+def failover_note(why="", name=None, nxt=None):
+    """Owner 16.11: the day's switches, for one transparency line in the morning summary — how many, and from which AI to which."""
+    today = dt.date.today().isoformat()
+    try:
+        d = json.loads(kv_get("failovers:" + today) or "{}")
+    except ValueError:
+        d = {}
+    d["n"] = int(d.get("n", 0) or 0) + 1
+    d["why"] = d.get("why") or {}
+    if why:
+        d["why"][why] = int(d["why"].get(why, 0) or 0) + 1
+    d["pairs"] = d.get("pairs") or {}
+    if name and nxt:
+        k = f"{prov_short(name)} → {prov_short(nxt)}"
+        d["pairs"][k] = int(d["pairs"].get(k, 0) or 0) + 1
+    kv_set("failovers:" + today, json.dumps(d, ensure_ascii=False))
+
+
+def failover_line_he():
+    """The morning summary's transparency line: how many provider switches there were since yesterday, and between which AIs."""
+    out, total = [], 0
+    for i in range(2):
+        day = (dt.date.today() - dt.timedelta(days=i)).isoformat()
+        try:
+            d = json.loads(kv_get("failovers:" + day) or "{}")
+        except ValueError:
+            continue
+        total += int(d.get("n", 0) or 0)
+        for k, v in (d.get("pairs") or {}).items():
+            out.append(f"{k} ×{v}")
+    if not total:
+        return ""
+    pairs = ", ".join(out[:4]) + (" ועוד" if len(out) > 4 else "")
+    return f"🔁 מעברים בין בינות: {total} ביממה האחרונה" + (f" ({pairs})" if pairs else "")
+
+
 def _failover_step(e, tried):
     """True when the failed run should be repeated on another provider (the choice is kept in _ctx.force_*)."""
     if getattr(_ctx, "no_failover", False):
         return False  # owner 15.11: the owner's own messages never move to another AI by themselves
+    if _try_next_model(e):
+        return True
     active = active_provider()[0]
     forced = getattr(_ctx, "force_provider", None)
     name = getattr(_ctx, "provider_used", None)
@@ -1484,7 +1776,7 @@ def _failover_step(e, tried):
         if not limit_failover_cfg()["on_limit"]:
             return False
         tried.append(active)
-        auto_cool(active, e.minutes if isinstance(e, ProviderDown) else 120 if isinstance(e, AuthError) else 15, getattr(e, "why", ""))
+        _cool_after(active, e)
         nxt = auto_pick(tried) or local_last_resort(tried)
         if not nxt:
             return False
@@ -1492,23 +1784,20 @@ def _failover_step(e, tried):
         _ctx.force_engine = "claude" if nxt == "claude" else (limit_failover_cfg()["engine"] if engine_ready(limit_failover_cfg()["engine"]) else "claude")
         _ctx.failover_used = True
         _ctx.failover_why = f"{prov_short(active)} לא עבד ({down_why_he(e)})"
+        failover_note(down_why_he(e), active, nxt)
         log("failover:", active, "->", nxt, _ctx.failover_why)
         return True
     if not name or name in tried:
         return False
     tried.append(name)
-    if isinstance(e, ProviderDown):
-        auto_cool(name, e.minutes, e.why)
-    elif isinstance(e, AuthError):
-        auto_cool(name, 120, "sign-in")
-    elif name != "claude":
-        auto_cool(name, 15, "limit")
+    _cool_after(name, e)
     nxt = auto_pick(tried + ["claude"] if forced else tried) or local_last_resort(tried)
     if not nxt:
         return False
     if forced:
         _ctx.force_provider = nxt
         _ctx.failover_why = f"{prov_short(name)} לא עבד ({down_why_he(e)})"
+    failover_note(down_why_he(e), name, nxt)
     log("auto:", name, "->", nxt)
     return True
 
@@ -1529,6 +1818,8 @@ def provider_env(name=None, model=None):
         name, model = (getattr(_ctx, "force_provider", None), None) if getattr(_ctx, "force_provider", None) else active_provider()
     if name == "auto":  # owner 13.11: the cheapest provider that is ready now (the ladder in providers.json "auto")
         name, model = auto_pick(), None
+    if model is None and getattr(_ctx, "force_model", None):
+        model = _ctx.force_model  # owner 16.11: the same provider, its next model (a rate-limited model is not a dead provider)
     _ctx.provider_used = name
     p = providers().get(name) or {}
     if p.get("kind") == "anthropic-key":
@@ -1545,6 +1836,8 @@ def provider_env(name=None, model=None):
         m = model or p.get("model") or ""
         h = provider_host(p, m)
         url = (h or {}).get("url") or p.get("base_url") or p["hosts"][0]["url"]
+        if translator_url(p) and not translator_up():  # owner 16.11: one check, not four dead rungs in a row
+            raise ProviderDown(name, "unreachable", 3)
         if not reachable(url):  # owner 14.11: a dead address fails at once (not after minutes of retries), so the next AI answers
             raise ProviderDown(name, "unreachable", 5)
         env = dict(os.environ, ANTHROPIC_BASE_URL=url, ANTHROPIC_AUTH_TOKEN=p.get("token") or provider_key(p),
@@ -1775,8 +2068,11 @@ def switch_provider(name, model=None, chat=None):
     set_provider(name, model, chat=chat)
     _, cm = active_provider(chat)
     scope = "בקבוצה הזו" if chat else "הגשר"
+    ms = provider_models(name, 6)
+    details = (f"\nמודלים: {', '.join(ms)}" if ms else "") + f"\nפקודות: {' '.join(provider_switch_words(name))}"
     return ((f"✅ ספק {scope}: *{ps[name]['label']}*" + (f" · מודל {cm or ps[name].get('model')}" if name != "claude" else "")
-            + (". חזרה לספק המחשב: /ספק כאן איפוס" if chat else ". כל השיחות עוברות דרכו מההודעה הבאה (חוץ מקבוצות עם ספק משלהן). חזרה: /ספק מחשב claude"))) + tried_he(c.get("tried"), c.get("working") if c.get("tried") else None)
+            + (". חזרה לספק המחשב: /ספק כאן איפוס" if chat else ". כל השיחות עוברות דרכו מההודעה הבאה (חוץ מקבוצות עם ספק משלהן). חזרה: /ספק מחשב claude"))
+            + details) + tried_he(c.get("tried"), c.get("working") if c.get("tried") else None)
 
 
 def effective_model(model):
@@ -2025,13 +2321,19 @@ def versioning_mod():
 
 def providers_text():
     cur, cm = active_provider()
-    lines = ["*🔌 ספק הבינה של הגשר* (כל השיחות עוברות דרכו)", ""]
-    for k, p in providers().items():
-        c = provider_check(k)
-        lines.append(f"{'👉 ' if k == cur else ''}{'🏠' if where_of(k)[0] == 'local' else '☁️'} */{provider_number(k)}* *{p['label']}* ({k}) {'✅' if c['ok'] else '⚪'} {c['detail']}")
-        if k == cur and p["kind"] != "claude":
-            lines.append(f"   מודל: {cm or p.get('model') or '—'}")
-        lines.append(f"   _{p.get('how', '')}_")
+    lines = ["*🔌 ספק הבינה של הגשר* (כל השיחות עוברות דרכו)"]
+    allp = providers()
+    names = [k for k in provider_order() if k in allp]
+    sections = ([("🔀 *אוטומטי*", ["auto"])] if "auto" in names else []) + split_by_place([k for k in names if k != "auto"])
+    for head, group in sections:  # owner 16.11: remote and local in separate, titled sections
+        lines += ["", head]
+        for k in group:
+            p, c = allp[k], provider_check(k)
+            icon = "🔀" if k == "auto" else "🏠" if provider_is_local(k) else "☁️"
+            lines.append(f"{'👉 ' if k == cur else ''}{icon} */{provider_number(k)}* *{p['label']}* ({k}) {'✅' if c['ok'] else '⚪'} {c['detail']}")
+            if k == cur and p["kind"] != "claude":
+                lines.append(f"   מודל: {cm or p.get('model') or '—'}")
+            lines.append(f"   _{p.get('how', '')}_")
     words = [f"/{provider_number(k)}" for k in provider_order()]
     lines += ["", "החלפה מהירה: / ומספר (" + " ".join(words) + "), או השם בעברית / באנגלית, עם רווחים או בלי · עם מודל: /ספק ollama <מודל> (הקבוצה הזו בלבד) · כל המחשב: /ספק מחשב <שם> · איפוס הקבוצה: /ספק כאן איפוס · מקרא גרפי בלוח: legend.html"]
     return "\n".join(lines)
@@ -3013,6 +3315,7 @@ def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
     with adb() as db:
         db.execute("INSERT INTO claude_runs (at, session, cost, input_tokens, output_tokens, seconds, ok, model, cum, chat) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                    (dt.datetime.now().isoformat(), None, 0, 0, 0, time.time() - t0, 1, m or name, 0, chat))
+    _note_answer(name, time.time() - t0)
     return {"type": "result", "result": text, "is_error": False, "session_id": None, "usage": {}, "total_cost_usd": 0}
 
 
@@ -3161,6 +3464,7 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
             res = {"type": "result", "result": "\n".join(oc["text"]).strip() or oc["err"], "is_error": not oc["text"], "session_id": oc["sid"],
                    "usage": {"input_tokens": oc["tin"], "output_tokens": oc["tout"]}, "total_cost_usd": 0}
     finally:
+        _ctx.run_seconds = time.time() - t0
         if killer:
             killer.cancel()
         if stoppable:
@@ -3201,6 +3505,7 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
                    (dt.datetime.now().isoformat(), res.get("session_id"), cost, usage.get("input_tokens", 0),
                     usage.get("output_tokens", 0), time.time() - t0, 0 if res.get("is_error") else 1, model or CFG.get("claude_model") or "", cum,
                     chat))
+    _note_answer(_ctx.provider_used, time.time() - t0)
     return res
 
 
@@ -3318,9 +3623,15 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
     if sid and session_rotates(chat, prompt if raw is None else raw):
         write_handoff(sid, chat)
         sid = None
+    # owner 16.11: a short message on "auto" goes to a fast free provider; the Claude subscription is kept for real work
+    light = bool(CFG.get("light_routing", True)) and chosen == "auto" and is_light_task(raw if raw is not None else prompt)
     try:
         try:
-            res = _run_auto(prompt, model, sid, timeout, on_stage, append=group_prompt(chat), chat=chat, tools=tools, max_budget=max_budget)
+            try:
+                _ctx.light_task = light
+                res = _run_auto(prompt, model, sid, timeout, on_stage, append=group_prompt(chat), chat=chat, tools=tools, max_budget=max_budget)
+            finally:
+                _ctx.light_task = False
         except (ProviderDown, LimitHit, AuthError, RuntimeError) as e:
             if not _ctx.no_failover or (isinstance(e, AuthError) and chosen == "claude"):
                 raise
@@ -4001,6 +4312,17 @@ def recommend(text, used, failed):
 DEEP_WORDS = ("נתח לעומק", "ניתוח מעמיק", "תכנן", "תכנון", "ארכיטקטורה", "החלטה", "תחליט", "השווה בין", "בדוק לעומק")
 
 
+HEAVY_WORDS = ("תמלל", "סכם", "סיכום", "נתח", "ניתוח", "דוח", "דו\"ח", "אקסל", "קובץ", "תקן", "קוד", "סקריפט", "הגדרות",
+               "שלח ל", "טיוטה", "מייל", "הצעת", "השווה", "תכנן", "למה", "בדוק לעומק", "ערוך", "תוסיף", "תשנה", "תעדכן את הקוד")
+
+
+def is_light_task(text):
+    """Owner 16.11: a short message (a lookup, a status question, a one-word switch) — routing it to a fast free provider keeps
+    the Claude subscription for real work. The same words the model router already uses to tell light from heavy."""
+    t = text.lstrip("!").strip()
+    return not (len(t) > 140 or any(w in t for w in HEAVY_WORDS))
+
+
 def pick_model_info(text, chat=None):
     """(model, how): how = 'forced' (/מודל or dashboard), 'bang' (!!), 'auto', or 'sticky_deep' (deep words in a running
     session: the session keeps its model so its prompt cache stays valid — the answer suggests !! instead).
@@ -4014,9 +4336,7 @@ def pick_model_info(text, chat=None):
     if s.startswith("!!") and not s.startswith("!!!"):  # "!!" = this one message on the strongest model (owner request 07.11)
         return CFG.get("deep_model") or "opus", "bang"
     t = text.lstrip("!").strip()
-    heavy_words = ("תמלל", "סכם", "סיכום", "נתח", "ניתוח", "דוח", "דו\"ח", "אקסל", "קובץ", "תקן", "קוד", "סקריפט", "הגדרות",
-                   "שלח ל", "טיוטה", "מייל", "הצעת", "השווה", "תכנן", "למה", "בדוק לעומק", "ערוך", "תוסיף", "תשנה", "תעדכן את הקוד")
-    heavy = len(t) > 140 or T["attached"].split("{")[0] in text or any(w in t for w in heavy_words)
+    heavy = len(t) > 140 or T["attached"].split("{")[0] in text or any(w in t for w in HEAVY_WORDS)
     light, strong = CFG.get("light_model") or "haiku", CFG.get("claude_model") or "sonnet"
     base = strong if heavy else light
     deep = CFG.get("deep_model") if CFG.get("deep_model") and any(w in t for w in DEEP_WORDS) else None
@@ -7483,9 +7803,10 @@ def morning_summary():
     head = "☀️ *סיכום בוקר*" if LANG == "he" else "☀️ *Morning summary*"
     body = out or ((("לא הצלחתי לסכם הבוקר." if LANG == "he" else "Couldn't summarize this morning.") if lines else "")
                    + (("\n*מחכים לתשובה ממך:*\n" if LANG == "he" else "\n*Waiting for your reply:*\n") + wait_txt if wait_txt else ""))
+    fo = failover_line_he()  # owner 16.11: how many provider switches and between which AIs
     _ctx.chat = PRIMARY
     try:
-        reply(f"{head}\n{body.strip()}")
+        reply(f"{head}\n{body.strip()}" + (f"\n\n{fo}" if fo else ""))
     finally:
         _ctx.chat = None
 
