@@ -551,7 +551,7 @@ def test_usage_limit_parks_and_requeues_commands(agent, monkeypatch):
         st = [r[0] for r in db.execute("SELECT status FROM commands ORDER BY id")]
     # owner 15.11: Claude is the chosen AI and capped: no silent wait, no switch — each message is told to switch AI
     assert st == ["done", "done"] and not called
-    assert sum("לא עונה עכשיו" in t and "לא עברתי לבינה אחרת" in t for t in sent) == 2
+    assert sum("לא עונה:" in t and "לא עברתי לבינה אחרת" in t and "/ ומספר" in t for t in sent) == 2
 
 def test_stranded_limit_waiters_are_requeued(agent, monkeypatch):
     """Owner 11.11: the limit flag was cleared but the PC slept / the notice hung before the re-queue, so the commands sat

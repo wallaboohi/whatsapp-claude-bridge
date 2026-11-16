@@ -1026,6 +1026,7 @@ def provider_cooled(name):
 
 
 def auto_cool(name, minutes, why=""):
+    ai_state_set(name, False, why if why in REASON_SHORT_HE else "error")
     kv_set("cool:" + name, (dt.datetime.now() + dt.timedelta(minutes=minutes)).isoformat(timespec="seconds"))
     log("auto: skipping", name, f"for {minutes} min", why)
 
@@ -1130,12 +1131,14 @@ def provider_probe(name, timeout=90):
     if res["answered"] is False:
         res["reason"] = (classify_down(raw) or ("", 0))[0]
         res["he"] = error_line_he(raw, name)
+    if res["answered"] is not None:
+        ai_state_set(name, res["answered"], res["reason"] or "error", raw)
     return res
 
 
 def probe_report(live=True):
     """The report of /בדוק מענה: for every provider its availability and (live) a real answer, or the fault translated to Hebrew."""
-    names = [n for n in providers() if n != "auto"]
+    names = [n for n in provider_order() if n != "auto"]
     if live:
         import concurrent.futures as cf
         with cf.ThreadPoolExecutor(max_workers=6) as ex:
@@ -1149,11 +1152,11 @@ def probe_report(live=True):
     for n, r in zip(names, results):
         av = "✅ זמין" if r["available"] else "⚪ לא זמין"
         if r["answered"] is True:
-            rows.append(f"*{prov_short(n)}*: {av} · ✅ ענה ({r['seconds']} שניות)")
+            rows.append(f"/{provider_number(n)} *{prov_short(n)}*: {av} · ✅ ענה ({r['seconds']} שניות)")
         elif r["answered"] is False:
-            rows.append(f"*{prov_short(n)}*: {av} · ⛔ לא ענה\n   {r['he']}")
+            rows.append(f"/{provider_number(n)} *{prov_short(n)}*: {av} · ⛔ לא ענה\n   {r['he']}")
         else:
-            rows.append(f"*{prov_short(n)}*: {av} · — {r['he'] or 'לא נבדק'}")
+            rows.append(f"/{provider_number(n)} *{prov_short(n)}*: {av} · — {r['he'] or 'לא נבדק'}")
     return "\n".join(rows)
 
 
@@ -1287,12 +1290,88 @@ def _run_auto(*a, **k):
         _ctx.force_provider = _ctx.force_engine = None
 
 
-def ai_down_text(name, why):
-    """Owner 15.11: the chosen AI did not answer — say so and let the owner switch (never a silent switch to another AI)."""
-    ready = [n for n in auto_ladder() if n not in (name, "auto") and provider_ready(n)][:5]
-    return (f"⚠️ *{prov_short(name)} לא עונה עכשיו* ({why}). לא עברתי לבינה אחרת.\n"
-            "כדי להמשיך, החלף בינה מתארחת ושלח שוב את ההודעה"
-            + (": " + " · ".join(f"/{n}" for n in ready) if ready else "."))
+MONTHS_EN = {m: i + 1 for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"))}
+REASON_SHORT_HE = {"quota": "מכסת השימוש נגמרה", "rate": "מגבלת קצב או עומס אצל הספק", "billing": "אין יתרה או בעיית חיוב",
+                   "key": "המפתח או ההתחברות נדחו", "unreachable": "אין חיבור לספק", "rejected": "הספק דחה את הבקשה (פורמט)",
+                   "login": "ההתחברות פגה", "error": "לא החזיר תשובה"}
+
+
+def retry_hint_he(raw):
+    """When the provider says it works again ("try again at Dec 14th, 2026", "retry in 16m"), in Hebrew; '' when it does not say."""
+    raw = raw or ""
+    m = re.search(r"try again at ([A-Za-z]{3})[a-z]* (\d{1,2})(?:st|nd|rd|th)?,? (\d{4})", raw)
+    if m and m.group(1).lower() in MONTHS_EN:
+        return f"חוזרת ב-{int(m.group(2))}.{MONTHS_EN[m.group(1).lower()]}"
+    m = re.search(r"retry in (?:(\d+)h)?(?:(\d+)m)?", raw)
+    if m and (m.group(1) or m.group(2)):
+        mins = int(m.group(1) or 0) * 60 + int(m.group(2) or 0)
+        return f"חוזרת בעוד כ-{mins} דקות" if mins < 120 else f"חוזרת בעוד כ-{mins // 60} שעות"
+    return ""
+
+
+def error_code(raw):
+    m = re.search(r"(?<![\w.-])([45]\d\d)(?![\w.-])", raw or "")
+    return int(m.group(1)) if m else None
+
+
+def ai_state_set(name, ok, reason="", raw=""):
+    """Owner 16.11: what the bridge last saw of each AI (answered / failed and why), so the switch message can group them truthfully."""
+    if not name:
+        return
+    try:
+        kv_set("aistate:" + name, json.dumps({"ok": bool(ok), "at": dt.datetime.now().isoformat(timespec="seconds"), "reason": reason or "",
+                                              "code": error_code(raw), "hint": retry_hint_he(raw)}, ensure_ascii=False))
+    except Exception as e:
+        log("ai_state_set failed", e)
+
+
+def ai_state_get(name, hours=12):
+    try:
+        st = json.loads(kv_get("aistate:" + name) or "")
+        if dt.datetime.now() - dt.datetime.fromisoformat(st["at"]) <= dt.timedelta(hours=hours):
+            return st
+    except (ValueError, KeyError, TypeError):
+        pass
+    return None
+
+
+def ai_status_lines(skip=()):
+    """The numbered switch list in groups: answered lately, connected but not answering (with the reason), ready but unchecked, not connected."""
+    ok, bad, unknown, off = [], [], [], []
+    for n in provider_order():
+        if n in skip or n == "auto":
+            continue
+        tag, st = f"/{provider_number(n)} {prov_short(n)}", ai_state_get(n)
+        if st and not st["ok"]:
+            why = REASON_SHORT_HE.get(st["reason"], "לא עונה") + (f" (קוד {st['code']})" if st.get("code") else "") + (f", {st['hint']}" if st.get("hint") else "")
+            bad.append(f"{tag} ({why})")
+        elif not provider_ready(n):
+            if provider_cooled(n):
+                bad.append(f"{tag} (בהמתנה אחרי תקלה)")
+            else:
+                off.append(tag)
+        elif st and st["ok"]:
+            ok.append(tag)
+        else:
+            unknown.append(tag)
+    rows = []
+    for icon, title, items in (("✅", "ענו לאחרונה", ok), ("⛔", "מחוברים ולא עונים", bad), ("❔", "מוכנים, עוד לא נבדקו", unknown), ("⚪", "לא מחוברים במחשב הזה", off)):
+        if items:
+            rows.append(f"{icon} *{title}:* " + " · ".join(items))
+    return rows
+
+
+def ai_down_text(name, why, raw="", reason=""):
+    """Owner 15.11 / 16.11: the chosen AI did not answer: the reason (with the provider's code and when it returns), then every AI by number,
+    grouped by what the bridge saw of it. Never a silent switch to another AI."""
+    reason = reason or (classify_down(raw or "") or ("", 0))[0]
+    code = error_code(raw)
+    why_he = REASON_SHORT_HE.get(reason) or why
+    head = f"⚠️ *{prov_short(name)} לא עונה:* {why_he}" + (f" (קוד {code}: {CODE_HE[code]})" if code in CODE_HE else f" (קוד {code})" if code else "")
+    hint = retry_hint_he(raw)
+    return (head + (f", {hint}" if hint else "") + ". לא עברתי לבינה אחרת.\n"
+            "להמשך: בחר בינה אחרת עם / ומספר (או השם), ושלח שוב את ההודעה.\n\n"
+            + "\n".join(ai_status_lines(skip=(name,))) + "\n\nכל הרשימה: /ספק · בדיקת מענה לכולן: /בדוק מענה")
 
 
 def _failover_step(e, tried):
@@ -1479,6 +1558,9 @@ def provider_check(name, prefer=None):
     if p["kind"] == "anthropic-key":
         k = provider_key(p)
         return {"ok": bool(k), "detail": "מפתח שמור" if k else f"חסר מפתח: secrets/{p.get('key_file')}", "models": ["opus", "sonnet", "haiku"]}
+    if p["kind"] == "opencode":  # owner 16.11: "חסר מפתח: secrets/None" blocked the switch to a working OpenCode
+        ok = bool(opencode_bin())
+        return {"ok": ok, "detail": "מותקן" if ok else "OpenCode לא מותקן במחשב הזה", "models": list(p.get("models") or [])}
     if p["kind"] == "cli":  # agent CLIs bring their own sign-in: installed + login/key is the whole check
         ok = cli_ready(p)
         return {"ok": ok, "detail": "מותקן ומחובר" if ok else f"לא מותקן או לא מחובר: {(p.get('cli') or {}).get('bin')}", "models": list(p.get("models") or [])}
@@ -1520,17 +1602,72 @@ def provider_check(name, prefer=None):
         return {"ok": False, "detail": f"לא מגיב: {str(e)[:80]}", "models": []}
 
 
-def resolve_ai_word(word):
-    """Owner 13.11: (provider, model or None) for a switch word such as /דיפסיק /openai /qwencode: a provider's "aliases" or "model_aliases"
-    in providers.json (or its own name); None when the word is not one."""
-    w = (word or "").lower().strip()
+NAMES_FILE = os.path.join(HERE, "provider_names.json")
+
+
+def _norm_word(w):
+    """A switch word without case, spaces, hyphens, dots, apostrophes and niqqud: "Gemini-CLI", "ג'מיני", "open router" all compare equal."""
+    return re.sub(r"[\s\-_'\"`\u2019\u05f3\u05f4.,:;/\u0591-\u05c7]", "", (w or "").lower())
+
+
+def provider_names():
+    try:
+        return json.load(open(NAMES_FILE, encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"order": [], "words": {}}
+
+
+def provider_order():
+    """The providers in their fixed number order (/1, /2 ...); a provider added later gets the next number."""
+    allp = providers()
+    order = [n for n in provider_names().get("order", []) if n in allp]
+    return order + [n for n in allp if n not in order]
+
+
+def provider_number(name):
+    order = provider_order()
+    return order.index(name) + 1 if name in order else 0
+
+
+def _word_table():
+    """normalized spelling -> provider, from the provider names, its aliases, and the owner's table (provider_names.json)."""
+    table = {}
     for name, p in providers().items():
-        if w == name.lower() or w in [str(a).lower() for a in p.get("aliases") or []]:
-            return name, None
+        table[_norm_word(name)] = name
+        for a in p.get("aliases") or []:
+            table[_norm_word(a)] = name
+    for w, n in provider_names().get("words", {}).items():
+        if n in providers():
+            table[_norm_word(w)] = n
+    return table
+
+
+def resolve_ai_word(word):
+    """Owner 13.11: (provider, model or None) for a switch word such as /דיפסיק /openai /qwencode, a number (/3), or any spelling of a name
+    (Hebrew or English, with or without spaces and hyphens); None when the word is not one."""
+    w = (word or "").lower().strip()
+    if re.fullmatch(r"\d{1,2}", w):  # owner 16.11: /3 instead of remembering the spelling
+        order = provider_order()
+        return (order[int(w) - 1], None) if 1 <= int(w) <= len(order) else None
+    for name, p in providers().items():
         for k, v in (p.get("model_aliases") or {}).items():
             if w == str(k).lower():
                 return name, v
+    hit = _word_table().get(_norm_word(w))
+    if hit:
+        return hit, None
     return (PROVIDER_WORDS[w], None) if PROVIDER_WORDS.get(w) in providers() else None
+
+
+def fuzzy_ai_word(word):
+    """A provider for a word that is close to a known spelling (a typo such as /claudeflare, /gamini); None when nothing is close enough."""
+    import difflib
+    w = _norm_word(word)
+    if len(w) < 4 or w.isdigit():
+        return None
+    table = _word_table()
+    close = difflib.get_close_matches(w, list(table), n=1, cutoff=0.8)
+    return table[close[0]] if close else None
 
 
 def switch_provider(name, model=None, chat=None):
@@ -1799,12 +1936,12 @@ def providers_text():
     lines = ["*🔌 ספק הבינה של הגשר* (כל השיחות עוברות דרכו)", ""]
     for k, p in providers().items():
         c = provider_check(k)
-        lines.append(f"{'👉 ' if k == cur else ''}{'🏠' if where_of(k)[0] == 'local' else '☁️'} *{p['label']}* ({k}) {'✅' if c['ok'] else '⚪'} {c['detail']}")
+        lines.append(f"{'👉 ' if k == cur else ''}{'🏠' if where_of(k)[0] == 'local' else '☁️'} */{provider_number(k)}* *{p['label']}* ({k}) {'✅' if c['ok'] else '⚪'} {c['detail']}")
         if k == cur and p["kind"] != "claude":
             lines.append(f"   מודל: {cm or p.get('model') or '—'}")
         lines.append(f"   _{p.get('how', '')}_")
-    words = [f"/{(p.get('aliases') or [k])[0]}" for k, p in providers().items()]
-    lines += ["", "החלפה מהירה: " + " ".join(words) + " · עם מודל: /ספק ollama <מודל> (הקבוצה הזו בלבד) · כל המחשב: /ספק מחשב <שם> · איפוס הקבוצה: /ספק כאן איפוס · מקרא גרפי בלוח: legend.html"]
+    words = [f"/{provider_number(k)}" for k in provider_order()]
+    lines += ["", "החלפה מהירה: / ומספר (" + " ".join(words) + "), או השם בעברית / באנגלית, עם רווחים או בלי · עם מודל: /ספק ollama <מודל> (הקבוצה הזו בלבד) · כל המחשב: /ספק מחשב <שם> · איפוס הקבוצה: /ספק כאן איפוס · מקרא גרפי בלוח: legend.html"]
     return "\n".join(lines)
 
 
@@ -2211,9 +2348,9 @@ def _stage_of(ev):
 
 class AIDown(Exception):
     """Owner 15.11: the conversation's chosen AI did not answer; no automatic switch to another AI, the owner switches."""
-    def __init__(self, name, why):
+    def __init__(self, name, why, raw="", reason=""):
         super().__init__(f"{name}: {why}")
-        self.name, self.why = name, why
+        self.name, self.why, self.raw, self.reason = name, why, raw, reason
 
 
 class LimitHit(Exception):
@@ -3098,7 +3235,8 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
             why = ("נגמרה המכסה" + (f" עד {e.until:%H:%M}" if getattr(e, "until", None) else "") if isinstance(e, LimitHit)
                    else down_why_he(e) if isinstance(e, (ProviderDown, AuthError)) else "לא החזיר תשובה")
             log("chosen AI did not answer, no switch:", chosen, why)
-            raise AIDown(chosen, why)
+            raise AIDown(chosen, why, raw=(getattr(e, "raw", "") or str(e))[-400:],
+                         reason=getattr(e, "why", "") if isinstance(e, ProviderDown) else "quota" if isinstance(e, LimitHit) else "")
     except (Stopped, AIDown) as e:
         if isinstance(e, AIDown):
             raise
@@ -3724,7 +3862,22 @@ def set_override(model, hours=None, chat=None):
     write_json(MODEL_FILE, o)
 
 
+def other_models_text(chat, name):
+    """Owner 16.11: /מודל while another AI is chosen: its own models and the numbered switch list, not Claude's (Haiku / Sonnet / Opus)."""
+    p = providers().get(name) or {}
+    _, cm = active_provider(chat)
+    lines = [f"*הבינה בקבוצה הזו: {prov_short(name)}*" + (f" · מודל {cm or p.get('model')}" if (cm or p.get("model")) else ""),
+             "מודלי Claude (חייקו, סונט, אופוס) לא חלים עליה.", ""]
+    if p.get("models"):
+        lines += ["מודלים אצל הספק: " + " · ".join(p["models"][:12]), f"להחלפת מודל: /ספק {provider_number(name)} <מודל>", ""]
+    lines += ai_status_lines() + ["", "החלפת בינה: / ומספר, למשל /3"]
+    return "\n".join(lines)
+
+
 def models_guide(chat=None):
+    _cur_p = active_provider(chat)[0]
+    if _cur_p not in ("claude", "auto") and _cur_p in providers():
+        return other_models_text(chat, _cur_p)
     cur = get_override(chat) or "auto"
     lines = [f"*המודל כרגע: {MODELS[cur]['he']}*", ""]
     for k, m in MODELS.items():
@@ -4051,9 +4204,15 @@ def owner_command(text, chat=None):
         RESTART_REQ.set()
         return "🔄 מפעיל את הסוכן מחדש. אכתוב כאן כשאעלה (בערך 20 שניות)."
     m = re.match(r"^/\s*([^\s/]+)\s*$", text.strip())
-    hit = resolve_ai_word(m.group(1)) if m else None
-    if hit:  # owner 13.11: /דיפסיק /openai /qwencode ... switch the bridge's provider (and model) in one word
-        return switch_provider(hit[0], hit[1], chat=cur_chat())  # owner 15.11: the one-word switch is per group too
+    m2 = re.match(r"^/\s*([^\s/]+)\s+([^\s/]+)\s*$", text.strip())
+    if not m and m2 and resolve_ai_word(m2.group(1) + m2.group(2)):
+        m = m2  # owner 16.11: "/open router", "/gemini cli", "/גמיני סיאלאיי": a name written with a space
+    hit = resolve_ai_word(m.group(1) + (m.group(2) if m is m2 else "")) if m else None
+    fz = fuzzy_ai_word(m.group(1)) if (m and m is not m2 and not hit) else None
+    if hit or fz:  # owner 13.11: /דיפסיק /openai /qwencode ... switch the bridge's provider (and model) in one word
+        name, model = hit or (fz, None)
+        note = "" if hit else f"🔎 הבנתי /{m.group(1)} כ-*{prov_short(fz)}* (/{provider_number(fz)}).\n"
+        return note + switch_provider(name, model, chat=cur_chat())  # owner 15.11: the one-word switch is per group too
     m = re.match(r"^/\s*(מודלים|מודל|models|model|סשן|session)\s*(.*)$", text.strip(), re.S)
     if not m:
         return None
@@ -4428,7 +4587,8 @@ def run_command(row):
             wait_for_limit(cid, chat, mid, src, e.until, mid_run=True)
             return
         except AIDown as e:
-            reply(ai_down_text(e.name, e.why), quoted=mid if src == "wa" else None)
+            ai_state_set(e.name, False, e.reason or (classify_down(e.raw or "") or ("error", 0))[0], e.raw)
+            reply(ai_down_text(e.name, e.why, e.raw, e.reason), quoted=mid if src == "wa" else None)
             react(mid, "⚠️")
             return
         finally:
@@ -4441,9 +4601,11 @@ def run_command(row):
         kv_set(K("last_model", chat), model)
         if answer:  # owner 14.11: the group name follows the AI that really answered (auto / failover), not only the one chosen
             used = getattr(_ctx, "provider_used", None) or active_provider()[0]
+            ai_state_set(used, True)
             kv_set(K("ai_label", chat), f"{group_label(model)}\t{active_provider()}" if used != "claude" else "")
             threading.Thread(target=sync_group_name, args=(chat, model), daemon=True).start()
-        rec = None if stopped else recommend(text, model, streak)
+        on_claude = (getattr(_ctx, "provider_used", None) or active_provider(chat)[0]) == "claude"  # owner 16.11: Claude model tips mean nothing on another AI
+        rec = None if stopped or not on_claude else recommend(text, model, streak)
         kv_set(K("last_recommend", chat), json.dumps({"model": rec[0], "why": rec[1], "at": dt.datetime.now().isoformat(timespec="seconds")}, ensure_ascii=False) if rec else "")
         out = answer or T["failed"]
         if not answer and limit_min and time.time() - started >= limit_min * 60 - 10:  # killed by the time limit, not a crash
@@ -4455,7 +4617,7 @@ def run_command(row):
             out += f"\n\n📜 יש עכשיו {rules_count(rules_text(chat))} כללים בשיחה הזו (/כלל בסיס להצגה)."
         if rec:
             out += f"\n\n💡 כדאי לעבור ל-{MODELS[rec[0]]['he']} ({rec[1]}). פקודה: {MODELS[rec[0]]['cmd']}"
-        elif how == "sticky_deep" and not stopped:
+        elif how == "sticky_deep" and not stopped and on_claude:
             out += ("\n\n💡 לניתוח לעומק: התחל את ההודעה ב-!! (המודל החזק להודעה אחת; הסשן נשאר על המודל הנוכחי כדי לא לשלם שוב על כל ההקשר)."
                     if LANG == "he" else "\n\n💡 For deep analysis start the message with !! (strongest model for one message).")
         reply((ai_tag(model) if answer and not stopped else "") + out, quoted=mid if (CFG.get("quote_replies", True) and src == "wa") else None)

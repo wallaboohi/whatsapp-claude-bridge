@@ -58,3 +58,65 @@ def test_probe_report_lists_every_provider_with_availability_and_answer(agent, m
     monkeypatch.setattr(mod, "provider_probe", fake)
     out = mod.owner_command("/בדוק מענה", mod.PRIMARY)
     assert "זמינות ומענה" in out and "✅ ענה (0.4 שניות)" in out and "⛔ לא ענה" in out and "קוד 429" in out and "⚪ לא זמין" in out
+
+
+def test_numbers_and_spellings_switch_the_provider(agent):
+    mod, _ = agent
+    r = mod.resolve_ai_word
+    assert r("3")[0] == "gemini" and r("11")[0] == "codex" and r("1")[0] == "claude" and r("99") is None
+    for w in ("Gemini-CLI", "gemini cli", "geminicli", "גמיני סיאלאיי".replace(" ", ""), "GEMINI_CLI"):
+        assert r(w)[0] == "gemini_cli", w
+    for w in ("ג'מיני", "גמיני", "gamini", "Gemini"):
+        assert r(w)[0] == "gemini", w
+    assert r("קופיילוט")[0] == r("קופילוט")[0] == r("copilot")[0] == "copilot"
+    assert r("open-router")[0] == "openrouter_free" and r("openrauter")[0] == "openrouter_free"
+
+
+def test_the_owners_typos_are_understood_and_other_words_are_not(agent):
+    mod, _ = agent
+    assert mod.fuzzy_ai_word("claudeflare") == "cloudflare" or mod.resolve_ai_word("claudeflare")[0] == "cloudflare"
+    assert mod.fuzzy_ai_word("cloudflarr") == "cloudflare" and mod.fuzzy_ai_word("geminii") == "gemini"
+    for w in ("אופוס", "חייקו", "סונט", "מודל", "עצור", "כרום", "opus", "haiku", "sonnet", "מצב", "בדוק", "plugin", "1"):
+        assert mod.fuzzy_ai_word(w) is None, w  # commands and model words are never read as a provider
+
+
+def test_switch_by_number_and_by_misspelled_name(agent, monkeypatch):
+    mod, _ = agent
+    got = []
+    monkeypatch.setattr(mod, "switch_provider", lambda name, model=None, chat=None: got.append(name) or "ok")
+    assert mod.owner_command("/3", mod.PRIMARY) == "ok" and got[-1] == "gemini"
+    assert mod.owner_command("/gemini cli", mod.PRIMARY) == "ok" and got[-1] == "gemini_cli"
+    out = mod.owner_command("/cloudflarr", mod.PRIMARY)
+    assert out.endswith("ok") and "הבנתי /cloudflarr" in out and got[-1] == "cloudflare"
+    assert mod.owner_command("/אולמה", mod.PRIMARY) == "ok" and got[-1] == "ollama"
+
+
+def test_opencode_check_does_not_ask_for_a_key(agent, monkeypatch):
+    mod, _ = agent
+    monkeypatch.setattr(mod, "opencode_bin", lambda: "C:/x/opencode-cli.exe")
+    c = mod.provider_check("opencode")
+    assert c["ok"] and "מפתח" not in c["detail"]
+
+
+def test_switch_message_gives_reason_code_and_groups_every_ai(agent, monkeypatch):
+    mod, _ = agent
+    monkeypatch.setattr(mod, "provider_ready", lambda n: n not in ("opencode", "nvidia"))
+    mod.ai_state_set("gemini", True)
+    mod.ai_state_set("codex", False, "quota", FAULTS["codex"][0])
+    mod.ai_state_set("cloudflare", False, "rate", "HTTP 429 rate limit")
+    out = mod.ai_down_text("copilot", "x", FAULTS["copilot"][0])
+    assert "*Copilot לא עונה:* מכסת השימוש נגמרה" in out and "לא עברתי לבינה אחרת" in out
+    assert "✅ *ענו לאחרונה:*" in out and "/3 " in out
+    assert "⛔ *מחוברים ולא עונים:*" in out and "Codex (מכסת השימוש נגמרה, חוזרת ב-14.12)" in out
+    assert "(מגבלת קצב או עומס אצל הספק (קוד 429)" in out
+    assert "⚪ *לא מחוברים במחשב הזה:*" in out and "/8 " in out
+    assert "❔ *מוכנים, עוד לא נבדקו:*" in out
+    assert "/copilot" not in out and "/10 " not in out  # the failed AI is not offered again
+    assert "14.12" in mod.retry_hint_he(FAULTS["codex"][0]) and "16 דקות" in mod.retry_hint_he("Please retry in 16m7.9s.")
+
+
+def test_model_menu_on_another_ai_shows_its_own_models_not_claudes(agent, monkeypatch):
+    mod, _ = agent
+    monkeypatch.setattr(mod, "active_provider", lambda chat=None: ("groq", "openai/gpt-oss-120b"))
+    out = mod.models_guide(mod.PRIMARY)
+    assert "Groq" in out and "לא חלים עליה" in out and "Haiku" not in out and "/ ומספר" in out
