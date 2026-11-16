@@ -1232,8 +1232,97 @@ def hourly_engine_status():
 
 
 def daily_engine_probe():
-    report = engine_status_report(live=True)
+    engine_status_report(live=False)  # the inventory snapshot, with no model calls at all
+    daily_model_check()  # owner 16.11: a real answer from every model, and a message only when something changed
     log("daily engine response probe completed")
+
+
+def _probe_model(name, p, model, timeout=120):
+    """Owner 16.11: a real one-word answer from one model of one provider, through the bridge's own path; (answered, seconds, raw)."""
+    p2 = dict(p, model=model)
+    t0 = time.time()
+    try:
+        if p.get("kind") == "cli":
+            _ctx.probe = True
+            try:
+                _run_cli(name, p2, PROBE_PROMPT, model, None, None, None, timeout)
+            finally:
+                _ctx.probe = False
+        elif p.get("kind") == "opencode":
+            r = subprocess.run([opencode_bin(), "run", "--auto", "--format", "json", "-m", model], input=PROBE_PROMPT, capture_output=True,
+                               text=True, encoding="utf-8", errors="replace", timeout=timeout, creationflags=NO_WINDOW)
+            if r.returncode != 0 or not (r.stdout or "").strip():
+                return False, round(time.time() - t0, 1), ((r.stderr or "") + (r.stdout or "")).strip()[-300:]
+        else:
+            ok, raw = _probe_http(p2)
+            if not ok:
+                return False, round(time.time() - t0, 1), raw
+    except ProviderDown as e:
+        return False, round(time.time() - t0, 1), (getattr(e, "raw", "") or getattr(e, "why", "") or "")
+    except subprocess.TimeoutExpired:
+        return False, round(time.time() - t0, 1), f"408 timed out: no answer within {timeout} seconds"
+    except Exception as e:
+        return False, round(time.time() - t0, 1), str(e)
+    return True, round(time.time() - t0, 1), ""
+
+
+def model_answer_matrix(timeout=120):
+    """Owner 16.11: one real answer from every model of every provider that is ready now — the daily version of /בדוק מענה.
+    Returns {"provider": {"model": {"ok": bool, "why": "<Hebrew fault line>", "seconds": float}}}; a provider that is not ready
+    (no key, not installed, no quota) is skipped, so its models are not blamed for the provider's fault."""
+    import concurrent.futures as cf
+    jobs = []
+    for name in [n for n in provider_order() if n != "auto"]:
+        p = providers().get(name) or {}
+        if p.get("kind") in ("claude", "auto") or not provider_ready(name):
+            continue
+        models = (openrouter_free_models() if p.get("free_list") == "openrouter" else p.get("models")) or ([p.get("model")] if p.get("model") else [])
+        jobs += [(name, p, m) for m in models if m]
+    with cf.ThreadPoolExecutor(max_workers=6) as ex:
+        done = list(ex.map(lambda j: (j, _probe_model(*j, timeout=timeout)), jobs))
+    out = {}
+    for (name, _p, m), (ok, secs, raw) in done:
+        out.setdefault(name, {})[m] = {"ok": ok, "seconds": secs, "why": "" if ok else (error_line_he(raw, name) if raw else "לא ענה")}
+    return out
+
+
+def daily_model_check(timeout=120):
+    """Owner 16.11: the daily model check saves a snapshot of who answered, and writes to the owner only when something changed —
+    a model that stopped answering, came back, or is new in a list. No message when nothing changed."""
+    try:
+        prev = json.loads(kv_get("model_answers") or "{}")
+    except ValueError:
+        prev = {}
+    now = model_answer_matrix(timeout)
+    kv_set("model_answers", json.dumps(now, ensure_ascii=False))
+    if not prev:
+        log("daily model check: first snapshot saved, nothing to compare yet")
+        return
+    stopped, back = [], []
+    for name, models in now.items():
+        for m, r in models.items():
+            was = ((prev.get(name) or {}).get(m) or {}).get("ok")
+            label = f"{prov_short(name)} · {str(m).split('/')[-1]}"
+            if r["ok"] and was is not True:
+                back.append(label + ("" if was is False else " (נוסף לבדיקה)"))
+            elif not r["ok"] and was is not False:
+                stopped.append(f"{label}: {r['why'] or 'לא ענה'}")
+    if not (stopped or back):
+        log("daily model check: no change")
+        return
+    rows = [f"🔎 בדיקת הבינות היומית · {dt.datetime.now():%d.%m %H:%M}", ""]
+    if stopped:
+        rows.append("⛔ הפסיקו לענות:")
+        rows += [f"• {x}" for x in stopped]
+    if back:
+        rows.append("✅ עונות עכשיו:")
+        rows += [f"• {x}" for x in back]
+    rows += ["", "פירוט מלא: /בדוק מענה"]
+    _ctx.chat = PRIMARY
+    try:
+        reply("\n".join(rows))
+    finally:
+        _ctx.chat = None
 
 
 def prov_short(name):
@@ -1471,17 +1560,20 @@ _or_free = {"at": 0.0, "ids": []}
 
 
 def openrouter_free_models():
-    """The :free models of OpenRouter that support tools, from its public catalog (cached 10 minutes); the last list (or []) when it cannot be read."""
+    """The :free models of OpenRouter that support tools, from its public catalog (cached 10 minutes); the last list (or []) when it cannot be read.
+    Owner 16.11: a model listed in the provider's "skip_models" (e.g. inkling-2-small: a 403 "agents only") is never offered again, also when
+    the live catalog still lists it."""
+    skip = set((providers().get("openrouter_free") or {}).get("skip_models") or [])
     if time.time() - _or_free["at"] < 600 and _or_free["ids"]:
-        return _or_free["ids"]
+        return [m for m in _or_free["ids"] if m not in skip]
     try:
         data = json.loads(urllib.request.urlopen("https://openrouter.ai/api/v1/models", timeout=15).read().decode())["data"]
     except Exception:
-        return _or_free["ids"]
+        return [m for m in _or_free["ids"] if m not in skip]
     free = [m for m in data if str(m.get("id", "")).endswith(":free") and "tools" in (m.get("supported_parameters") or [])
             and str((m.get("pricing") or {}).get("prompt")) == "0" and str((m.get("pricing") or {}).get("completion")) == "0"]
     _or_free.update(at=time.time(), ids=[m["id"] for m in sorted(free, key=lambda m: -(m.get("context_length") or 0))])
-    return _or_free["ids"]
+    return [m for m in _or_free["ids"] if m not in skip]
 
 
 def cloudflare_verify(p, tok):

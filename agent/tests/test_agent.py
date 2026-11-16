@@ -108,6 +108,35 @@ def test_hourly_engine_status_is_registered_without_live_probe(agent, monkeypatc
     assert logs == [("hourly engine status refreshed",)]
 
 
+def test_openrouter_skip_models_are_never_offered(agent, monkeypatch):
+    """Owner 16.11: a model removed from the free list (inkling-2-small — 403 "agents only") stays out even when the live
+    catalog of OpenRouter still lists it."""
+    mod, _ = agent
+    monkeypatch.setattr(mod, "providers", lambda: {"openrouter_free": {"skip_models": ["bad/model:free"]}})
+    monkeypatch.setattr(mod, "_or_free", {"at": time.time(), "ids": ["ok/model:free", "bad/model:free"]})
+    assert mod.openrouter_free_models() == ["ok/model:free"]
+
+
+def test_daily_model_check_reports_only_the_changes(agent, monkeypatch):
+    """Owner 16.11: the daily model check keeps a snapshot and writes to the owner only when a model stopped answering or
+    came back — never when nothing changed."""
+    mod, _ = agent
+    said = []
+    monkeypatch.setattr(mod, "reply", lambda text, quoted=None: said.append(text))
+    monkeypatch.setattr(mod, "prov_short", lambda n: n)
+    monkeypatch.setattr(mod, "model_answer_matrix", lambda timeout=120: {
+        "groq": {"answered-model": {"ok": True, "why": "", "seconds": 1},
+                 "dead-model": {"ok": False, "why": "נגמרה המכסה", "seconds": 1}}})
+    mod.kv_set("model_answers", json.dumps({"groq": {
+        "answered-model": {"ok": False, "why": "", "seconds": 1},
+        "dead-model": {"ok": False, "why": "", "seconds": 1}}}))
+    mod.daily_model_check()
+    assert len(said) == 1 and "answered-model" in said[0] and "dead-model" not in said[0]
+    said.clear()
+    mod.daily_model_check()  # the snapshot is now identical: no message at all
+    assert said == []
+
+
 def test_queued_message_gets_a_receipt(agent, monkeypatch):
     """Owner 14.11: a message behind other work is answered at once with "received, N ahead"; the first one only gets 👀."""
     mod, _ = agent
