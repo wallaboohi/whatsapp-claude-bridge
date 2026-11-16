@@ -661,14 +661,14 @@ def report_restart():
     except Exception:
         info = {}
     wait_bridge(300)
-    broadcast_system_notice(f"✅ עליתי מחדש ({dt.datetime.now():%H:%M}) · {machine_tag()}\n"
-                            f"⏱ מנותק היום: {hm(down_today_min())} · מחובר מ-00:00: {hm(connected_today_min())}\n"
-                            f"🔌 כרגע מחובר ל: {connected_ais_text()}"
+    broadcast_system_notice(f"✅ עליתי מחדש ({dt.datetime.now():%H:%M}) · {machine_tag()}"
+                            + (f" · ⏱ התנתקות היום: {hm(down_today_min())}" if down_today_min() else "")
+                            + f"\n🔌 {connected_ais_text()}"
                             + (f"\nסיבה: {restart_reason_he(info['reason'])}" if info.get("reason") else ""))
 
 
-AI_HE = {"claude": "קלוד", "codex": "קודקס", "copilot": "קופילוט", "gemini": "גמיני", "gemini_cli": "גמיני", "ollama": "אולמה מקומי",
-         "groq": "Groq", "cloudflare": "Cloudflare", "nvidia": "NVIDIA", "openrouter_free": "OpenRouter", "opencode": "OpenCode"}
+AI_HE = {"claude": "קלוד", "codex": "קודקס", "copilot": "קופילוט", "gemini": "גמיני", "gemini_cli": "גמיני CLI", "ollama": "אולמה מקומי",
+         "groq": "גרוק", "cloudflare": "קלאודפלייר", "nvidia": "אנבידיה", "openrouter_free": "אופןראוטר", "opencode": "אופנקוד"}
 
 
 def hm(minutes):
@@ -2154,6 +2154,12 @@ def switch_provider(name, model=None, chat=None):
         return f"⚪ {ps[name]['label']} לא מחובר: {c['detail']}. לא הוחלף." + tried_he(c.get("tried"))
     if not model and c.get("working") and c["working"] != ps[name].get("model"):
         model = c["working"]  # the default model is out of quota now: switch to the one that answered
+    if model and str(model).isdigit() and c.get("models"):  # owner 16.11 21:35: a model number, like the provider's number (/3 2)
+        i = int(model) - 1
+        if 0 <= i < len(c["models"]):
+            model = c["models"][i]
+        else:
+            return f"מספר המודל חייב להיות 1 עד {len(c['models'])} אצל {ps[name]['label']}."
     if model and c["models"] and model not in c["models"]:  # owner 16.11: the short name shown in the list (gpt-oss-20b) is accepted too
         short = [x for x in c["models"] if x.lower().split("/")[-1].split(":")[0] == model.lower().split("/")[-1].split(":")[0]]
         if len(short) == 1:
@@ -2250,7 +2256,7 @@ def ai_tag(model=None):
     kind, place = where_of(name, m)
     eng = getattr(_ctx, "engine_used", "claude")
     extra = (f" · מנוע {(ENGINES.get(eng) or {}).get('short', eng)}" if eng not in ("claude", "cli", "opencode") else "") + (f" · 🔁 {getattr(_ctx, 'failover_why', '') or 'מכסת Claude נגמרה'}, ולכן עונה {short}" if getattr(_ctx, "failover_used", False) else "")
-    return f"🧠 {short}" + (f" · {model_he(m)}" if m else "") + (f" · 🏠 מקומי, {place}" if kind == "local" else " · ☁️ מרוחק (ענן)") + extra + "\n"
+    return f"🧠 {short}" + (f" · {model_he(m)}" if m else "") + (f" · 🏠 {place}" if kind == "local" else " · ☁️ ענן") + extra + "\n"
 
 
 SPEED_HINT = {"claude": "⚡ שניות עד דקה (מנוי)", "gemini": "⚡ שניות · מכסה יומית נמוכה", "groq": "⚡ שניות · עד 8,000 טוקנים לדקה: לשיחות קצרות",
@@ -2360,7 +2366,7 @@ def ask_slow_approval(cid, chat, mid, src, eta):
     with adb() as db:
         db.execute("UPDATE commands SET status = 'waiting_approval' WHERE id = ?", (cid,))
     kv_set(K("pending_slow", chat), str(cid))
-    where = "🏠 מקומי, " + place if where_of(name, m)[0] == "local" else "☁️ מרוחק (ענן)"
+    where = "🏠 " + place if where_of(name, m)[0] == "local" else "☁️ ענן"
     reply(f"⏱ *הפעולה הזו צפויה לקחת כ-{max(1, round(secs / 60))} דקות* על {(providers().get(name) or {}).get('short') or name} · {model_he(m)} ({where}).\n"
           f"להמשיך? ענה *כן* להתחלה, *בטל* לביטול, או /מודל חינמי לבחירת בינה מהירה יותר (ואז שלח שוב).\n_(הערכה לפי הבינה והמודל הפעילים)_",
           quoted=mid if src == "wa" else None)
@@ -2425,23 +2431,66 @@ def versioning_mod():
     return mod
 
 
+def _model_words_line(ms, cap=6):
+    """The models of one provider, numbered like the providers are ('= 1) סונט 2) אופוס · עוד 2') — owner 16.11 21:35."""
+    ms = [str(m) for m in ms if m][:cap]
+    txt = " ".join(f"{i + 1}) {model_he(m.split('/')[-1].split(':')[0])}" for i, m in enumerate(ms))
+    return txt
+
+
+def _provider_row(k, cur, cm, ok=None, detail="", models=None):
+    """One provider in the /ספק list: number, Hebrew name, its models numbered after '=', 👉 on the one answering now."""
+    p = providers()[k]
+    icon = "🔀" if k == "auto" else "🏠" if provider_is_local(k) else "☁️"
+    if k == "auto":
+        body = "הסוכן בוחר לבד (מהזול ליקר)"
+    elif models is not None:
+        body = "= " + _model_words_line(models) if models else "= מביא מודל משלו"
+    else:
+        c = provider_check(k)
+        ms = [x for x in MODELS if x != "auto"] if k == "claude" else c["models"]
+        body = "= " + _model_words_line(ms) if ms else "= מביא מודל משלו"
+        ok, detail = c["ok"], c["detail"]
+    if k == cur and cm:
+        body += f" · עכשיו: {model_he(cm)}"
+    st = "" if ok is None else (" ✅" if ok else f" ⚪ · {str(detail)[:40]}")
+    return f"{'👉 ' if k == cur else ''}{icon} */{provider_number(k)}* *{AI_HE.get(k) or p.get('label') or k}* {body}{st}"
+
+
+def _peer_rows(peer_brief, cur, local):
+    """The laptop's own rows in the /ספק list, from its /brief; '..........' until it answers (owner 16.11 21:35)."""
+    out = []
+    for p in (peer_brief or {}).get("providers") or []:
+        k = p.get("key")
+        if not k or k == "auto" or (p.get("where") == "local") != local:
+            continue
+        out.append(f"{'👉 ' if k == cur else ''}{'🏠' if local else '☁️'} */{provider_number(k)}* *{AI_HE.get(k) or p.get('label') or k}* "
+                   + ("= " + _model_words_line(p.get("models") or []) if p.get("models") else "= מביא מודל משלו"))
+    return out or [".........."]
+
+
 def providers_text():
+    """Owner 16.11 21:35: the provider list as four host sections (remote / local × this computer / the laptop),
+    every provider numbered and every model numbered after '=' — switch with /N and /N M."""
     cur, cm = active_provider()
-    lines = ["*🔌 ספק הבינה של הגשר* (כל השיחות עוברות דרכו)"]
-    allp = providers()
-    names = [k for k in provider_order() if k in allp]
-    sections = ([("🔀 *אוטומטי*", ["auto"])] if "auto" in names else []) + split_by_place([k for k in names if k != "auto"])
-    for head, group in sections:  # owner 16.11: remote and local in separate, titled sections
-        lines += ["", head]
-        for k in group:
-            p, c = allp[k], provider_check(k)
-            icon = "🔀" if k == "auto" else "🏠" if provider_is_local(k) else "☁️"
-            lines.append(f"{'👉 ' if k == cur else ''}{icon} */{provider_number(k)}* *{p['label']}* ({k}) {'✅' if c['ok'] else '⚪'} {c['detail']}")
-            if k == cur and p["kind"] != "claude":
-                lines.append(f"   מודל: {cm or p.get('model') or '—'}")
-            lines.append(f"   _{p.get('how', '')}_")
-    words = [f"/{provider_number(k)}" for k in provider_order()]
-    lines += ["", "החלפה מהירה: / ומספר (" + " ".join(words) + "), או השם בעברית / באנגלית, עם רווחים או בלי · עם מודל: /ספק ollama <מודל> (הקבוצה הזו בלבד) · כל המחשב: /ספק מחשב <שם> · איפוס הקבוצה: /ספק כאן איפוס · מקרא גרפי בלוח: legend.html"]
+    allp, names = providers(), [k for k in provider_order() if k in providers()]
+    peer = (CFG.get("peers") or [None])[0]
+    peer_name = (peer or {}).get("name") or "הנייד"
+    peer_brief = None
+    if peer:
+        try:
+            peer_brief = peer_fetch(peer, timeout=8) or None
+        except Exception:
+            peer_brief = None
+    rem = ["auto" if "auto" in names else ""] + [k for k in names if k != "auto" and not provider_is_local(k)]
+    loc = [k for k in names if k != "auto" and provider_is_local(k)]
+    lines = ["*🔌 ספק הבינה של הגשר* (כל השיחות עוברות דרכו) · מודל של ספק: /N M"]
+    lines += ["", f"☁️ *מארח מרוחק · {machine_tag()}*"] + [_provider_row(k, cur, cm) for k in rem if k]
+    lines += ["", f"☁️ *מארח מרוחק · 💻 {peer_name}*"] + _peer_rows(peer_brief, cur, local=False)
+    lines += ["", f"🏠 *מארח מקומי · {machine_tag()}*"] + [_provider_row(k, cur, cm) for k in loc]
+    lines += ["", f"🏠 *מארח מקומי · 💻 {peer_name}*"] + _peer_rows(peer_brief, cur, local=True)
+    words = " ".join(f"/{provider_number(k)}" for k in provider_order())
+    lines += ["", f"החלפה: / ומספר ({words}) או השם · מודל: /N M (למשל /ספק 3 2) או /<שם מודל> · איפוס הקבוצה: /ספק כאן איפוס · כל המחשב: /ספק מחשב <שם> · בדיקת מענה: /בדוק מענה"]
     return "\n".join(lines)
 
 
@@ -3814,7 +3863,7 @@ def status_ai_info(model, chat, use_run_state=False):
         actual_model = actual_model or model
     kind, place = where_of(name, actual_model)
     short = AI_HE.get(name) or p.get("short") or name
-    location = f"🏠 מקומי, {place}" if kind == "local" else "☁️ מרוחק (ענן)"
+    location = f"🏠 {place}" if kind == "local" else "☁️ ענן"
     return short, actual_model, location
 
 
@@ -4222,7 +4271,30 @@ def get_override(chat=None):
     return node["model"]
 
 
-MODEL_HE = {"opus": "אופוס", "sonnet": "סונט", "haiku": "הייקו", "fable": "פייבל"}
+MODEL_HE = {"sonnet[1m]": "סונט 1M", "claude-haiku-5-5": "הייקו 5.5", "opusplan": "אופוס+סונט",
+            "opus": "אופוס", "sonnet": "סונט", "haiku": "הייקו", "fable": "פייבל",
+            "gemini-flash-lite-latest": "ג'מיני פלאש לייט", "gemini-3-flash-preview": "ג'מיני 3 פלאש", "gemini-flash-latest": "ג'מיני פלאש",
+            "gpt-oss-120b": "GPT OSS 120B", "gpt-oss-20b": "GPT OSS 20B", "qwen3.8-27b": "קוון 3.8 27B",
+            "nemotron-3-ultra-550b-a55b": "נמוטרון 3 אולטרה", "nemotron-3.5-super-vl": "נמוטרון 3.5 סופר VL", "nemotron-3.5-lightning": "נמוטרון 3.5 לייטנינג",
+            "gemma-4-31b-it": "ג'מה 4 31B", "gemma-4-26b-a4b-it": "ג'מה 4 26B", "ernie-5.5-flash-preview": "ארני 5.5 פלאש", "ling-3.2-flash": "לינג 3.2 פלאש",
+            "minimax-m3.1-flash": "מינימקס M3.1 פלאש", "llama-3.3-70b-instruct-fp8-fast": "לאמה 3.3 70B", "qwen2.5-coder-32b-instruct": "קוון 2.5 קודר 32B",
+            "deepseek-v4.1-flash": "דיפסיק V4.1 פלאש", "glm-5.3-flash": "GLM 5.3 פלאש", "big-pickle": "ביג פיקל", "longcat-2.5": "לונגקאט 2.5",
+            "bridge-qwen3-4b": "גשר קוון 3 4B", "dicta": "דיקטה", "aya": "איה", "commandr": "קומנדר", "qwen-tiny": "קוון טייני"}
+
+
+def resolve_model_word(word):
+    """Owner 16.11 21:35: (provider, model) for a bare model word such as /לינג or /dicta — the provider that offers it, else None."""
+    w = (word or "").lower().strip()
+    if not w:
+        return None
+    for name, p in providers().items():
+        for m in (p.get("models") or []) + ([p.get("model")] if p.get("model") else []):
+            if w == str(m).lower() or w == str(m).lower().split("/")[-1].split(":")[0]:
+                return name, m
+        for k, v in (p.get("model_aliases") or {}).items():
+            if w == str(k).lower():
+                return name, v
+    return None
 _rename_lock = threading.Lock()
 
 
@@ -4633,7 +4705,8 @@ def commands_index():
     out += ["", "🔀 */אוטו* הגשר בוחר לבד לפי היומן",
             "", "*🧩 מודלים:* /ספק (הרשימה המלאה) · /N M (מודל M של בינה N) · /מודל (מודלי Claude) · /sonnet /opus /haiku · /מודל חינמי",
             "*🔎 בדיקות:* /זמינות (זמינות) · /בדוק מענה (תשובה אמיתית מכולן) · /יומן (ציונים לפי ימים) · /מצב <בינה>",
-            "*⚙️ שליטה:* /ספק כאן איפוס · /ספק מחשב <שם> · /מנוע · /הפעל מחדש · /סשן חדש · /תקרה · /בריאות · /מחכים",
+            "*⚙️ שליטה:* /ספק כאן איפוס · /ספק מחשב <שם> · /מנוע · /הפעל מחדש · /סשן חדש · /תקרה (שימוש) · /בריאות · /מחכים",
+            "*🖥️ מחשבים וחשבונות:* /חשבונות · /גיבוי (מעבר בין הנייח לנייד) · /גרסה · /🛞 (הקראה)",
             "*📑 אחר:* /חפש <מלל> · /כלל בסיס <כלל> · /כרום · /תוכן (זה)"]
     return "\n".join(out)
 
@@ -4745,15 +4818,26 @@ def owner_command(text, chat=None):
     m2 = re.match(r"^/\s*([^\s/]+)\s+([^\s/]+)\s*$", text.strip())
     if not m and m2 and resolve_ai_word(m2.group(1) + m2.group(2)):
         m = m2  # owner 16.11: "/open router", "/gemini cli", "/גמיני סיאלאיי": a name written with a space
+    if m2 and m2.group(1).isdigit() and m2.group(2).isdigit():  # owner 16.11 21:35: /3 2 = provider 3, its model 2
+        order = provider_order()
+        if 1 <= int(m2.group(1)) <= len(order):
+            return switch_provider(order[int(m2.group(1)) - 1], m2.group(2), chat=cur_chat())
     hit = resolve_ai_word(m.group(1) + (m.group(2) if m is m2 else "")) if m else None
     fz = fuzzy_ai_word(m.group(1)) if (m and m is not m2 and not hit) else None
     if hit or fz:  # owner 13.11: /דיפסיק /openai /qwencode ... switch the bridge's provider (and model) in one word
         name, model = hit or (fz, None)
         note = "" if hit else f"🔎 הבנתי /{m.group(1)} כ-*{prov_short(fz)}* (/{provider_number(fz)}).\n"
         return note + switch_provider(name, model, chat=cur_chat())  # owner 15.11: the one-word switch is per group too
-    m = re.match(r"^/\s*(sonnet|opus|haiku|fable|סונט|אופוס|הייקו|חייקו|פייבל)\s*$", text.strip(), re.I)
-    if m:  # owner 16.11 21:38: /sonnet = /מודל sonnet (the model of this conversation)
-        text = "/מודל " + m.group(1).lower()
+    model_words = [w for w in list(MODEL_HE) + list(MODEL_HE.values()) if " " not in w and "[" not in w]
+    m = re.match(r"^/\s*(" + "|".join(re.escape(w) for w in sorted(set(model_words), key=len, reverse=True)) + r")\s*$", text.strip(), re.I)
+    if m:  # owner 16.11 21:38 + 21:35: /<model word> — a Claude model goes to /מודל, any other provider's model switches to it
+        w = m.group(1).lower()
+        if w in ("sonnet", "opus", "haiku", "fable", "סונט", "אופוס", "הייקו", "חייקו", "פייבל"):
+            text = "/מודל " + w
+        else:
+            hitm = resolve_model_word(m.group(1))
+            if hitm:
+                return switch_provider(hitm[0], hitm[1], chat=cur_chat())
     m = re.match(r"^/\s*(מודלים|מודל|models|model|סשן|session)\s*(.*)$", text.strip(), re.S)
     if not m:
         return None
