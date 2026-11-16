@@ -1077,7 +1077,7 @@ def _note_answer(name, seconds):
     try:
         latency_add(name or "claude", seconds)
         quota_note(name or "claude")
-        ai_state_set(name or "claude", True)
+        ai_state_set(name or "claude", True, seconds=seconds, model=getattr(_ctx, "force_model", None) or (providers().get(name or "claude") or {}).get("model") or "")
     except Exception as e:
         log("note answer failed", e)
 
@@ -1250,7 +1250,7 @@ def provider_probe(name, timeout=90, big=False):
         res["reason"] = (classify_down(raw) or ("", 0))[0]
         res["he"] = error_line_he(raw, name)
     if res["answered"] is not None:
-        ai_state_set(name, res["answered"], res["reason"] or "error", raw)
+        ai_state_set(name, res["answered"], res["reason"] or "error", raw, seconds=res["seconds"], model=p.get("model") or "", src="probe")
     return res
 
 
@@ -1536,6 +1536,7 @@ def auto_pick(skip=(), light=False):
             pen += 5000
         if light and (p.get("cost") or "") != "חינם":
             pen += 2000
+        pen += journal_penalty(n)  # owner 16.11 21:55: by the record of the last days (answers / speed / consistency), not only the last hour
         med = latency_median(n)
         if med is not None:  # owner 16.11: a provider measured slow in the last hour waits behind the healthy ones
             pen += 0 if med <= 15 else 200 if med <= 45 else 500
@@ -1623,10 +1624,88 @@ def error_code(raw):
     return int(m.group(1)) if m else None
 
 
-def ai_state_set(name, ok, reason="", raw=""):
+def journal_add(name, ok, reason="", code=None, seconds=None, model="", src="run"):
+    """Owner 16.11 21:55: the answer journal (agent.db ai_journal): every answer or failure of every AI, kept for good, so the
+    pick of the AI to use is by weeks of measurement (stable / fast / consistent) and not by the last hour only. src: run | probe."""
+    try:
+        with adb() as db:
+            db.execute("CREATE TABLE IF NOT EXISTS ai_journal (at TEXT, provider TEXT, model TEXT, ok INTEGER, reason TEXT, code INTEGER, "
+                       "seconds REAL, src TEXT, host TEXT)")
+            db.execute("INSERT INTO ai_journal VALUES (?,?,?,?,?,?,?,?,?)",
+                       (dt.datetime.now().isoformat(timespec="seconds"), name, model or "", 1 if ok else 0, reason or "", code,
+                        round(float(seconds), 1) if seconds else None, src, CFG.get("host_label") or socket.gethostname()))
+    except Exception as e:
+        log("journal_add failed", e)
+
+
+def journal_rows(name, days=7, src=None, limit=400):
+    try:
+        cut = (dt.datetime.now() - dt.timedelta(days=days)).isoformat(timespec="seconds")
+        with adb() as db:
+            db.execute("CREATE TABLE IF NOT EXISTS ai_journal (at TEXT, provider TEXT, model TEXT, ok INTEGER, reason TEXT, code INTEGER, "
+                       "seconds REAL, src TEXT, host TEXT)")
+            q = "SELECT at, ok, seconds, reason, src, model FROM ai_journal WHERE provider = ? AND at >= ?" + (" AND src = ?" if src else "")
+            return db.execute(q + " ORDER BY at DESC LIMIT ?", (name, cut) + ((src,) if src else ()) + (limit,)).fetchall()
+    except Exception:
+        return []
+
+
+def journal_stats(name, days=7):
+    """{"n", "rate" (share answered), "med" (median seconds of answers), "spread" (p90 / median: 1 = consistent), "score" (0-100)} for an
+    AI over the last days, from the journal; None when there is too little data to judge (fewer than 5 records)."""
+    rows = journal_rows(name, days)
+    if len(rows) < 5:
+        return None
+    ok = [r for r in rows if r[1]]
+    rate = len(ok) / len(rows)
+    secs = sorted(r[2] for r in ok if r[2])
+    med = secs[len(secs) // 2] if secs else None
+    spread = (secs[int(len(secs) * 0.9)] / med) if secs and med else 1.0
+    speed = 1.0 if med is None or med <= 10 else 0.7 if med <= 30 else 0.4 if med <= 60 else 0.1
+    steady = 1.0 if spread <= 2 else 0.7 if spread <= 4 else 0.4
+    return {"n": len(rows), "rate": rate, "med": med, "spread": spread, "score": round(100 * (0.6 * rate + 0.25 * speed + 0.15 * steady))}
+
+
+def journal_penalty(name):
+    """Added to the auto pick: an AI with a worse record over the days (fails, slow, erratic) waits behind a steadier one (0-450)."""
+    st = journal_stats(name)
+    return 0 if not st else int((100 - st["score"]) * 4.5)
+
+
+def journal_real_recent(name, minutes=30, last=3):
+    """(failed, total) among the last real runs (not probes) in the last minutes: a probe can pass where the real message does not."""
+    cut = (dt.datetime.now() - dt.timedelta(minutes=minutes)).isoformat(timespec="seconds")
+    rows = [r for r in journal_rows(name, 1, src="run", limit=last) if r[0] >= cut]
+    return sum(1 for r in rows if not r[1]), len(rows)
+
+
+def journal_report(days=7):
+    """/יומן: the record of every AI over the days, best first."""
+    rows = []
+    for n in provider_order():
+        if n == "auto":
+            continue
+        st = journal_stats(n, days)
+        rows.append((st["score"] if st else -1, n, st))
+    rows.sort(key=lambda r: -r[0])
+    out = [f"📒 *יומן מענה של הבינות, {days} ימים* (ציון 0-100: 60% שיעור מענה, 25% מהירות, 15% עקביות; הבחירה האוטומטית משתמשת בו)"]
+    for head, group in split_by_place([n for _, n, _ in rows]):
+        out += ["", head]
+        for _, n, st in [r for r in rows if r[1] in group]:
+            if not st:
+                out.append(f"• {prov_short(n)}: עוד אין מספיק נתונים")
+            else:
+                out.append(f"• {prov_short(n)}: *{st['score']}* · ענה {round(st['rate'] * 100)}% מ-{st['n']} · חציון {st['med'] or '—'} שנ׳ · "
+                           + ("עקבי" if st["spread"] <= 2 else "מתנדנד"))
+    return "\n".join(out)
+
+
+def ai_state_set(name, ok, reason="", raw="", seconds=None, model="", src="run"):
     """Owner 16.11: what the bridge last saw of each AI (answered / failed and why), so the switch message can group them truthfully."""
     if not name:
         return
+    if src != "state":
+        journal_add(name, ok, reason, error_code(raw), seconds, model, src)
     try:
         kv_set("aistate:" + name, json.dumps({"ok": bool(ok), "at": dt.datetime.now().isoformat(timespec="seconds"), "reason": reason or "",
                                               "code": error_code(raw), "hint": retry_hint_he(raw)}, ensure_ascii=False))
@@ -2086,7 +2165,12 @@ def switch_provider(name, model=None, chat=None):
     if pr["answered"] is False:
         return (f"⛔ *{prov_short(name)}* מחובר אבל לא ענה עכשיו בבדיקה: {pr['he'] or 'לא עונה'}. לא הוחלף.\n\n"
                 + "\n".join(ai_status_lines(skip=(name,))) + "\n\nבחר אחרת עם / ומספר.")
-    answered = f"\n✅ ענה עכשיו בבדיקה תוך {pr['seconds']:g} שניות, אין צורך לשאול \"זמין?\"." if pr["answered"] else ""
+    bad, tot = journal_real_recent(name)
+    if bad >= 2 or (tot and bad == tot and bad >= 1 and pr["answered"] is not True):
+        return (f"⛔ *{prov_short(name)}* עבר בדיקה קצרה, אבל בהודעות אמיתיות נכשל {bad} מתוך {tot} הפעמים האחרונות (30 דקות אחרונות). "
+                "לא הוחלף.\n\n" + "\n".join(ai_status_lines(skip=(name,))) + "\n\nבחר אחרת עם / ומספר. ציוני הבינות: /יומן")
+    warn = f"\n⚠️ בהודעה האמיתית האחרונה שלו היה כשל ({bad} מתוך {tot})." if bad else ""
+    answered = warn + f"\n✅ ענה עכשיו בבדיקה תוך {pr['seconds']:g} שניות, אין צורך לשאול \"זמין?\"." if pr["answered"] else ""
     set_provider(name, model, chat=chat)
     _, cm = active_provider(chat)
     scope = "בקבוצה הזו" if chat else "הגשר"
@@ -4540,12 +4624,30 @@ def search_messages(q, limit=15):
     return "\n".join(out)
 
 
+def commands_index():
+    """Owner 16.11 21:55: the table of contents — every numbered AI with its switch words, split remote / local, and the other commands."""
+    out = ["📑 *תוכן עניינים: פקודות הגשר*", "", "*🔢 בינות (מספר / שם בעברית / שם באנגלית):*"]
+    for head, group in split_by_place([n for n in provider_order() if n != "auto"]):
+        out.append(head)
+        out += [f"  {provider_line(n)}" for n in group]
+    out += ["", "🔀 */אוטו* הגשר בוחר לבד לפי היומן",
+            "", "*🧩 מודלים:* /ספק (הרשימה המלאה) · /N M (מודל M של בינה N) · /מודל (מודלי Claude) · /sonnet /opus /haiku · /מודל חינמי",
+            "*🔎 בדיקות:* /זמינות (זמינות) · /בדוק מענה (תשובה אמיתית מכולן) · /יומן (ציונים לפי ימים) · /מצב <בינה>",
+            "*⚙️ שליטה:* /ספק כאן איפוס · /ספק מחשב <שם> · /מנוע · /הפעל מחדש · /סשן חדש · /תקרה · /בריאות · /מחכים",
+            "*📑 אחר:* /חפש <מלל> · /כלל בסיס <כלל> · /כרום · /תוכן (זה)"]
+    return "\n".join(out)
+
+
 def owner_command(text, chat=None):
     """Slash commands answered locally (no Claude run, no cost), for this conversation. Returns reply text or None."""
     if re.match(r"^/\s*(בדוק\s+זמינות|זמינות)\s*$", text.strip()):
         return engine_status_report(live=False)
     if re.match(r"^/\s*(בדוק\s+מענה|בדיקת\s+בינות|מענה)\s*$", text.strip()):  # owner 16.11: availability + a real answer from every AI
         return probe_report(live=True)
+    if re.match(r"^/\s*(יומן|יומן בינות|journal)\s*$", text.strip()):  # owner 16.11 21:55: the record of every AI
+        return journal_report()
+    if re.match(r"^/\s*(תוכן|תוכן עניינים|פקודות|index|commands)\s*$", text.strip()):  # owner 16.11 21:55: table of contents of the numbered commands
+        return commands_index()
     if re.match(r"^/(מחכים|waiting)\s*$", text.strip()):
         return waiting_now()
     if re.match(r"^/\s*(בריאות|health)\s*$", text.strip()):
@@ -5040,7 +5142,7 @@ def run_command(row):
         kv_set(K("last_model", chat), model)
         if answer:  # owner 14.11: the group name follows the AI that really answered (auto / failover), not only the one chosen
             used = getattr(_ctx, "provider_used", None) or active_provider()[0]
-            ai_state_set(used, True)
+            ai_state_set(used, True, src="state")  # (already in the journal: _note_answer)
             kv_set(K("ai_label", chat), f"{group_label(model)}\t{active_provider()}" if used != "claude" else "")
             threading.Thread(target=sync_group_name, args=(chat, model), daemon=True).start()
         on_claude = (getattr(_ctx, "provider_used", None) or active_provider(chat)[0]) == "claude"  # owner 16.11: Claude model tips mean nothing on another AI

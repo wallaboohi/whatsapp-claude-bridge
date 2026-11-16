@@ -2773,3 +2773,33 @@ def test_model_words_work_as_direct_commands_and_short_model_names_and_big_probe
     monkeypatch.setattr(mod, "provider_probe", lambda n, timeout=90, big=False: {"answered": True, "seconds": 1, "he": ""})
     mod.switch_provider("groq", "gpt-oss-20b")
     assert sets == ["openai/gpt-oss-20b"]
+
+
+def test_answer_journal_ranks_stable_fast_ai_and_switch_sees_real_failures(agent, monkeypatch):
+    """Owner 16.11 21:55: a journal of every answer / failure of every AI; the pick uses the record of the days; the switch check
+    also looks at real runs (a probe can pass where the real message fails: Groq)."""
+    mod, _ = agent
+    for _ in range(8):
+        mod.ai_state_set("groq", True, seconds=3, src="run")
+    for _ in range(8):
+        mod.ai_state_set("nvidia", False, "rate", "HTTP 429", src="run")
+    mod.ai_state_set("nvidia", True, seconds=70, src="run")
+    assert mod.journal_stats("groq")["score"] > 90 and mod.journal_stats("nvidia")["score"] < 40
+    assert mod.journal_penalty("groq") < mod.journal_penalty("nvidia")
+    assert mod.journal_stats("copilot") is None and mod.journal_penalty("copilot") == 0  # too little data: no penalty
+    mod.ai_state_set("groq", True, src="state")  # a state-only note is not a record
+    assert len(mod.journal_rows("groq")) == 8
+    # the report and the table of contents
+    rep = mod.journal_report()
+    assert rep.index("Groq") < rep.index("NVIDIA") and "📒" in rep
+    toc = mod.owner_command("/תוכן")
+    assert "/1" in toc and mod.REMOTE_HEAD in toc and "/יומן" in toc and mod.owner_command("/פקודות") == toc
+    assert mod.owner_command("/יומן").startswith("📒")
+    # a probe that passes does not hide two real failures in a row
+    monkeypatch.setattr(mod, "providers", lambda: {"nvidia": {"label": "NVIDIA", "short": "NVIDIA", "model": "a"}})
+    monkeypatch.setattr(mod, "provider_check", lambda n, *a: {"ok": True, "detail": "", "models": []})
+    monkeypatch.setattr(mod, "provider_probe", lambda n, timeout=90, big=False: {"answered": True, "seconds": 1, "he": ""})
+    sets = []
+    monkeypatch.setattr(mod, "set_provider", lambda *a, **k: sets.append(a))
+    out = mod.switch_provider("nvidia")
+    assert not sets and "בהודעות אמיתיות נכשל" in out
