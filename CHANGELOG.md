@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.1.10 — 2026-11-16
+בדיקת זמינות וסטטוס מנועים פעם בשעה ובפקודה /בדוק זמינות; בדיקת תגובה יומית לספקים תומכים; בדיקת לחיצת יד לשרתי MCP והעברת קריאות WhatsApp דרך API מבוקר.
+
 ## 1.1.9 — 2026-11-16
 - peer_sync: derive paths from the home directory (release scan flagged hardcoded paths); owner 16.11
 - Chrome keepalive opens a minimized window (no-startup-window made Chrome exit); owner 16.11

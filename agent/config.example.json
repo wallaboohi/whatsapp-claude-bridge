@@ -12,6 +12,7 @@
   "backup_time": "03:00",
   "claude_model": "sonnet",
   "light_model": "haiku",
+  "light_routing": true,
   "daily_budget_usd": 20,
   "disconnect_alert_minutes": 10,
   "transcribe": true,

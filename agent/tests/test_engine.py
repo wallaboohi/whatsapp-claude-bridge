@@ -90,7 +90,8 @@ def test_claude_failing_mid_run_moves_to_the_failover_and_then_to_the_next_provi
         return {"result": "ok"}
     monkeypatch.setattr(mod, "_run_claude", fake)
     assert mod._run_auto("p", None, None, 5) == {"result": "ok"}
-    assert calls == [None, "groq", "gemini"] and mod.provider_cooled("groq")
+    # owner 16.11: groq's first two models are tried before the switch to gemini
+    assert calls == [None, "groq", "groq", "groq", "gemini"] and mod.provider_cooled("groq")
 
 
 def test_guests_and_restricted_runs_keep_claude_code(agent, monkeypatch, tmp_path):
