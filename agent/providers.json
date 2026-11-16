@@ -39,7 +39,26 @@
    "mistral": "mistral:7b",
    "phi": "phi4-mini",
    "r1": "deepseek-r1:14b",
-   "deepseek-coder": "deepseek-coder-v2:16b"
+   "deepseek-coder": "deepseek-coder-v2:16b",
+   "dicta": "bridge-dictalm2:latest",
+   "דיקטה": "bridge-dictalm2:latest",
+   "aya": "bridge-aya-expanse-8b:latest",
+   "commandr": "bridge-command-r7b:latest",
+   "qwen-tiny": "bridge-qwen3-0.6b:latest",
+   "qwen-small": "bridge-qwen3-1.7b:latest",
+   "gemma-tiny": "bridge-gemma3-1b:latest",
+   "gemma-e2b": "bridge-gemma3n-e2b:latest",
+   "r1-small": "bridge-deepseek-r1-1.5b:latest",
+   "llama-tiny": "bridge-llama3.2-1b:latest",
+   "llama-vision": "bridge-llama3.2-vision-11b:latest",
+   "minicpm": "bridge-minicpm-v-8b:latest",
+   "qwen-vl": "bridge-qwen3-vl-8b:latest",
+   "granite": "bridge-granite3.3-8b:latest",
+   "olmo": "bridge-olmo2-13b:latest",
+   "cogito": "bridge-cogito-14b:latest",
+   "hermes": "bridge-hermes3-8b:latest",
+   "magistral": "bridge-magistral-24b:latest",
+   "ministral": "bridge-ministral-8b:latest"
   },
   "cost": "מקומי",
   "where": "local"
@@ -52,6 +71,8 @@
   "token": "local-proxy",
   "key_file": "gemini.key",
   "model": "gemini-flash-lite-latest",
+  "daily_limit": 200,
+  "daily_limit_note": "הערכה: המכסה היומית של השכבה החינמית נמוכה ומשתנה. הגשר יורד בדירוג ב-80% ניצול ולא מחכה שתיגמר.",
   "models": [
    "gemini-flash-lite-latest",
    "gemini-3-flash-preview",
@@ -77,6 +98,8 @@
   "token": "local-proxy",
   "key_file": "groq.key",
   "model": "openai/gpt-oss-120b",
+  "daily_limit": 1000,
+  "daily_limit_note": "הערכה: המכסה החינמית היומית לכל מודל. הגשר יורד בדירוג ב-80% ניצול.",
   "models": [
    "openai/gpt-oss-120b",
    "openai/gpt-oss-20b",
@@ -99,6 +122,8 @@
   "base_url": "https://openrouter.ai/api",
   "key_file": "openrouter.key",
   "model": "inclusionai/ling-3.2-flash:free",
+  "daily_limit": 50,
+  "daily_limit_note": "50 בקשות ביום בשכבה החינמית (1,000 אחרי רכישת קרדיט). הגשר יורד בדירוג ב-80% ניצול.",
   "models": [
    "nvidia/nemotron-3-ultra-550b-a55b:free",
    "nvidia/nemotron-3.5-super-vl:free",
@@ -144,7 +169,7 @@
    "openrouter_free",
    "nvidia"
   ],
-  "how": "הגשר בוחר לבד את הספק המהיר ביותר שזמין: קודם המנוי של Claude, אחריו ספקים חינמיים מהמהיר לאיטי (Cloudflare, Groq, Gemini, כלי שורת הפקודה, OpenRouter, ובסוף NVIDIA). כשספק נגמרה לו המכסה, אין לו מפתח או שהוא לא מגיב, הגשר עובר לבא בתור ומנסה אותו שוב אחרי זמן המתנה. מודלים מקומיים (Ollama) לא בסולם כי הם איטיים מדי לעבודה עם כלים על המעבד: עוברים אליהם ידנית, למשל /qwencode. הסדר ב-providers.json תחת auto.ladder או config auto_ladder."
+  "how": "הגשר בוחר לבד את הספק שכדאי שיענה (יקיר 16.11): הראשון שמוכן לפי הסולם, אבל מדורג לפי מדידה — חציון זמן התשובה של השעה האחרונה (kv lat:<ספק>), וספק שהגשר ראה אותו נכשל לאחרונה, ספק שניצל 80% מהמכסה היומית (daily_limit), ספק איטי שנדחף אחורה (soft) וספק מאחורי שרת תרגום שנופל — כולם ממתינים מאחורי הבריאים. בהודעה קצרה (light_routing) הבחירה מעדיפה ספק חינמי וכך נשמר המנוי של Claude לעבודה אמיתית. כשספק נגמרה לו המכסה, אין לו מפתח או שהוא לא מגיב, הגשר מנסה קודם את המודל הבא של אותו ספק, ורק אחר כך עובר לבא בתור ומנסה אותו שוב אחרי זמן ההמתנה (לפי פתיחת המכסה שהשרת מדווח). מודלים מקומיים (Ollama) לא בסולם כי הם איטיים מדי לעבודה עם כלים על המעבד: עוברים אליהם ידנית, למשל /qwencode. הסדר ב-providers.json תחת auto.ladder או config auto_ladder."
  },
  "nvidia": {
   "label": "NVIDIA NIM · חינמי (דרך שרת התרגום)",
@@ -154,6 +179,8 @@
   "token": "local-proxy",
   "key_file": "nvidia.key",
   "model": "minimaxai/minimax-m3.1-flash",
+  "daily_limit": 500,
+  "daily_limit_note": "הערכה: המכסה החינמית היא כ-40 בקשות בדקה; היומית לא פורסמה. הגשר יורד בדירוג ב-80% ניצול.",
   "cost": "חינם",
   "upstream": {
    "base": "https://integrate.api.nvidia.com/v1"
