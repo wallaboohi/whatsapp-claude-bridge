@@ -1612,6 +1612,125 @@ def test_failover_auto_takes_over_without_asking(agent, monkeypatch):
     assert acted == ["לפטופ"] and said and "לאישור" not in said[0]
 
 
+def test_backup_answers_the_hosts_conversations_only_while_holding_its_work(agent, monkeypatch):
+    mod, _ = agent  # owner 16.11: the desktop hosts, the laptop takes over its conversations only while it holds its work
+    g = "120363499999@g.us"
+    open(mod.GROUPS_FILE, "w", encoding="utf-8").write(json.dumps({g: {"name": "x", "host": "HOST-PC-A"}}))
+    mod.CFG["host_label"] = "LAPTOP-X"
+    mod.CFG["failover"] = {"for": "נייח", "plugins": ["x.py"], "host": "HOST-PC-A", "auto": True}
+    assert not mod.serves_here(g)
+    for state, serves in (("asked", False), ("active", True), ("releasing", True), ("idle", False)):
+        mod.failover_save("נייח", {"state": state})
+        assert mod.serves_here(g) is serves, state
+    mod.CFG["failover"]["conversations"] = False
+    mod.failover_save("נייח", {"state": "active"})
+    assert not mod.serves_here(g), "automations only"
+    # the desktop's side: its own group waits while the backup still holds its work
+    mod.CFG.pop("failover")
+    mod.CFG["host_label"] = "HOST-PC-A"
+    assert mod.serves_here(g)
+    mod._conv_held[0] = True
+    try:
+        assert not mod.serves_here(g)
+    finally:
+        mod._conv_held[0] = False
+
+
+def test_replay_answers_only_messages_nobody_answered(agent, monkeypatch):
+    mod, db = agent
+    g = "120363499999@g.us"
+    rows = [("m1", "2026-11-16 10:00:00+02:00", "שאלה ראשונה"), ("a1", "2026-11-16 10:01:00+02:00", "🤖 _🧠 Claude_ תשובה"),
+            ("m2", "2026-11-16 10:05:00+02:00", "שאלה שנייה"), ("m3", "2026-11-16 10:06:00+02:00", "שאלה שלישית"),
+            ("old", "2026-11-16 09:00:00+02:00", "לפני ההפסקה")]
+    for mid, ts, text in rows:
+        db.execute("INSERT INTO messages VALUES (?, ?, 'me', ?, ?, 1, '', '')", (mid, g, text, ts))
+    db.commit()
+    done = []
+    monkeypatch.setattr(mod, "handle", lambda r: done.append(r[0]))
+    since = mod.dt.datetime.fromisoformat("2026-11-16T09:30:00+02:00")
+    assert mod.replay_unanswered([g], since) == 2 and done == ["m2", "m3"], "m1 was answered, the old one is before the outage"
+    assert mod.replay_unanswered([g], since) == 0 and done == ["m2", "m3"], "never twice"
+
+
+def test_failover_carries_reminders_and_returns_changed_files(agent, tmp_path, monkeypatch):
+    mod, _ = agent
+    peer, peer_root, sent, calls = _fo_setup(mod, tmp_path, monkeypatch)
+    pdb = sqlite3.connect(peer_root / "agent" / "agent.db")
+    pdb.execute("CREATE TABLE reminders (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT DEFAULT 'time', text TEXT, due TEXT, "
+                "chat_jid TEXT, ref_ts TEXT, status TEXT DEFAULT 'active', created TEXT, fired TEXT)")
+    pdb.execute("INSERT INTO reminders (id, text, due, chat_jid, status, created) VALUES (7, 'להתקשר לדולב', '2026-11-16 15:00', 'g', 'active', '2026-11-16T08:00:00')")
+    pdb.execute("INSERT INTO reminders (id, text, due, chat_jid, status, created) VALUES (8, 'ישנה', '2026-11-15 15:00', 'g', 'done', '2026-11-15T08:00:00')")
+    pdb.commit()
+    pdb.close()
+    data = tmp_path / "data"
+    data.mkdir()
+    state_db = data / "segment_d.db"
+    x = sqlite3.connect(state_db)
+    x.execute("CREATE TABLE day_summary (d TEXT)")
+    x.execute("INSERT INTO day_summary VALUES ('15.11')")
+    x.commit()
+    x.close()
+    mod.CFG["failover"]["mirror"] = [str(state_db).replace("\\", "/")]
+    mod.CFG["failover"]["auto"] = True
+    monkeypatch.setattr(mod, "failover_conversations", lambda fc, st: None)
+    mod.failover_tick(peer, "לפטופ", {})  # 1. peer up: snapshot (the live database is copied safely)
+    snap = mod._fo_snapshot("לפטופ")
+    assert [r["id"] for r in snap["reminders"]] == [7], "only pending reminders"
+    off = {"off_since": (mod.dt.datetime.now() - mod.dt.timedelta(minutes=12)).isoformat(timespec="seconds")}
+    mod.failover_tick(peer, "לפטופ", off)  # 2. down: automatic takeover, its reminder is here
+    assert mod.failover_state("לפטופ")["state"] == "active"
+    with mod.adb() as db:
+        assert db.execute("SELECT text, status FROM reminders").fetchall() == [("להתקשר לדולב", "active")]
+        db.execute("UPDATE reminders SET status = 'done', fired = '2026-11-16 15:00'")
+        db.execute("INSERT INTO reminders (text, due, chat_jid, status, created) VALUES ('חדשה', '2026-11-17 08:00', 'g', 'active', ?)",
+                   (mod.dt.datetime.now().isoformat(timespec="seconds"),))
+    mod.failover_tick(peer, "לפטופ", off)
+    assert sum(1 for _ in mod.adb().execute("SELECT 1 FROM reminders")) == 2, "imported once"
+    time.sleep(1.1)
+    x = sqlite3.connect(state_db)  # 3. work done here while the peer is off
+    x.execute("INSERT INTO day_summary VALUES ('16.11')")
+    x.commit()
+    x.close()
+    mod.failover_tick(peer, "לפטופ", {})  # 4. back: release, then the hand-back from the new process
+    mod._failover_loaded.clear()
+    mod.failover_tick(peer, "לפטופ", {})
+    assert mod.failover_state("לפטופ")["state"] == "idle"
+    p = sqlite3.connect(peer_root / "agent" / "agent.db")
+    got = p.execute("SELECT id, text, status FROM reminders ORDER BY id").fetchall()
+    p.close()
+    assert got[0] == (7, "להתקשר לדולב", "done") and got[1] == (8, "ישנה", "done") and got[2][1:] == ("חדשה", "active")
+    with mod.adb() as db:
+        assert db.execute("SELECT status FROM reminders WHERE text = 'חדשה'").fetchone()[0] == "moved", "fires there, not here too"
+    assert list(data.glob("segment_d.db.pre-failover-*")), "the replaced version is kept"
+    assert "הוחזרו אליו 1 קבצים" in sent[-1][1] and "תזכורות" in sent[-1][1]
+
+
+def test_backup_pulls_the_hosts_code_fast_forward_only(agent, tmp_path):
+    mod, _ = agent
+    import subprocess as sp
+    git = lambda cwd, *a: sp.run(["git", "-C", str(cwd), "-c", "user.email=t@t", "-c", "user.name=t", *a], capture_output=True, text=True)
+    host, backup = tmp_path / "host", tmp_path / "backup"
+    host.mkdir()
+    git(host, "init", "-q", "-b", "master")
+    (host / "auto.py").write_text("v1", encoding="utf-8")
+    (host / "data.json").write_text("{}", encoding="utf-8")
+    git(host, "add", ".")
+    git(host, "commit", "-q", "-m", "1")
+    sp.run(["git", "clone", "-q", str(host), str(backup)], capture_output=True)
+    (host / "auto.py").write_text("v2", encoding="utf-8")
+    (host / "data.json").write_text('{"a": 1}', encoding="utf-8")
+    git(host, "commit", "-q", "-am", "2")
+    (backup / "data.json").write_text('{"live": 1}', encoding="utf-8")  # a mirrored data file, changed here
+    fc = {"mirror": [str(backup / "data.json")], "git_pull": [{"path": str(backup), "remote": str(host), "branch": "master"}]}
+    assert mod.failover_code_pull(fc) == []
+    assert (backup / "auto.py").read_text(encoding="utf-8") == "v2", "same code as the host"
+    (host / "auto.py").write_text("v3", encoding="utf-8")
+    git(host, "commit", "-q", "-am", "3")
+    (backup / "auto.py").write_text("my edit", encoding="utf-8")  # a real local edit is never overwritten
+    probs = mod.failover_code_pull(fc)
+    assert len(probs) == 1 and "auto.py" in probs[0] and (backup / "auto.py").read_text(encoding="utf-8") == "my edit"
+
+
 def test_haiku_hebrew_aliases(agent, monkeypatch):
     mod, _ = agent
     monkeypatch.setattr(mod.threading, "Thread", lambda *a, **k: type("T", (), {"start": lambda self: None})())

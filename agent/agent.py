@@ -814,10 +814,10 @@ def serves_here(chat):
     """False when groups.json gives this conversation a "host" that is not this computer (host_label or hostname)."""
     load_groups()
     want = ((_groups_last or {}).get(chat) or {}).get("host")
-    if not want:
-        return True
     me = CFG.get("host_label") or socket.gethostname()
-    return str(want).strip().lower() in (me.lower(), socket.gethostname().lower())
+    if not want or str(want).strip().lower() in (me.lower(), socket.gethostname().lower()):
+        return not _conv_held[0]  # owner 16.11: while the backup still holds this machine's work, it answers, not us
+    return failover_serves(want)
 
 
 def K(name, chat=None):
@@ -5641,6 +5641,7 @@ FAILOVER_DIR = os.path.join(HERE, "failover")
 FAILOVER_APPROVE = "מאשר לנייח"
 _failover_loaded = set()  # peers whose plugins run in this process
 _own_plugins = [False]  # this machine's own plugins (config "plugins") are running in this process
+_conv_held = [False]  # owner 16.11: the backup holds this machine's work; our conversations wait until it hands back
 
 
 def failover_cfg():
@@ -5648,7 +5649,36 @@ def failover_cfg():
     if not fc.get("for") or not fc.get("plugins"):
         return None
     return {"after_minutes": 10, "sync_minutes": 10, "approve_text": FAILOVER_APPROVE, "self_name": "נייח",
-            "kv_prefixes": ["segd:"], "plugin_dbs": [], "mirror": [], "group": PRIMARY, **fc}
+            "kv_prefixes": ["segd:"], "plugin_dbs": [], "mirror": [], "group": PRIMARY, "conversations": True, **fc}
+
+
+def failover_serves(host):
+    """Owner 16.11: the desktop is the host, the laptop only its backup. While the backup holds the peer's work (active, or
+    releasing until the hand-back is done) it also answers the conversations whose groups.json host is that peer."""
+    fc = failover_cfg()
+    if not fc or not fc.get("conversations"):
+        return False
+    st = failover_state(fc["for"])
+    held = str(fc.get("host") or st.get("host") or "").strip().lower()
+    return st.get("state") in ("active", "releasing") and bool(held) and str(host).strip().lower() == held
+
+
+def _fo_chats(fc, st):
+    held = str(fc.get("host") or st.get("host") or "").strip().lower()
+    return [j for j, v in load_groups().items() if j != LOCAL and str((v or {}).get("host") or "").strip().lower() == held]
+
+
+def failover_conversations(fc, st):
+    """Taking over: the peer's conversations start fresh sessions here (the mirrored handoff files carry the context) and
+    the owner's messages from the outage that nobody answered are answered now."""
+    if not fc.get("conversations"):
+        return
+    chats = _fo_chats(fc, st)
+    for j in chats:
+        kv_set(K("session_id", j), "")
+    since = st.get("off_since") or st.get("since")
+    n = replay_unanswered(chats, dt.datetime.fromisoformat(since)) if since else 0
+    log(f"failover: {len(chats)} conversations served here, {n} unanswered messages replayed")
 
 
 def _fo_tag(name):
@@ -5723,14 +5753,33 @@ def rows(path):
         return {}
     finally:
         db.close()
-out = {"host": os.environ.get("COMPUTERNAME", ""), "kv": {}, "pdb": {}, "files": {}}
+def content(f):
+    if not f.endswith(".db"):
+        return open(f, "rb").read()
+    import tempfile  # a live SQLite file is copied through the backup API, never half-written
+    tmp = os.path.join(tempfile.gettempdir(), "fo-copy.db")
+    src, dst = sqlite3.connect("file:" + f + "?mode=ro", uri=True, timeout=30), sqlite3.connect(tmp)
+    src.backup(dst)
+    src.close()
+    dst.close()
+    data = open(tmp, "rb").read()
+    os.remove(tmp)
+    return data
+out = {"host": os.environ.get("COMPUTERNAME", ""), "kv": {}, "pdb": {}, "files": {}, "reminders": []}
 out["kv"] = {k: v for k, v in rows(C["agent_db"]).items() if k.startswith(tuple(C["prefixes"]))}
+try:
+    db = sqlite3.connect("file:" + C["agent_db"] + "?mode=ro", uri=True, timeout=30)
+    cur = db.execute("SELECT * FROM reminders WHERE status = 'active'")
+    out["reminders"] = [dict(zip([d[0] for d in cur.description], r)) for r in cur]
+    db.close()
+except sqlite3.Error:
+    pass
 for p in C["pdbs"]:
     out["pdb"][p] = rows(p)
 for pat in C["mirror"]:
     for f in glob.glob(pat):
         if os.path.isfile(f) and os.path.getsize(f) <= 5000000:
-            out["files"][f.replace("\\", "/")] = base64.b64encode(open(f, "rb").read()).decode()
+            out["files"][f.replace("\\", "/")] = base64.b64encode(content(f)).decode()
 print("@@FAILOVER@@" + json.dumps(out))
 '''
 
@@ -5744,9 +5793,22 @@ def put(path, kv):
 put(C["agent_db"], C["kv"])
 for p, kv in C["pdb"].items():
     put(p, kv)
-import base64, os
-for p, b64 in (C.get("files") or {}).items():  # queued work (e.g. signed forms) the backup could not finish
+if C.get("reminders"):
+    db = sqlite3.connect(C["agent_db"], timeout=60)
+    with db:
+        for r in C["reminders"]:
+            if r.get("orig"):
+                db.execute("UPDATE reminders SET status = ?, fired = ? WHERE id = ?", (r["status"], r.get("fired"), r["orig"]))
+            else:
+                db.execute("INSERT INTO reminders (kind, text, due, chat_jid, ref_ts, status, created, fired) VALUES (?,?,?,?,?,?,?,?)",
+                           (r.get("kind"), r.get("text"), r.get("due"), r.get("chat_jid"), r.get("ref_ts"), r["status"], r.get("created"), r.get("fired")))
+    db.close()
+import base64, os, shutil, time
+stamp = time.strftime("%Y%m%d-%H%M%S")
+for p, b64 in (C.get("files") or {}).items():  # queued work (e.g. signed forms) and files changed during the takeover
     os.makedirs(os.path.dirname(p), exist_ok=True)
+    if p in (C.get("backup_first") or []) and os.path.exists(p):
+        shutil.copy2(p, p + ".pre-failover-" + stamp)  # owner 16.11: the version being replaced is kept
     with open(p, "wb") as f:
         f.write(base64.b64decode(b64))
 print("@@OK@@")
@@ -5808,6 +5870,46 @@ def failover_pull(peer, name, fc):
     return True
 
 
+def _fo_mirrored(fc):
+    import glob
+    return {os.path.normcase(os.path.abspath(f)) for pat in fc["mirror"] for f in glob.glob(pat)}
+
+
+def failover_code_pull(fc):
+    """Owner 16.11: the backup runs exactly the host's code. Config failover.git_pull: [{"path", "remote", "branch"}] —
+    fast-forward only; local edits of mirrored data files (the host's live copy overwrites them right after) are reset
+    first, any other local edit stops the update and is reported once. Returns [problem texts]."""
+    problems = []
+    for spec in fc.get("git_pull") or []:
+        path, remote, branch = spec.get("path"), spec.get("remote"), spec.get("branch") or "master"
+        if not path or not remote:
+            continue
+
+        def g(*a, timeout=300):
+            return subprocess.run(["git", "-C", path, *a], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                  timeout=timeout, creationflags=NO_WINDOW)
+        r = g("fetch", "-q", remote, branch)
+        if r.returncode:
+            problems.append(f"{os.path.basename(path)}: fetch נכשל ({(r.stderr or '').strip()[-120:]})")
+            continue
+        if g("rev-parse", "HEAD").stdout.strip() == g("rev-parse", "FETCH_HEAD").stdout.strip():
+            continue
+        mirrored = _fo_mirrored(fc)
+        dirty = [ln[3:].strip().strip('"') for ln in g("status", "--porcelain", "--untracked-files=no").stdout.splitlines() if ln.strip()]
+        other = [f for f in dirty if os.path.normcase(os.path.abspath(os.path.join(path, f))) not in mirrored]
+        if other:
+            problems.append(f"{os.path.basename(path)}: יש שינויים מקומיים שלא נדרסים ({', '.join(other[:5])})")
+            continue
+        for f in dirty:
+            g("checkout", "--", f)
+        r = g("merge", "--ff-only", "-q", "FETCH_HEAD")
+        if r.returncode:
+            problems.append(f"{os.path.basename(path)}: אי אפשר לעדכן בלי מיזוג ({(r.stderr or '').strip()[-120:]})")
+        else:
+            log("failover code pull:", path, g("rev-parse", "--short", "HEAD").stdout.strip())
+    return problems
+
+
 def failover_step(st, peer_st, now, fc, name, snap_at=None):
     """Pure state machine (kv failover:<name>): idle -> asked (peer down >= after_minutes; one question per outage) ->
     active (owner approved, see failover_approve) -> releasing (peer back: restart without the plugins, then hand back).
@@ -5866,6 +5968,15 @@ def failover_activate(name, fc, st, now=None):
                 db.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)")
                 db.executemany("INSERT OR REPLACE INTO kv VALUES (?, ?)", list(rows.items()))
             db.close()
+        for r in snap.get("reminders") or []:  # owner 16.11: the peer's pending reminders fire here while it is off
+            if kv_get(f"fo_rem_orig:{name}:{r['id']}"):
+                continue
+            with adb() as db:
+                rid = db.execute("INSERT INTO reminders (kind, text, due, chat_jid, ref_ts, status, created) VALUES (?,?,?,?,?,?,?)",
+                                 (r.get("kind"), r.get("text"), r.get("due"), r.get("chat_jid"), r.get("ref_ts"), "active",
+                                  r.get("created"))).lastrowid
+            kv_set(f"fo_rem_orig:{name}:{r['id']}", str(rid))
+            kv_set(f"fo_rem:{rid}", str(r["id"]))
     with _sched_lock:  # register the jobs and set their "already done" flags before the scheduler looks at them
         nd, np_ = len(_daily), len(_periodic)
         start_plugins(fc["plugins"])
@@ -5878,11 +5989,13 @@ def failover_activate(name, fc, st, now=None):
     st.update(state="active", since=now.isoformat(timespec="seconds"), jobs=jobs, handback_pending=True,
               host=(snap or {}).get("host") or st.get("host", ""))
     failover_save(name, st)
+    work.put(lambda fc=fc, st=dict(st): failover_conversations(fc, st))
     os.makedirs(FAILOVER_DIR, exist_ok=True)
     write_json(_fo_hold_path(name), {"for": name, "host": st["host"], "by": socket.gethostname(), "since": st["since"]})
     log("failover active:", name, fc["plugins"])
     return (f"✅ האוטומציות ({_fo_plist(fc)}) עברו ל{fc['self_name']} ורצות כאן עד שהמחשב \"{name}\" יחזור. "
             + (f"מה שכבר בוצע אצלו (נכון ל-{snap['at'][11:16]}) לא ירוץ שוב." if snap else "")
+            + ("\nגם השיחות שלו נענות כאן, וההודעות שנשלחו בזמן שלא היה זמין ייענו עכשיו." if fc.get("conversations") else "")
             + "\nכשהוא יחזור אחזיר אליו אותן לבד.")
 
 
@@ -5936,29 +6049,54 @@ def failover_handback(peer, name, fc, st):
             finally:
                 db.close()
     files = _fo_return_files(fc)
+    returned = set(files)
+    import base64
+    import glob
+    since = dt.datetime.fromisoformat(st["since"]).timestamp() if st.get("since") else time.time()
+    changed = [f.replace("\\", "/") for pat in fc["mirror"] for f in glob.glob(pat) if os.path.isfile(f) and os.path.getmtime(f) > since]
+    for f in changed:  # owner 16.11: work done here while the peer was off goes back with it (its old copy is kept)
+        with open(f, "rb") as fh:
+            files[f] = base64.b64encode(fh.read()).decode()
+    rems, mine = [], []
+    with adb() as db:
+        cur = db.execute("SELECT * FROM reminders")
+        cols = [d[0] for d in cur.description]
+        for row in cur.fetchall():
+            r = dict(zip(cols, row))
+            orig = kv_get(f"fo_rem:{r['id']}")
+            if not orig and (r.get("created") or "") < (st.get("since") or "9999"):
+                continue  # this machine's own older reminder
+            if not orig and r["status"] != "active":
+                continue
+            rems.append({**r, "orig": int(orig) if orig else None})
+            mine.append(r["id"])
     rc, out, err = _remote_python(peer, _remote_script(FO_HANDBACK, {"agent_db": _remote_root(peer) + "/agent/agent.db",
-                                                                     "kv": kv, "pdb": pdb, "files": files}), timeout=600)
+                                                                     "kv": kv, "pdb": pdb, "files": files, "reminders": rems,
+                                                                     "backup_first": changed}), timeout=600)
     if rc or "@@OK@@" not in out:
         log("failover hand-back failed", name, rc, (err or out)[-300:])
         return False
-    for f in files:  # delivered: the peer processes them from its own copy
+    for f in returned:  # delivered: the peer processes them from its own copy (mirrored files stay: the next snapshot)
         try:
             os.remove(f)
         except OSError:
             pass
+    with adb() as db:  # handed back: they fire on the peer now, never here as well
+        for rid in mine:
+            db.execute("UPDATE reminders SET status = 'moved' WHERE id = ? AND status = 'active'", (rid,))
+        db.execute("DELETE FROM kv WHERE k LIKE 'fo_rem:%' OR k LIKE ?", (f"fo_rem_orig:{name}:%",))
     try:
         os.remove(_fo_hold_path(name))
     except OSError:
         pass
-    import glob
-    since = dt.datetime.fromisoformat(st["since"]).timestamp() if st.get("since") else time.time()
-    changed = sorted({os.path.basename(f) for pat in fc["mirror"] for f in glob.glob(pat)
-                      if os.path.isfile(f) and os.path.getmtime(f) > since})
     failover_save(name, {"state": "idle", "last": {"since": st.get("since"), "back": dt.datetime.now().isoformat(timespec="seconds")}})
     log("failover released:", name, f"{len(kv)} keys handed back")
-    _fo_say(fc, f"✅ המחשב \"{name}\" חזר, האוטומציות חזרו אליו (מה שבוצע כאן לא ירוץ אצלו שוב)."
-                + (f"\n📥 הועברו אליו {len(files)} קבצים שחיכו לו (למשל טפסים חתומים), והוא יקלוט אותם." if files else "")
-                + (f"\nקבצים שהשתנו כאן בזמן הגיבוי ולא הועתקו אליו: {', '.join(changed)}" if changed else ""))
+    _fo_say(fc, f"✅ המחשב \"{name}\" חזר, האוטומציות" + (" והשיחות" if fc.get("conversations") else "")
+                + " חזרו אליו (מה שבוצע כאן לא ירוץ אצלו שוב)."
+                + (f"\n📥 הועברו אליו {len(returned)} קבצים שחיכו לו (למשל טפסים חתומים), והוא יקלוט אותם." if returned else "")
+                + (f"\n🔁 הוחזרו אליו {len(changed)} קבצים שהשתנו כאן בזמן הגיבוי ({', '.join(sorted({os.path.basename(f) for f in changed}))}); "
+                   "הגרסה הקודמת שלהם נשמרה אצלו." if changed else "")
+                + (f"\n⏰ {len(rems)} תזכורות הוחזרו אליו." if rems else ""))
     return True
 
 
@@ -5993,7 +6131,12 @@ def failover_tick(peer, name, peer_st):
         last = kv_get(f"failover_pull:{name}") or ""
         if not last or dt.datetime.now() - dt.datetime.fromisoformat(last) >= dt.timedelta(minutes=int(fc["sync_minutes"])):
             kv_set(f"failover_pull:{name}", dt.datetime.now().isoformat(timespec="seconds"))
+            problems = failover_code_pull(fc)
             failover_pull(peer, name, fc)
+            note = "\n".join(problems)
+            if problems and kv_get(f"failover_code_problem:{name}") != note:  # once per distinct problem
+                _fo_say(fc, f"⚠️ הגיבוי ({fc['self_name']}) לא עדכן את קוד האוטומציות מהמחשב \"{name}\":\n{note}")
+            kv_set(f"failover_code_problem:{name}", note)
 
 
 def failover_resume():
@@ -6043,27 +6186,45 @@ def deferred_plugins():
     (default 30) is overridden with a warning. (A peer that cannot be asked at start-up: plugins start at once, and
     plugin_hold_watch restarts us if a hold shows up.)"""
     t0 = time.time()
-    while True:
-        holds = plugin_holds()
-        waited = (time.time() - t0) / 60
-        if holds == []:
-            break
-        if holds is None and waited >= float(CFG.get("hold_check_minutes", 2)):
-            log("plugin hold check: peers not reachable, starting plugins")
-            break
-        if holds and waited >= float(CFG.get("hold_wait_minutes", 30)):
-            _ctx.chat = PRIMARY
-            try:
-                reply(f"⚠️ המחשב \"{holds[0]}\" עדיין מחזיק את האוטומציות אחרי {int(waited)} דק'. הפעלתי אותן כאן; "
-                      "בדוק שהן לא רצות בשני המחשבים.")
-            finally:
-                _ctx.chat = None
-            break
-        if holds:
-            log("plugins held by", holds, "- waiting")
-        time.sleep(30)
+    try:
+        while True:
+            holds = plugin_holds()
+            waited = (time.time() - t0) / 60
+            if holds == []:
+                break
+            if holds is None and waited >= float(CFG.get("hold_check_minutes", 2)):
+                log("plugin hold check: peers not reachable, starting plugins")
+                break
+            if holds and waited >= float(CFG.get("hold_wait_minutes", 30)):
+                _ctx.chat = PRIMARY
+                try:
+                    reply(f"⚠️ המחשב \"{holds[0]}\" עדיין מחזיק את האוטומציות אחרי {int(waited)} דק'. הפעלתי אותן כאן; "
+                          "בדוק שהן לא רצות בשני המחשבים.")
+                finally:
+                    _ctx.chat = None
+                break
+            if holds:
+                log("plugins held by", holds, "- waiting")
+            time.sleep(30)
+    finally:
+        conversations_resume()
     start_plugins()
     _own_plugins[0] = True
+
+
+def conversations_resume():
+    """Owner 16.11: the backup handed our work back: answer our conversations again, and the owner's messages it did not
+    answer (from the outage or the hand-back minutes) now."""
+    if not _conv_held[0]:
+        return
+    _conv_held[0] = False
+    since = kv_get("conv_held_since") or ""
+    try:
+        chats = [j for j in control_chats() if serves_here(j)]
+        n = replay_unanswered(chats, dt.datetime.fromisoformat(since)) if since else 0
+        log(f"conversations back here, {n} unanswered messages replayed")
+    except Exception:
+        log("conversations resume error", traceback.format_exc())
 
 
 def plugin_hold_watch():
@@ -6533,19 +6694,54 @@ def answered_elsewhere(chat, ts, min_age_minutes=10):
             when = when.astimezone()
         if (dt.datetime.now().astimezone() - when).total_seconds() < min_age_minutes * 60:
             return False
-        pre = (CFG.get("reply_prefix") or "🤖").strip()
-        with mdb() as db:
-            rows = db.execute("SELECT timestamp FROM messages WHERE chat_jid = ? AND is_from_me = 1 AND content LIKE ? ORDER BY rowid DESC LIMIT 3",
-                              (chat, pre + " _🧠%")).fetchall()
-        for (t,) in rows:
-            w = dt.datetime.fromisoformat(str(t).replace(" ", "T", 1))
-            if w.tzinfo is None:
-                w = w.astimezone()
-            if w > when:
-                return True
+        return answered_after(chat, when)
     except Exception:
         log("answered_elsewhere check failed", traceback.format_exc()[-300:])
     return False
+
+
+def answered_after(chat, when):
+    """A bridge answer ("🤖 _🧠 ...", from either computer) exists in the chat after `when` (aware datetime)."""
+    pre = (CFG.get("reply_prefix") or "🤖").strip()
+    with mdb() as db:
+        rows = db.execute("SELECT timestamp FROM messages WHERE chat_jid = ? AND is_from_me = 1 AND content LIKE ? ORDER BY rowid DESC LIMIT 3",
+                          (chat, pre + " _🧠%")).fetchall()
+    for (t,) in rows:
+        w = dt.datetime.fromisoformat(str(t).replace(" ", "T", 1))
+        if w.tzinfo is None:
+            w = w.astimezone()
+        if w > when:
+            return True
+    return False
+
+
+def replay_unanswered(chats, since):
+    """Owner 16.11: when the conversations move between the computers, the owner's messages in `chats` since `since` that no
+    computer answered (no later bridge answer) are handled here once (kv replayed:<id>). Returns how many."""
+    if not chats:
+        return 0
+    qs = ",".join("?" * len(chats))
+    since = since if since.tzinfo else since.astimezone()
+    with mdb() as db:
+        rows = db.execute(f"SELECT id, chat_jid, sender, timestamp, content, is_from_me, media_type FROM messages WHERE is_from_me = 1 "
+                          f"AND chat_jid IN ({qs}) AND datetime(timestamp) >= datetime(?) ORDER BY datetime(timestamp)",
+                          list(chats) + [since.isoformat(sep=" ", timespec="seconds")]).fetchall()
+    prefix = CFG["reply_prefix"].strip()
+    todo = []
+    for r in rows:
+        if (r[4] or "").startswith(prefix) or not ((r[4] or "").strip() or r[6]) or kv_get(f"replayed:{r[0]}"):
+            continue
+        w = dt.datetime.fromisoformat(str(r[3]).replace(" ", "T", 1))
+        if not answered_after(r[1], w if w.tzinfo else w.astimezone()):
+            todo.append(r)  # decided for all first: answering one must not hide the next
+    for r in todo:
+        kv_set(f"replayed:{r[0]}", "1")
+        log("replaying an unanswered owner message after a computer switch:", r[0])
+        try:
+            handle(r)
+        except Exception:
+            log("replay error", traceback.format_exc())
+    return len(todo)
 
 
 def sweep_once(cursor, on_row=None):
@@ -7630,6 +7826,9 @@ if __name__ == "__main__":
             _defer = bool(plugin_holds())
         except Exception:
             log("plugin hold check failed", traceback.format_exc())
+    if _defer:  # owner 16.11: the backup is answering our conversations too; wait for the hand-back, then replay
+        _conv_held[0] = True
+        kv_set("conv_held_since", kv_get("heartbeat") or dt.datetime.now().isoformat(timespec="seconds"))
     if not _defer:
         load_plugins()
         _own_plugins[0] = True

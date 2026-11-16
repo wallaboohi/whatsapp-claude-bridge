@@ -743,6 +743,18 @@ def provider_check_cached(name, ttl=120):
     return res
 
 
+def machine_role(c):
+    """Owner 16.11: the desktop hosts, the laptop is only its automatic backup (agent.py failover)."""
+    fo = c.get("failover") or {}
+    if fo.get("for") and fo.get("plugins"):
+        who = fo.get("host") or fo.get("for")
+        return (f"גיבוי של {who}: אותו קוד ואותן יכולות, אבל לא מארח. כש-{who} לא זמין {fo.get('after_minutes', 10)} דקות, "
+                f"המחשב הזה מקבל {'אוטומטית' if fo.get('auto') else 'באישורך'} את השיחות, האוטומציות והתזכורות שלו, "
+                "ומחזיר אותן כשהוא חוזר. עותק המצב שלו מתעדכן כל "
+                f"{fo.get('sync_minutes', 10)} דקות.")
+    return "מארח קבוע: השיחות, האוטומציות והתזכורות רצות כאן. אם הוא לא זמין, מחשב הגיבוי מקבל אותן אוטומטית ומחזיר כשהוא חוזר."
+
+
 def legend(chat=None):
     """Everything the legend page draws, from the live state. With chat: "active" = that conversation's AI (its own or the computer's)."""
     c = cfg()
@@ -776,7 +788,7 @@ def legend(chat=None):
     mi = model_info(primary())
     return {"at": dt.datetime.now().isoformat(timespec="seconds"),
             "user": {"name": c.get("owner_name") or "הבעלים", "phone": "קבוצת הבקרה בווצאפ"},
-            "bridge": {"machine": c.get("host_label") or socket.gethostname(), "releaser": bool(c.get("auto_release")),
+            "bridge": {"machine": c.get("host_label") or socket.gethostname(), "releaser": bool(c.get("auto_release")), "role": machine_role(c),
                        "release_time": c.get("auto_release_time") or "23:30", "code": "agent/agent.py · whatsapp-bridge/",
                        "phone": "/ספק · /מודל · /תקרה · /הפעל מחדש",
                        "mcp": "whatsapp-mcp-server → /api/read מאומת; פעולות כתיבה דרך נקודות הגשר ומדיניות הטיוטות"},
