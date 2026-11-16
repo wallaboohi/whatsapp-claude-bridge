@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.9 — 2026-11-16
+- peer_sync: derive paths from the home directory (release scan flagged hardcoded paths); owner 16.11
+- Chrome keepalive opens a minimized window (no-startup-window made Chrome exit); owner 16.11
+- peer_sync: groups.json lives in agent/, not the bridge store (owner 15.11)
+- Rebuild saves unsaved changes, merges with hub, pulls, then builds; results go to the daily summary (owner 15.11)
+- Keep lunch_check.py; ignore local backups, old builds, service-account key and stray files (owner 15.11)
+- Rebuild stops on unsaved bridge edits or when hub is ahead; peer_sync merges JSON settings key-by-key without overwriting (owner 15.11)
+- Automation messages (Dolev/Zion, att-*) may fail over to any free AI; the no-switch rule stays for the owner's own messages (owner 15.11)
+- Guest groups: permission mode auto + --allowedTools; bypassPermissions is refused with --restricted so Claude gave no answer in Rita's group (owner 15.11)
+- Add tools/peer_sync.py: status / merge local rule files without overwriting / update the peer's code and bridge (owner 15.11)
+- Tests: keep pytest temp root inside the project so a broken profile temp folder cannot fail releases (owner 15.11)
+
 ## 1.1.8 — 2026-11-15
 - Re-post a pending draft's approval card without a duplicate draft (tools/wa_draft_card.py, /api/draft_repost)
 - Pending draft cards not approved within 30 minutes are cancelled automatically
