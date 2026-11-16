@@ -5018,7 +5018,7 @@ def restart_wanted():
     if os.path.exists(RESTART_FILE):
         try:
             reason = open(RESTART_FILE, encoding="utf-8").read().strip()[:200]
-        except OSError:
+        except (OSError, ValueError):  # a file not in UTF-8 must not break the check
             reason = ""
         return reason or "בקשת Claude"
     return None
