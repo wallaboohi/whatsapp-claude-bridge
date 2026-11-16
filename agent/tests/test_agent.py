@@ -2643,9 +2643,32 @@ def test_switch_reports_which_models_failed_and_which_answers(agent, monkeypatch
     got = []
     monkeypatch.setattr(mod, "set_provider", lambda n, m, chat=None: got.append(m))
     monkeypatch.setattr(mod, "active_provider", lambda chat=None: ("gemini", got[-1]))
+    monkeypatch.setattr(mod, "provider_probe", lambda n, timeout=90: {"answered": True, "seconds": 2.0, "he": ""})
     out = mod.switch_provider("gemini")
     assert got == ["b"] and "❌ a: הספק מגביל קצב כרגע" in out and "✅ b: עונה עכשיו" in out
+    assert "ענה עכשיו בבדיקה תוך 2 שניות" in out  # owner 16.11: no need to ask "זמין?" after the switch
     assert mod.tried_he([("a", "x"), ("b", "y")]).count("❌") == 2
+
+
+def test_switch_to_an_ai_that_does_not_answer_is_refused_with_the_reason(agent, monkeypatch):
+    mod, db = agent
+    monkeypatch.setattr(mod, "providers", lambda: {"groq": {"label": "Groq", "short": "Groq", "model": "a"}})
+    monkeypatch.setattr(mod, "provider_check", lambda n, *a: {"ok": True, "detail": "", "models": []})
+    got = []
+    monkeypatch.setattr(mod, "set_provider", lambda *a, **k: got.append(a))
+    monkeypatch.setattr(mod, "provider_probe", lambda n, timeout=90: {"answered": False, "seconds": 3, "he": "מגבלת קצב (קוד 429)"})
+    monkeypatch.setattr(mod, "ai_status_lines", lambda skip=(): ["☁️ /1 Claude"])
+    out = mod.switch_provider("groq")
+    assert not got and "לא הוחלף" in out and "קוד 429" in out and "/1 Claude" in out
+
+
+def test_one_slow_peer_answer_is_not_an_outage(agent, monkeypatch):
+    mod, _ = agent
+    seq = [None, {"agent_alive": True}]
+    monkeypatch.setattr(mod, "peer_fetch", lambda peer, path="/brief", timeout=5: seq.pop(0) if seq else None)
+    assert mod.peer_fetch_confirmed({}, gap=0) == {"agent_alive": True}  # the retry answered: the desktop is up
+    seq[:] = [None, None, None]
+    assert mod.peer_fetch_confirmed({}, gap=0) is None  # three failures in a row: really down
 
 
 def test_bridge_command_is_answered_at_once_not_queued(agent, monkeypatch):

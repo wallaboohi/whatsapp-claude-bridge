@@ -2065,6 +2065,12 @@ def switch_provider(name, model=None, chat=None):
         model = c["working"]  # the default model is out of quota now: switch to the one that answered
     if model and c["models"] and model not in c["models"]:
         return f"המודל {model} לא נמצא אצל {ps[name]['label']}. יש: " + ", ".join(c["models"][:15])
+    # owner 16.11 20:12: the switch itself checks for a real answer, so "זמין?" after every switch is not needed
+    pr = provider_probe(name, timeout=int(CFG.get("switch_probe_seconds", 60))) if CFG.get("switch_probe", True) else {"answered": None}
+    if pr["answered"] is False:
+        return (f"⛔ *{prov_short(name)}* מחובר אבל לא ענה עכשיו בבדיקה: {pr['he'] or 'לא עונה'}. לא הוחלף.\n\n"
+                + "\n".join(ai_status_lines(skip=(name,))) + "\n\nבחר אחרת עם / ומספר.")
+    answered = f"\n✅ ענה עכשיו בבדיקה תוך {pr['seconds']:g} שניות, אין צורך לשאול \"זמין?\"." if pr["answered"] else ""
     set_provider(name, model, chat=chat)
     _, cm = active_provider(chat)
     scope = "בקבוצה הזו" if chat else "הגשר"
@@ -2072,7 +2078,7 @@ def switch_provider(name, model=None, chat=None):
     details = (f"\nמודלים: {', '.join(ms)}" if ms else "") + f"\nפקודות: {' '.join(provider_switch_words(name))}"
     return ((f"✅ ספק {scope}: *{ps[name]['label']}*" + (f" · מודל {cm or ps[name].get('model')}" if name != "claude" else "")
             + (". חזרה לספק המחשב: /ספק כאן איפוס" if chat else ". כל השיחות עוברות דרכו מההודעה הבאה (חוץ מקבוצות עם ספק משלהן). חזרה: /ספק מחשב claude"))
-            + details) + tried_he(c.get("tried"), c.get("working") if c.get("tried") else None)
+            + answered + details) + tried_he(c.get("tried"), c.get("working") if c.get("tried") else None)
 
 
 def effective_model(model):
@@ -5680,6 +5686,18 @@ def peer_watch_step(state, brief, now, cfg, name):
     return st, out
 
 
+def peer_fetch_confirmed(peer, tries=None, gap=5):
+    """Owner 16.11 20:12: one slow answer is not an outage (18:19: the desktop was busy downloading models, one /brief timed out and
+    the laptop took over). A failed check is retried with a longer timeout before the peer counts as down: still within seconds."""
+    brief = peer_fetch(peer)
+    for _ in range(int(CFG.get("peer_confirm_tries", 2) if tries is None else tries)):
+        if brief and brief.get("agent_alive", True) is not False:
+            break
+        time.sleep(gap)
+        brief = peer_fetch(peer, timeout=15) or brief
+    return brief
+
+
 def peer_watch():
     """Every 2 minutes (config peer_watch_seconds): is each other machine (config peers) up, and is its bridge connected? Alerts go to OUR primary
     control group — so a machine whose own bridge is down still gets reported. Config peer_watch (default on)."""
@@ -5694,7 +5712,7 @@ def peer_watch():
                         state = json.loads(kv_get(key) or "{}")
                     except ValueError:
                         state = {}
-                    brief = peer_fetch(peer)
+                    brief = peer_fetch_confirmed(peer)
                     if brief and brief.get("wa_account"):  # its WhatsApp number ("account" in /brief is the Claude account)
                         kv_set(f"peer_account:{name}", str(brief["wa_account"]))
                     state, msgs = peer_watch_step(state, brief, dt.datetime.now(), CFG, name)
