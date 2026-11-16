@@ -24,6 +24,8 @@ PEER_ROOT = f"{HOME}/whatsapp-mcp"
 MERGE = ["agent/home/bridge_rules.md", "agent/home/dictionary.md"]
 JSON_MERGE = ["agent/config.json", "agent/groups.json"]  # only keys the other side lacks; values never replaced
 SECRET_WORDS = ("key", "token", "secret", "password", "pass")
+# owner 16.11: settings of ONE computer (its role, name, plugins, peers) — copying them made the desktop a backup of itself
+MACHINE_KEYS = {"failover", "plugins", "host_label", "name_prefix", "auto_release", "auto_release_time", "peers", "claude_group"}
 COMPARE = ["agent/home/AI-KNOWLEDGE.md"]
 SSH_NOISE = ("WARNING", "vulnerable", "upgraded", "post-quantum", "store now")
 
@@ -82,7 +84,7 @@ def missing_keys(base, other, path=""):
     """{dotted path: value} for keys in other that base lacks (nested dicts walked; secrets and existing values never touched)."""
     out = {}
     for k, v in other.items():
-        if any(w in k.lower() for w in SECRET_WORDS):
+        if any(w in k.lower() for w in SECRET_WORDS) or (not path and k in MACHINE_KEYS):
             continue
         if k not in base:
             out[path + k] = v
