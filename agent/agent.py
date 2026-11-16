@@ -1022,6 +1022,106 @@ def provider_ready(name):
     return bool(provider_key(p)) if p.get("key_file") else True
 
 
+def provider_status(name):
+    """Quota-free local/network availability check. Never sends a model prompt."""
+    p = providers().get(name) or {}
+    if not p:
+        return {"ok": False, "detail": "לא מוגדר"}
+    if provider_cooled(name):
+        return {"ok": False, "detail": "בהמתנה אחרי תקלה קודמת"}
+    if not provider_ready(name):
+        return {"ok": False, "detail": "לא מותקן, לא מחובר או שאין מפתח"}
+    if p.get("kind") == "claude":
+        return {"ok": True, "detail": "התחברות זמינה לפי מצב הסוכן"}
+    if p.get("kind") in ("cli", "opencode", "anthropic-key"):
+        return {"ok": True, "detail": "מותקן/מוגדר; תגובה בפועל לא נבדקה"}
+    if p.get("probe") == "ollama":
+        hosts = provider_hosts(p)
+        up = [h.get("label") or h.get("url") for h in hosts if reachable(h.get("url", ""), timeout=2)]
+        return {"ok": bool(up), "detail": ("זמין: " + ", ".join(up)) if up else "אין שרת Ollama נגיש"}
+    url = p.get("base_url") or ""
+    if url:
+        up = reachable(url, timeout=2)
+        return {"ok": up, "detail": "שרת נגיש; תגובה בפועל לא נבדקה" if up else "שרת לא נגיש"}
+    return {"ok": True, "detail": "הגדרה ומפתח זמינים; אין בדיקת רשת זולה"}
+
+
+def engine_status_report(live=False):
+    """Inventory engines/providers without quota; optionally run one daily real provider check per provider."""
+    rows = [f"🧰 מנועים במחשב הזה (פעיל: {ENGINES[active_engine()]['label']}):"]
+    for name, data in ENGINES.items():
+        ready = engine_ready(name)
+        rows.append(f"{'✅' if ready else '⚪'} {data['label']}: {'מותקן' if ready else 'לא מותקן'}")
+    rows.append("\n🔌 ספקים:")
+    results = {}
+    for name, p in providers().items():
+        if name == "auto":
+            continue
+        state = provider_status(name)
+        if live and state["ok"] and p.get("base_url") and p.get("models") and p.get("probe") != "ollama":
+            # One selected model per response-capable API provider. Other kinds receive a quota-free connection check only.
+            check = provider_check(name, (p.get("model") or None))
+            state = {"ok": bool(check.get("ok")), "detail": "תגובה תקינה" if check.get("ok") else check.get("detail", "לא ענה")}
+        elif live and state["ok"]:
+            state = {"ok": True, "detail": "חיבור/חשבון זמין; סוג זה אינו תומך בבדיקת תגובה יומית חסכונית"}
+        results[name] = state
+        rows.append(f"{'✅' if state['ok'] else '⚪'} {prov_short(name)}: {state['detail']}")
+    mcp_ok, mcp_detail = probe_mcp_server()
+    rows.append(f"\n🧩 שרת MCP של WhatsApp: {'✅ ' + mcp_detail if mcp_ok else '⚪ ' + mcp_detail}")
+    registrations = mcp_registration_status()
+    rows.append("🔗 חיבורי MCP שמורים (שיחה פעילה אינה ניתנת לבדיקה מבחוץ):")
+    rows.extend(f"{'✅' if ok else '⚪'} {name}: {'רשום' if ok else 'לא רשום'}" for name, ok in registrations.items())
+    snapshot = {"at": dt.datetime.now().isoformat(timespec="seconds"), "providers": results, "mcp_ok": mcp_ok,
+                "engines": {n: engine_ready(n) for n in ENGINES}, "mcp_registrations": registrations}
+    kv_set("engine_status", json.dumps(snapshot, ensure_ascii=False))
+    return "\n".join(rows)
+
+
+def probe_mcp_server():
+    """Start the configured MCP server and perform an initialize/list_tools handshake without calling any tool."""
+    server = os.path.join(ROOT, "whatsapp-mcp-server")
+    if not os.path.isfile(os.path.join(server, "main.py")):
+        return False, "קובץ השרת חסר"
+    uv = shutil.which("uv")
+    if not uv:
+        return False, "uv לא מותקן; אי אפשר לבצע לחיצת יד"
+    try:
+        run = subprocess.run([uv, "run", "--project", server, "python", "healthcheck.py"], cwd=server,
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
+        detail = (run.stdout or run.stderr or "בדיקת MCP נכשלה").strip().splitlines()[-1][:140]
+        return run.returncode == 0, detail
+    except Exception as e:
+        return False, f"בדיקת MCP נכשלה: {str(e)[:100]}"
+
+
+def mcp_registration_status():
+    """Report saved MCP registrations; a config cannot prove a running conversation loaded it."""
+    specs = {
+        "Codex": (os.path.expanduser("~/.codex/config.toml"), "mcp_servers.whatsapp"),
+        "Gemini CLI": (os.path.expanduser("~/.gemini/settings.json"), '"whatsapp"'),
+        "Copilot CLI": (os.path.expanduser("~/.copilot/mcp-config.json"), '"whatsapp"'),
+        "OpenCode": (os.path.expanduser("~/.config/opencode/opencode.json"), '"whatsapp"'),
+        "Qwen Code": (os.path.expanduser("~/.qwen/settings.json"), '"whatsapp"'),
+    }
+    result = {}
+    for name, (path, marker) in specs.items():
+        try:
+            result[name] = os.path.isfile(path) and marker in open(path, encoding="utf-8", errors="replace").read()
+        except OSError:
+            result[name] = False
+    return result
+
+
+def hourly_engine_status():
+    report = engine_status_report(live=False)
+    log("hourly engine status refreshed")
+
+
+def daily_engine_probe():
+    report = engine_status_report(live=True)
+    log("daily engine response probe completed")
+
+
 def prov_short(name):
     p = providers().get(name) or {}
     return p.get("short") or (p.get("label") or name).split("·")[0].strip()
@@ -2330,11 +2430,6 @@ def engine_endpoint(name, model=None):
     return None
 
 
-WA_READ_TOOLS = ["list_messages", "list_chats", "get_chat", "get_direct_chat_by_contact", "get_contact_chats", "get_last_interaction", "get_message_context",
-                 "get_group_info",
-                 "search_contacts", "search_all", "list_transcripts", "list_polls", "list_drafts", "get_status", "download_media"]
-
-
 def conversation_pack(chat, n=14):
     """Owner 14.11: what another engine's fresh session needs to continue this conversation: the hand-off note and the last messages of the chat
     (the owner's and the bridge's own answers), plus the way to read more on demand."""
@@ -2363,8 +2458,7 @@ def conversation_pack(chat, n=14):
 
 
 def ensure_qwen_settings():
-    """Owner 14.11: ~/.qwen/settings.json for Qwen Code: OpenAI-protocol auth, no telemetry, and the WhatsApp MCP server with READ-ONLY tools, so a
-    hosted AI can read the bridge's messages on demand. Merged into what is there; written only when something changed."""
+    """Owner 16.11: Qwen receives the complete WhatsApp MCP tool set; all operations still pass through bridge authentication and policy."""
     path = os.path.expanduser("~/.qwen/settings.json")
     try:
         cur = json.load(open(path, encoding="utf-8"))
@@ -2376,7 +2470,9 @@ def ensure_qwen_settings():
     srv = os.path.join(ROOT, "whatsapp-mcp-server")
     py = os.path.join(srv, ".venv", "Scripts", "python.exe")
     if os.path.exists(py):
-        cur.setdefault("mcpServers", {})["whatsapp"] = {"command": py, "args": ["main.py"], "cwd": srv, "includeTools": WA_READ_TOOLS, "timeout": 30000}
+        server = cur.setdefault("mcpServers", {}).setdefault("whatsapp", {})
+        server.pop("includeTools", None)
+        server.update({"command": py, "args": ["main.py"], "cwd": srv, "timeout": 30000})
     if json.dumps(cur, sort_keys=True) != before:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         write_json(path, cur)
@@ -3737,6 +3833,8 @@ def search_messages(q, limit=15):
 
 def owner_command(text, chat=None):
     """Slash commands answered locally (no Claude run, no cost), for this conversation. Returns reply text or None."""
+    if re.match(r"^/\s*(בדוק\s+זמינות|זמינות)\s*$", text.strip()):
+        return engine_status_report(live=False)
     if re.match(r"^/(מחכים|waiting)\s*$", text.strip()):
         return waiting_now()
     if re.match(r"^/\s*(בריאות|health)\s*$", text.strip()):
@@ -7091,7 +7189,8 @@ def scheduler():
                          (CFG.get("auto_release_time", "23:30"), "auto_release", auto_release),
                          (CFG.get("auto_update_time", "23:50"), "auto_update", auto_update),
                          (CFG.get("monthly_jobs_time", "02:00"), "monthly_jobs", monthly_jobs),
-                         (CFG.get("health_report_time", "08:00"), "weekly_health", weekly_health)]
+                         (CFG.get("health_report_time", "08:00"), "weekly_health", weekly_health),
+                         (CFG.get("engine_probe_time", "06:00"), "engine_response_probe", daily_engine_probe)]
                 # owner 11.11: the PC slept in the middle of the 03:00 backup and the day was already marked: retry
                 # until it really finished today (backup_done), at most every 30 minutes
                 if (now.strftime("%H:%M") >= CFG["backup_time"] and (kv_get("backup_done") or "")[:10] != today
@@ -7128,6 +7227,9 @@ def scheduler():
                     if not last or now - dt.datetime.fromisoformat(last) > dt.timedelta(minutes=minutes):
                         kv_set(f"at:{key}", now.isoformat())
                         slow.put(fn)  # plugin jobs (e.g. extracting requests with Claude) run off the owner's fast queue
+                if not kv_get("at:hourly_engine_status") or now - dt.datetime.fromisoformat(kv_get("at:hourly_engine_status")) >= dt.timedelta(hours=1):
+                    kv_set("at:hourly_engine_status", now.isoformat())
+                    slow.put(hourly_engine_status)
         except Exception:
             log("scheduler error", traceback.format_exc())
         time.sleep(30)

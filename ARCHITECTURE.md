@@ -40,6 +40,8 @@
 `group_info` `set_group` `group_participants` `group_photo` `group_settings` `group_invite` · הודעות: `edit_message` `delete_message` `forward`
 `pin_message` `star` `mark_read` `pin_chat` · שליחה מיוחדת: `send_poll` `send_contact` `post_status` `set_about` · `block`.
 
+קריאות כלי ה-MCP לנתוני WhatsApp עוברות דרך `/api/read` המאומת. הוא מקבל שמות שאילתה קבועים ופרמטרים בלבד, מגביל עד 500 תוצאות, ואינו מקבל SQL מהלקוח. שליחה, שינוי קבוצה ותגובות נשארים ב-endpoints הייעודיים הכפופים למדיניות הגשר.
+
 **מדיניות שליחה** (`store/send_policy.json`, נקרא בכל שליחה):
 - `owner` (מספרים/LID של הבעלים) וקבוצת הבקרה → נשלח ישירות.
 - כל נמען אחר → **טיוטה**: שורה בטבלת `drafts` + כרטיס בקבוצת הבקרה ("📝 טיוטה #N → שם", "לחיצה ארוכה ← ✅ או 👍", קישור wa.me).

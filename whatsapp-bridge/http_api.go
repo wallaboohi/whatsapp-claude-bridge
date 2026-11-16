@@ -30,6 +30,7 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 
 // registerAllAPI registers every /api/* handler on http.DefaultServeMux (no network: the tests use it too).
 func registerAllAPI(client *whatsmeow.Client, messageStore *MessageStore) {
+	registerReadAPI(messageStore)
 	registerExtraAPI(client)
 	registerSyncAPI(client)
 	registerExperimentAPI(client)

@@ -6,16 +6,17 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from whatsapp import MESSAGES_DB_PATH, TOOL_ROOT, WHATSAPP_API_BASE_URL, _auth
+from whatsapp import TOOL_ROOT, WHATSAPP_API_BASE_URL, _auth, _bridge_read
 
 ROOT = TOOL_ROOT
 AGENT_DB = os.path.join(ROOT, "agent", "agent.db")
 
 
-def _rows(db: str, sql: str, args=()) -> List[Dict[str, Any]]:
-    if not os.path.exists(db):
+def _agent_rows(sql: str, args=()) -> List[Dict[str, Any]]:
+    """Read only agent-owned transcripts; WhatsApp account data must go through the bridge API."""
+    if not os.path.exists(AGENT_DB):
         return []
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=10)
+    con = sqlite3.connect(f"file:{AGENT_DB}?mode=ro", uri=True, timeout=10)
     con.row_factory = sqlite3.Row
     try:
         return [dict(r) for r in con.execute(sql, args)]
@@ -63,26 +64,21 @@ def transcripts(query: Optional[str], chat_jid: Optional[str], limit: int) -> Li
     if chat_jid:
         sql += " AND chat_jid = ?"
         args.append(chat_jid)
-    return _rows(AGENT_DB, sql + " ORDER BY ts DESC LIMIT ?", args + [limit])
+    return _agent_rows(sql + " ORDER BY ts DESC LIMIT ?", args + [limit])
 
 
 def polls(chat_jid: Optional[str], limit: int) -> List[Dict[str, Any]]:
-    sql, args = "SELECT poll_id, chat_jid, creator, question, options, timestamp FROM polls", []
-    if chat_jid:
-        sql += " WHERE chat_jid = ?"
-        args.append(chat_jid)
-    out = _rows(MESSAGES_DB_PATH, sql + " ORDER BY timestamp DESC LIMIT ?", args + [limit])
+    out = _bridge_read("polls", chat_jid=chat_jid or "", limit=limit)
     for p in out:
         p["options"] = json.loads(p["options"] or "[]")
-        votes = _rows(MESSAGES_DB_PATH, "SELECT voter, options, timestamp FROM poll_votes WHERE poll_id = ?", (p["poll_id"],))
+        votes = _bridge_read("poll_votes", message_id=p["poll_id"], chat_jid=p["chat_jid"])
         p["votes"] = [{"voter": v["voter"], "chose": json.loads(v["options"] or "[]"), "at": v["timestamp"]} for v in votes]
         p["tally"] = {o: sum(o in v["chose"] for v in p["votes"]) for o in p["options"]}
     return out
 
 
 def drafts(status_: str, limit: int) -> List[Dict[str, Any]]:
-    return _rows(MESSAGES_DB_PATH, "SELECT id, recipient, name, message, created, status FROM drafts WHERE status = ? "
-                                   "ORDER BY id DESC LIMIT ?", (status_, limit))
+    return _bridge_read("drafts", status=status_, limit=limit)
 
 
 def react(chat_jid: str, message_id: str, emoji: str, sender: str = "") -> Dict[str, Any]:
@@ -95,9 +91,7 @@ def react(chat_jid: str, message_id: str, emoji: str, sender: str = "") -> Dict[
 
 def search(query: str, limit: int) -> List[Dict[str, Any]]:
     """Text search over messages and voice transcripts together."""
-    msgs = _rows(MESSAGES_DB_PATH, "SELECT m.id, m.chat_jid, c.name AS chat_name, m.sender, m.timestamp, m.content FROM messages m "
-                                   "LEFT JOIN chats c ON c.jid = m.chat_jid WHERE m.content LIKE ? ORDER BY m.timestamp DESC LIMIT ?",
-                 (f"%{query}%", limit))
+    msgs = _bridge_read("search", query=query, limit=limit)
     for m in msgs:
         m["kind"] = "message"
     tr = transcripts(query, None, limit)
