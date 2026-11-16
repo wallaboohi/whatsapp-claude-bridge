@@ -7257,6 +7257,13 @@ def weekly_health():
         _ctx.chat = None
 
 
+def _home_file_changed(since):
+    try:
+        return dt.datetime.fromtimestamp(os.path.getmtime(os.path.join(HOME, "dictionary.md"))) > since
+    except OSError:
+        return False
+
+
 def home_sync():
     """Owner 10.11: personal files that both PCs use (config "home_sync": {"peer": "<ssh host>", "files": [...]}, paths
     relative to home/, default dictionary.md + shared-sync.md) are kept in step over ssh — the newer copy wins, both ways.
@@ -7502,8 +7509,10 @@ def scheduler():
                         now - dt.datetime.fromisoformat(kv_get("at:phone_sync")) > dt.timedelta(minutes=60))):
                     kv_set("at:phone_sync", now.isoformat())
                     slow.put(phone_sync)
+                # owner 16.11: once an hour (was 10 minutes), and at once when the dictionary changed here since the last sync
                 if CFG.get("home_sync") and (not kv_get("at:home_sync") or
-                                             now - dt.datetime.fromisoformat(kv_get("at:home_sync")) > dt.timedelta(minutes=10)):
+                                             now - dt.datetime.fromisoformat(kv_get("at:home_sync")) > dt.timedelta(minutes=CFG.get("home_sync_minutes", 60)) or
+                                             _home_file_changed(dt.datetime.fromisoformat(kv_get("at:home_sync")))):
                     kv_set("at:home_sync", now.isoformat())
                     slow.put(home_sync)
                 for minutes, key, fn in _periodic:
