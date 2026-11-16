@@ -1636,6 +1636,18 @@ def test_backup_answers_the_hosts_conversations_only_while_holding_its_work(agen
         mod._conv_held[0] = False
 
 
+def test_only_the_answering_computer_renames_a_group(agent, monkeypatch):
+    mod, _ = agent
+    g = "120363499998@g.us"
+    open(mod.GROUPS_FILE, "w", encoding="utf-8").write(json.dumps({g: {"name": "x", "host": "HOST-PC-A"}}))
+    mod.CFG["host_label"] = "LAPTOP-X"
+    mod.CFG["group_name_model"] = True
+    calls = []
+    monkeypatch.setattr(mod, "bridge", lambda path, body=None, **k: calls.append(path) or {"success": True, "name": "YB אוטומציה"})
+    mod.sync_group_name(g, "sonnet")
+    assert calls == [], "the backup never renames the host's group"
+
+
 def test_replay_answers_only_messages_nobody_answered(agent, monkeypatch):
     mod, db = agent
     g = "120363499999@g.us"

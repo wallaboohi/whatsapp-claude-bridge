@@ -3903,6 +3903,8 @@ def sync_group_name(chat, model):
         return
     if chat != PRIMARY and chat not in load_groups() or guest_cfg(chat):
         return
+    if not serves_here(chat):
+        return  # owner 16.11: only the computer that answers a group names it (the backup laptop renamed the desktop's groups)
     with _rename_lock:
         try:
             tpl = group_name_template(chat)
