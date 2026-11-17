@@ -3526,6 +3526,31 @@ def _kill_tree(proc):
 
 _active_runs = {}  # chat -> start time of the interactive Claude run answering it now (stop button / restart coordination)
 _active_lock = threading.Lock()
+_live_runs = {}  # owner 17.11 "אשר דחיפה": chat -> the running Claude run whose stdin stays open, so a new message is pushed into it
+_live_lock = threading.Lock()
+PUSH_NOTE = ("📨 הודעה נוספת מיקיר שהגיעה תוך כדי העבודה. אם היא קשורה למה שאתה עושה עכשיו, שלב אותה בעבודה; "
+             "אם לא, טפל בה גם וענה עליה בסעיף נפרד באותה תשובה. אל תדלג עליה:\n")
+
+
+def push_to_live(chat, text):
+    """Push the owner's new message into the run answering this conversation now (Claude Code stream-json input).
+    False = no open run (or it is just closing): the caller queues it as before."""
+    with _live_lock:
+        st = _live_runs.get(chat)
+        if not st or st["closed"]:
+            return False
+        try:
+            st["proc"].stdin.write(_user_line(PUSH_NOTE + text))
+            st["proc"].stdin.flush()
+        except (OSError, ValueError) as e:
+            log("push to live run failed", e)
+            return False
+        st["sent"] += 1
+        return True
+
+
+def _user_line(text):
+    return json.dumps({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": text}]}}, ensure_ascii=False) + "\n"
 
 
 def stop_target():
@@ -3912,11 +3937,14 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
     if penv is not None and pmodel:
         model = pmodel
     qwen_env = None
+    live = (eng == "claude" and not guest and tools is None and not fork and on_stage is not None and stoppable is not False
+            and CFG.get("push_mid_run", True))  # owner 17.11: messages that arrive mid-run are pushed into it, not queued behind it
     if eng == "claude":
         rp = providers().get(getattr(_ctx, "provider_used", None)) or {}
         if rp.get("kind") == "claude-remote" and not guest and tools is None:  # owner 17.11: the same run, on the other computer's Claude account
             cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", rp.get("ssh"),
                    f'cd /d {rp.get("home")} && claude -p --output-format stream-json --verbose --permission-mode {mode}'
+                   + (" --input-format stream-json --replay-user-messages" if live else "")
                    + (f" --model {model}" if model and re.fullmatch(r"[\w.\[\]-]+", model) else "")]
             if append:  # no quoting of long Hebrew text through the remote shell: the rules ride in the prompt
                 prompt = append + "\n\n---\n" + prompt
@@ -3924,6 +3952,8 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
             model = None
         else:
             cmd = [shutil.which("claude") or "claude", "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", mode]
+            if live:
+                cmd += ["--input-format", "stream-json", "--replay-user-messages"]
         if model:
             cmd += ["--model", model]
         if append:
@@ -3971,11 +4001,30 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
                 errbuf.append(line)
     err_thread = threading.Thread(target=read_err, daemon=True)
     err_thread.start()
+    live = live if eng == "claude" else False
+    lst = {"proc": proc, "sent": 1, "seen": 0, "closed": False, "results": []} if live else None
     try:
-        proc.stdin.write(prompt)
-        proc.stdin.close()
+        if live:
+            proc.stdin.write(_user_line(prompt))
+            proc.stdin.flush()
+            with _live_lock:
+                _live_runs[chat or PRIMARY] = lst
+        else:
+            proc.stdin.write(prompt)
+            proc.stdin.close()
     except OSError as e:
         log("claude stdin failed", e)
+
+    def close_live():
+        with _live_lock:
+            if lst and not lst["closed"]:
+                lst["closed"] = True
+                if _live_runs.get(chat or PRIMARY) is lst:
+                    _live_runs.pop(chat or PRIMARY, None)
+                try:
+                    proc.stdin.close()
+                except OSError:
+                    pass
     killer = threading.Timer(timeout, _kill_tree, args=(proc,)) if timeout else None  # None = no time cap (owner 11.11)
     if killer:
         killer.start()
@@ -4018,7 +4067,21 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
                 ev = _opencode_event(ev, oc)
                 if not ev:
                     continue
+            if lst is not None and ev.get("type") == "user" and any(
+                    isinstance(c, dict) and c.get("type") == "text" for c in (ev.get("message") or {}).get("content") or []):
+                lst["seen"] += 1  # --replay-user-messages: Claude took in one of our messages (the prompt or a pushed one)
+                if on_stage and lst["seen"] > 1:
+                    on_stage("📨 קלטתי הודעה שנדחפה תוך כדי", "")
+                continue
             if ev.get("type") == "result":
+                if lst is not None:
+                    lst["results"].append((ev.get("result") or "").strip())
+                    with _live_lock:
+                        done = lst["seen"] >= lst["sent"]
+                    if done:
+                        close_live()  # every pushed message is answered: end the run
+                    else:  # a message was pushed after the turn ended: Claude answers it in another turn; never wait forever
+                        threading.Timer(600, close_live).start()
                 res = ev
             elif on_stage:
                 st = _stage_of(ev)
@@ -4029,10 +4092,14 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
                             det = _detail_of(part.get("name", ""), part.get("input") or {})
                     on_stage(st, det)
         proc.wait()
+        if lst is not None and len([r for r in lst["results"] if r]) > 1:
+            res = dict(res, result="\n\n".join(r for r in lst["results"] if r))
         if oc is not None and (oc["text"] or oc["err"]):
             res = {"type": "result", "result": "\n".join(oc["text"]).strip() or oc["err"], "is_error": not oc["text"], "session_id": oc["sid"],
                    "usage": {"input_tokens": oc["tin"], "output_tokens": oc["tout"]}, "total_cost_usd": 0}
     finally:
+        if lst is not None:
+            close_live()
         _ctx.run_seconds = time.time() - t0
         if killer:
             killer.cancel()
@@ -4694,6 +4761,16 @@ def enqueue_command(msg_id, text, when, chat=None, direct=True):
             if not done:
                 enqueue_command(msg_id, text, when, chat, direct=False)
         threading.Thread(target=now, daemon=True).start()
+        return
+    if push_to_live(chat, text):  # owner 17.11 "אשר דחיפה": the running answer takes it in now, no queue
+        with adb() as db:
+            db.execute("INSERT INTO commands (msg_id, text, at, chat_jid, source, sync, status) VALUES (?, ?, ?, ?, 'wa', 0, 'pushed')",
+                       (msg_id, text, when, chat))
+        _ctx.chat, _ctx.src, _ctx.sync = chat, "wa", 0
+        try:
+            react(msg_id, "📨")
+        finally:
+            _ctx.chat = None
         return
     with adb() as db:
         cid = db.execute("INSERT INTO commands (msg_id, text, at, chat_jid, source, sync) VALUES (?, ?, ?, ?, 'wa', 0)", (msg_id, text, when, chat)).lastrowid

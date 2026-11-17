@@ -2871,3 +2871,24 @@ def test_learned_preferences_reach_the_prompt(agent, tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "LEARNED_FILE", str(f))
     assert "לא להחליף ספק" in mod.learned_hints()
     assert mod.correction_prompt("טעית, תמיד תכתוב בלי קווים") and not mod.correction_prompt("מה השעה")
+
+
+def test_push_to_live_run(agent):
+    """Owner 17.11 'אשר דחיפה': a message for a conversation with an open run goes into that run's stdin, not the queue."""
+    agent, _db = agent
+    import io, json as _j
+    buf = io.StringIO()
+
+    class P:
+        stdin = buf
+    agent._live_runs["c@g.us"] = {"proc": P(), "sent": 1, "seen": 1, "closed": False, "results": []}
+    try:
+        assert agent.push_to_live("c@g.us", "עוד משהו")
+        line = _j.loads(buf.getvalue())
+        assert line["type"] == "user" and "עוד משהו" in line["message"]["content"][0]["text"]
+        assert agent._live_runs["c@g.us"]["sent"] == 2
+        agent._live_runs["c@g.us"]["closed"] = True
+        assert not agent.push_to_live("c@g.us", "x")
+        assert not agent.push_to_live("other@g.us", "x")
+    finally:
+        agent._live_runs.pop("c@g.us", None)
