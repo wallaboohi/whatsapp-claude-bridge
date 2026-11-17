@@ -2812,7 +2812,7 @@ def test_a_claude_model_on_another_provider_is_an_error_not_a_switch(agent):
     chat = "claude-model-group@g.us"
     mod.set_provider("cloudflare", chat=chat)
     out = mod.owner_command("/מודל haiku", chat)
-    assert mod.active_provider(chat)[0] == "cloudflare" and "לא אפשרי" in out and "`/7 1`" in out and "/1" in out
+    assert mod.active_provider(chat)[0] == "cloudflare" and "לא אפשרי" in out and "*/7 1*" in out and "/1" in out
     mod.set_provider("claude", chat=chat)
     assert "המודל הוחלף" in mod.owner_command("/מודל haiku", chat)
 
@@ -2823,7 +2823,7 @@ def test_every_model_in_the_list_says_what_it_is_for(agent):
     assert "מהיר וזול" in mod.model_desc("haiku") and "קוד" in mod.model_desc("@cf/qwen/qwen2.5-coder-32b-instruct")
     assert mod.model_desc("some-unknown-model-x") == ""
     t = mod.providers_text()
-    assert "`/1 1` · הייקו — " in t.replace("\u200f", "") and "`/1 2` · סונט — " in t.replace("\u200f", "")
+    assert "*/1 1* · הייקו — " in t.replace("\u200f", "") and "*/1 2* · סונט — " in t.replace("\u200f", "")
 
 
 def test_a_restarting_agent_is_not_an_outage_while_its_computer_answers(agent, monkeypatch):
@@ -2853,3 +2853,21 @@ def test_auto_model_by_complexity_inside_a_provider(agent):
     assert "coder" not in (mod.auto_model("cloudflare", "מה השעה?", 1) or "")  # a coder model only when the request is code
     assert "coder" in mod.auto_model("cloudflare", "תכתוב סקריפט python", 2)
     assert "מצב אוטו" in mod.routing_note("groq") and "/רמות" in mod.commands_index()
+
+
+def test_markdown_becomes_whatsapp_formatting_and_rules_disappear(agent):
+    """Owner 17.11 07:54: no ** or # or horizontal rules in WhatsApp; code blocks stay as written."""
+    import wa_format
+    t = "# כותרת\n**הדגשה** ו~~קו~~\n---\n| א | ב |\n|---|---|\n[קישור](https://x.co)\n```\n**x**\n---\n```"
+    out = wa_format.md_to_wa(t)
+    assert "*כותרת*" in out and "*הדגשה*" in out and "~קו~" in out and "א · ב" in out and "קישור: https://x.co" in out
+    assert out.count("---") == 1 and "**x**" in out  # only the one inside the code block survives
+
+
+def test_learned_preferences_reach_the_prompt(agent, tmp_path, monkeypatch):
+    mod, _ = agent
+    f = tmp_path / "learned.md"
+    f.write_text("- לא להחליף ספק כשמשנים מודל  # 17.11.2026\n", encoding="utf-8")
+    monkeypatch.setattr(mod, "LEARNED_FILE", str(f))
+    assert "לא להחליף ספק" in mod.learned_hints()
+    assert mod.correction_prompt("טעית, תמיד תכתוב בלי קווים") and not mod.correction_prompt("מה השעה")

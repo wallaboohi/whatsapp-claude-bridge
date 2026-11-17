@@ -16,6 +16,7 @@ Runs as one background process (started at logon by Task Scheduler):
 """
 import datetime as dt
 import importlib.util
+import wa_format  # WhatsApp formatting tools (owner 17.11)
 import json
 import re
 import os
@@ -1077,6 +1078,8 @@ def _note_answer(name, seconds):
     try:
         latency_add(name or "claude", seconds)
         quota_note(name or "claude")
+        if getattr(_ctx, "auto_model_used", None):
+            kv_set("auto_pick:" + str(cur_chat() or PRIMARY), json.dumps({"provider": name, "model": _ctx.auto_model_used, "at": dt.datetime.now().isoformat(timespec="seconds")}))
         ai_state_set(name or "claude", True, seconds=seconds, model=getattr(_ctx, "auto_model_used", None) or getattr(_ctx, "force_model", None) or (providers().get(name or "claude") or {}).get("model") or "")
     except Exception as e:
         log("note answer failed", e)
@@ -2190,6 +2193,7 @@ def switch_provider(name, model=None, chat=None):
     set_provider(name, model, chat=chat)
     _, cm = active_provider(chat)
     scope = "בקבוצה הזו" if chat else "הגשר"
+    note_owner_correction(chat, name, model)
     ms = [x for x in MODELS if x != "auto"] if name == "claude" else list(c.get("models") or [])
     num = provider_number(name)
     mlines = _model_lines(ms, num)  # owner 17.11: the models on entering a provider, each starting with its command
@@ -2622,24 +2626,24 @@ RLM = "\u200f"  # right-to-left mark: every line starts on the right in WhatsApp
 
 
 def _model_lines(ms, num, cap=8):
-    """One line per model, the command first: `/4 2` · name — what it is for (owner 17.11 07:35: right-aligned, the code is the start of the line)."""
+    """One line per model, the command first and bold: */4 2* · name — what it is for (owner 17.11: right-aligned, no quotes)."""
     ms = [str(m) for m in ms if m]
     out = []
     for i, m in enumerate(ms[:cap], 1):
         d = model_desc(m)
-        out.append(f"{RLM}`/{num} {i}` · {_model_name_he(m)}" + (f" — {d}" if d else ""))
+        out.append(f"{RLM}*/{num} {i}* · {_model_name_he(m)}" + (f" — {d}" if d else ""))
     if len(ms) > cap:
-        out.append(f"{RLM}… ועוד {len(ms) - cap}: `/{num} {cap + 1}` ומעלה")
+        out.append(f"{RLM}ועוד {len(ms) - cap}: */{num} {cap + 1}* ומעלה")
     return out
 
 
-def _provider_head(k, label, active=False, icon="☁️", status=""):
-    """Two lines: the provider (Hebrew · English, status) and its command words."""
+def _provider_head(k, label, active=False, icon="☁️", status="", note=""):
+    """ONE header line: the provider (Hebrew · English), its command words, status. Nothing else sits between it and its models."""
     he = AI_HE.get(k) or label or k
     en = (label or "").split("·")[0].strip()
     en = "" if not en or en == he or k == "auto" else f" · {en}"
-    words = " ".join(f"`{w}`" for w in provider_switch_words(k)) if k in providers() else f"`/{provider_number(k)}`"
-    return f"{RLM}{'👉 ' if active else ''}{icon} *{he}*{en}{status}\n{RLM}פקודה: {words}"
+    words = " ".join(provider_switch_words(k)) if k in providers() else f"/{provider_number(k)}"
+    return f"{RLM}{'👉 ' if active else ''}{icon} *{he}*{en} · {words}{status}{note}"
 
 
 def _model_words_line(ms, cap=6):
@@ -2649,12 +2653,12 @@ def _model_words_line(ms, cap=6):
 
 
 def _provider_row(k, cur, cm, ok=None, detail="", models=None):
-    """One provider in the /ספק list: its two header lines, then its models, each starting with its command."""
+    """One provider in the /ספק list: one header line (commands included), then its models, each starting with its command."""
     p = providers()[k]
     icon = "🔀" if k == "auto" else "🏠" if provider_is_local(k) else "☁️"
     lines, note = [], ""
     if k == "auto":
-        note = f"\n{RLM}הסוכן בוחר לבד ספק (מהזול ליקר) ואת המודל לפי מורכבות ההודעה"
+        note = " · בוחר לבד ספק ומודל לפי מורכבות ההודעה"
     elif models is not None:
         lines = _model_lines(models, provider_number(k))
     else:
@@ -2663,13 +2667,13 @@ def _provider_row(k, cur, cm, ok=None, detail="", models=None):
         lines = _model_lines(ms, provider_number(k))
         ok, detail = c["ok"], c["detail"]
     if not lines and k != "auto":
-        note = f"\n{RLM}מביא מודל משלו (אין בחירת מודל)"
+        note = " · מביא מודל משלו"
     if k == cur and cm:
-        note += f"\n{RLM}המודל עכשיו: {model_he(cm)}"
-    st = "" if ok is None else (" ✅" if ok else f" ⚪ · {str(detail)[:40]}")
+        note += f" · עכשיו: {model_he(cm)}"
+    st = "" if ok is None else (" ✅" if ok else f" ⚪ {str(detail)[:40]}")
     if ok and k == "ollama" and detail:  # which of this computer's Ollama hosts serves it (owner 17.11)
         st += f" · {str(detail)[:80]}"
-    return _provider_head(k, p.get("label"), k == cur, icon, st) + note + ("\n" + "\n".join(lines) if lines else "") + "\n"  # a blank line between providers
+    return _provider_head(k, p.get("label"), k == cur, icon, st, note) + ("\n" + "\n".join(lines) if lines else "") + "\n"
 
 
 def _peer_rows(peer_brief, local):
@@ -2683,10 +2687,10 @@ def _peer_rows(peer_brief, local):
         k = p.get("key")
         if not k or k == "auto" or (p.get("where") == "local") != local:
             continue
-        st = (" ✅" + (f" · {str(p.get('detail') or '')[:60]}" if k == "ollama" else "")) if p.get("ok") else f" ⚪ · {str(p.get('detail') or '')[:40]}"
+        st = (" ✅" + (f" · {str(p.get('detail') or '')[:60]}" if k == "ollama" else "")) if p.get("ok") else f" ⚪ {str(p.get('detail') or '')[:40]}"
         ml = _model_lines(p.get("models") or [], provider_number(k)) if p.get("models") else []
-        out.append(_provider_head(k, p.get("label"), bool(p.get("active")), "🏠" if local else "☁️", st)
-                   + ("\n" + "\n".join(ml) if ml else f"\n{RLM}מביא מודל משלו (אין בחירת מודל)") + "\n")
+        out.append(_provider_head(k, p.get("label"), bool(p.get("active")), "🏠" if local else "☁️", st, "" if ml else " · מביא מודל משלו")
+                   + ("\n" + "\n".join(ml) if ml else "") + "\n")
     return out or ["💤 אין שם בינה מסוג זה"]
 
 
@@ -3909,6 +3913,35 @@ def is_dev_work(text):
     return any(w.lower() in t for w in DEV_WORDS)
 
 
+LEARNED_FILE = os.path.join(HOME, "learned.md")
+CORRECTION_RE = re.compile(r"(לא התכוונתי|התכוונתי ל|טעית|זו טעות|זה לא נכון|לא ככה|אל תעשה|אסור לך|בפעם הבאה|מעכשיו|תמיד |לעולם |"
+                           r"במקום זה|תתקן ל|התיקון שלי|למה עשית|לא ביקשתי|בלי ה)")
+
+
+def learned_hints(limit=20, chars=1800):
+    """Owner 17.11 07:54: what the bridge learned from his corrections in free text (home/learned.md, one line each, newest last):
+    behaviour rules that are not word swaps. Passed to every run, the newest first, capped so the prompt stays short."""
+    try:
+        lines = [l.strip().lstrip("-*• ").strip() for l in open(LEARNED_FILE, encoding="utf-8").read().splitlines()]
+    except OSError:
+        return ""
+    lines = [l for l in lines if l and not l.startswith("#")][-limit:]
+    if not lines:
+        return ""
+    txt = "\n".join("- " + l for l in reversed(lines))[:chars]
+    return f"מה שלמדת מתיקונים של {OWNER} (חל תמיד; אל תחזור על הטעות):\n" + txt
+
+
+def correction_prompt(text):
+    """When a message looks like a correction or a standing preference, the run is told to record it (tools/wa_learn.py)."""
+    if not CORRECTION_RE.search(text or ""):
+        return ""
+    tool = os.path.join(ROOT, "tools", "wa_learn.py")
+    return (f"ההודעה נראית כתיקון או העדפה קבועה של {OWNER}. אם זה תיקון להתנהגות שלך (לא רק לתוכן חד פעמי), נסח אותו כשורה אחת קצרה "
+            f"(מה לעשות / לא לעשות, ובאיזה הקשר) ושמור אותו: uv run -q --no-project python -I -X utf8 {tool} add <קובץ UTF-8 עם השורה>. "
+            "תיקון של מילה שהובנה לא נכון נכנס למילון התמלול (dictionary.md) ולא לכאן. אחרי השמירה אשר ליקיר בשורה אחת מה נשמר.")
+
+
 DICT_FILE = os.path.join(HOME, "dictionary.md")
 
 
@@ -4953,6 +4986,20 @@ def model_not_in_provider(name, chat=None):
     return "\n".join(lines)
 
 
+def note_owner_correction(chat, name, model):
+    """Owner 17.11 07:54: switching AI or model within 5 minutes of an answer by an automatic pick is a correction of that pick:
+    it goes into the journal as a failed run (src owner) of that provider+model, so the routing learns from it."""
+    try:
+        raw = kv_get("auto_pick:" + str(chat or PRIMARY))
+        last = json.loads(raw) if raw else None
+        if last and (dt.datetime.now() - dt.datetime.fromisoformat(last["at"])).total_seconds() < 300 and (last["provider"], last["model"]) != (name, model):
+            journal_add(last["provider"], False, "owner_corrected", None, None, last["model"], "owner")
+            log("owner corrected an automatic pick:", last["provider"], last["model"], "->", name, model)
+        kv_set("auto_pick:" + str(chat or PRIMARY), "")
+    except Exception as e:
+        log("note_owner_correction failed", e)
+
+
 def routing_note(name):
     """What "auto" does inside a provider, for the message on entering it (owner 17.11 07:33)."""
     if name == "claude":
@@ -5469,6 +5516,10 @@ def run_command(row):
         hints = None if guest else dictionary_hints(body)
         if hints:
             prompt += "\n\n" + hints
+        if not guest:  # owner 17.11 07:54: learned preferences + the order to record a new correction
+            for extra in (learned_hints(), correction_prompt(raw_text(body))):
+                if extra:
+                    prompt += "\n\n" + extra
         if src == "wa" and came_back_from_pc(chat, cid):
             prompt = (T_BACK_HE if LANG == "he" else T_BACK_EN) + prompt
         cut = kv_get(f"cut:{cid}")
@@ -5519,6 +5570,8 @@ def run_command(row):
                    "כתוב \"המשך\" ואמשיך מאותה נקודה.")
         if answer and not stopped and (getattr(_ctx, "provider_used", None) or active_provider()[0]) != "claude":
             out = ensure_hebrew(out, chat)
+        if answer and not stopped:
+            out = wa_format.md_to_wa(out)  # owner 17.11: Markdown from an AI becomes WhatsApp formatting (no rules, no ** or # left)
         if rm and rm.group(2).strip():  # owner 09.11: every rule answer says how many rules there are now
             out += f"\n\n📜 יש עכשיו {rules_count(rules_text(chat))} כללים בשיחה הזו (/כלל בסיס להצגה)."
         if rec:
@@ -8421,7 +8474,7 @@ def home_sync():
     ssh, scp = shutil.which("ssh") or "ssh", shutil.which("scp") or "scp"
     rhome = (hs.get("remote_home") or HOME).replace("\\", "/")
     opts = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
-    for rel in hs.get("files") or ["dictionary.md", "shared-sync.md"]:
+    for rel in hs.get("files") or ["dictionary.md", "shared-sync.md", "learned.md"]:
         local, remote = os.path.join(HOME, rel), f"{rhome}/{rel}"
         try:
             r = subprocess.run([ssh, *opts, peer, "powershell", "-NoProfile", "-Command",
