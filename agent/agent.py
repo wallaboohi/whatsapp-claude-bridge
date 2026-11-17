@@ -7944,11 +7944,23 @@ def event_listener():
             time.sleep(5)
 
 
+def sms_card_reaction(mid, emoji):
+    """The owner's reaction on a card: tools/sms_send.py decides whether it is an SMS draft card (nothing happens otherwise)."""
+    try:
+        subprocess.run([sys.executable, "-I", "-X", "utf8", os.path.join(ROOT, "tools", "sms_send.py"), "react", mid, emoji],
+                       capture_output=True, timeout=300, creationflags=NO_WINDOW)
+    except Exception as e:
+        log("sms card reaction failed", e)
+
+
 def handle_reaction_event(ev):
     cj = ev.get("chat_jid", "")
     mid = ev.get("message_id", "")
     emoji = ev.get("emoji", "")
     note_reaction(cj, mid, emoji)
+    if cj == PRIMARY and emoji in ("✅", "✔️", "👍", "❌") and serves_here(cj):  # owner 17.11: ✅ on an SMS draft card sends that one SMS
+        threading.Thread(target=sms_card_reaction, args=(mid, emoji), daemon=True).start()
+        return
     if emoji != READ_ALOUD or wheel_is_ours(cj, mid):
         return
     if cj == PRIMARY or cj in load_groups():
