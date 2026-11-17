@@ -2074,6 +2074,13 @@ def provider_env(name=None, model=None):
     _ctx.provider_used = name
     p = providers().get(name) or {}
     _ctx.auto_model_used, _ctx.auto_tier = None, 0
+    if model is None and p.get("kind") == "claude-remote":  # owner 17.11 17:06: /מודל on the work account (Claude Code of the laptop)
+        try:
+            ov = get_override(getattr(_ctx, "chat", None))
+            if ov in MODELS and ov != "auto":
+                model = ov
+        except Exception as e:
+            log("remote model override failed", e)
     if model is None and name != "claude" and CFG.get("model_routing", True) and p.get("kind") != "anthropic-key":
         try:  # owner 17.11 07:33: no model pinned -> the model by the complexity of this request
             txt = getattr(_ctx, "task_text", "") or ""
@@ -3311,7 +3318,21 @@ def _stage_of(ev):
                     return "🖼️ מוריד מדיה/היסטוריה"
                 if "gsheet" in c or "sheets" in c.lower():
                     return "🗂️ קורא/כותב גיליון"
-                return "⬛ מריץ פקודה (cmd)"
+                if re.search(r"(^|[\s;&|/\\])adb(\.exe)?\s", c):
+                    return "📱 שולט בנייד (adb)"
+                if re.search(r"\b(ssh|scp)\s|peer_sync", c):
+                    return "🔗 מדבר עם המחשב השני"
+                if re.search(r"sqlite|\.db\b", c, re.I):
+                    return "🗄️ שולף ממסד נתונים"
+                if re.search(r"Get-Process|tasklist|taskkill|Stop-Process|Get-Service|Get-CimInstance|netstat", c, re.I):
+                    return "🩺 בודק תהליכים"
+                if re.search(r"curl|Invoke-WebRequest|Invoke-RestMethod|\biwr\b", c, re.I):
+                    return "📡 קורא משירות/רשת"
+                if re.search(r"(^|[\s;&|])(cat|type|ls|dir|head|tail|Get-Content|Get-ChildItem|Test-Path|findstr)\b", c, re.I):
+                    return "📖 קורא קבצים"
+                if re.search(r"\b(python|uv\s+run|node)\b", c, re.I):
+                    return "🐍 מריץ סקריפט"
+                return "💻 מריץ פקודה"
             if tool in ("set_group", "set_about", "post_status"):
                 return "🏷️ מעדכן פרטי קבוצה"
             if tool in ("list_drafts", "draft_card"):
@@ -5210,6 +5231,9 @@ class StatusMsg:
         lines = [f"{icon} בעבודה · ⏱ {self._elapsed()}"] + self._detail_lines() + [f"🔹 *פעולה:* {st}"]
         if det:
             lines.append(f"📎 *פרט:* {det}")
+        if len(self.steps) >= 2:  # owner 17.11 16:24: two process lines: the previous step (with its duration) and the current one
+            p, c = self.steps[-2], self.steps[-1]
+            lines.append(f"↩️ *קודם:* {p['text']} · {self._fmt(c['ts'] - p['ts'])}")
         lines.append(f"🪜 *שלבים עד כה:* {len(self.steps)}")
         return prefix + italic("\n".join(lines))
 
@@ -5218,11 +5242,16 @@ class StatusMsg:
         the message until the answer."""
         end = self.ended or time.time()
         lines = [f"✅ סיימתי · ⏱ {self._elapsed()}"] + self._detail_lines()
-        if self.steps:
-            lines.append("🪜 *שלבים:*")
-            for i, s in enumerate(self.steps):
-                nxt = self.steps[i + 1]["ts"] if i + 1 < len(self.steps) else end
-                lines.append(f"{i + 1}. {s['text']} · {self._fmt(nxt - s['ts'])}")
+        if self.steps:  # owner 17.11 16:45: two short process lines: icons in order, and the words below them
+            seq = []
+            for s in self.steps:
+                head = s["text"].split(" · ", 1)[0].strip()
+                if not seq or seq[-1] != head:
+                    seq.append(head)
+            icons = " ".join(stage_icon(h) or "▫️" for h in seq)
+            words = " ← ".join(h.split(" ", 1)[-1] if stage_icon(h) else h for h in seq)
+            lines.append(f"🪜 {icons}")
+            lines.append(words)
         lines.append(f"⏱ *סה״כ מקבלת ההודעה עד התשובה:* {self._elapsed()}")
         return CFG["reply_prefix"] + italic("\n".join(lines))
 
@@ -5284,7 +5313,8 @@ class StatusMsg:
         edits = 0
         # owner 17.11 16:20: many edits in a short time look like abuse to WhatsApp (ban risk): an edit at most every 20 s
         # (config status_edit_seconds, never below 15), every 60 s after the first 10 edits
-        while self.mid and not self.done.wait(max(15.0, float(CFG.get("status_edit_seconds", 20))) * (3 if edits >= 10 else 1)):
+        # owner 17.11 16:24: every 10 s (config status_edit_seconds, never below 10); every 30 s after the first 30 edits
+        while self.mid and not self.done.wait(max(10.0, float(CFG.get("status_edit_seconds", 10))) * (3 if edits >= 30 else 1)):
             self.tick += 1
             new = self._text()
             if new != last:
@@ -5595,7 +5625,7 @@ def owner_command(text, chat=None):
     if name not in MODELS:
         return "לא מכיר את המודל הזה. אפשרויות: " + ", ".join(MODELS) + "\n\n" + models_guide(chat)
     hours = 1 if "hour" in parts[1:] else None
-    if name != "auto" and active_provider(chat)[0] != "claude":  # owner 17.11 07:24: a model the provider does not have is an error, never a silent provider switch
+    if name != "auto" and active_provider(chat)[0] not in ("claude", "claude_work"):  # owner 17.11 17:06: the work account is Claude too (--model goes through ssh); 07:24: a model the provider does not have is an error, never a silent provider switch
         return model_not_in_provider(name, chat)
     set_override(name, hours, chat)
     target = chat or PRIMARY
