@@ -2341,6 +2341,15 @@ def where_of(name, model=None):
     return "remote", "ענן"
 
 
+def strip_own_header(text):
+    """Owner 17.11 11:34: the bridge puts the AI line (ai_tag) first; an AI that also wrote its own "🤖 _🧠 ... · ☁️ ענן_" line made it
+    appear twice, with blank lines in between. Leading copies of that line, and the blank lines around them, are dropped."""
+    lines = (text or "").lstrip("\n").split("\n")
+    while lines and (not lines[0].strip() or re.match(r"^[\s🤖_*]*🧠.*(☁️|🏠)", lines[0])):
+        lines.pop(0)
+    return "\n".join(lines) if lines else text
+
+
 def ai_tag(model=None):
     """Owner 13.11: the first line of every answer says who answered: the provider and its model (config show_ai_tag, default on)."""
     if not CFG.get("show_ai_tag", True):
@@ -5716,6 +5725,7 @@ def run_command(row):
         elif how == "sticky_deep" and not stopped and on_claude:
             out += ("\n\n💡 לניתוח לעומק: התחל את ההודעה ב-!! (המודל החזק להודעה אחת; הסשן נשאר על המודל הנוכחי כדי לא לשלם שוב על כל ההקשר)."
                     if LANG == "he" else "\n\n💡 For deep analysis start the message with !! (strongest model for one message).")
+        out = strip_own_header(out) if answer and not stopped else out  # owner 17.11: the bridge adds the AI line; the AI's own copy doubled it
         reply((ai_tag(model) if answer and not stopped else "") + out, quoted=mid if (CFG.get("quote_replies", True) and src == "wa") else None)
         send_outbox(started)
         if answer and not stopped and not guest and time.time() - started >= float(CFG.get("push_long_minutes", 5)) * 60:
