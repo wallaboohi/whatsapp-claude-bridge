@@ -5044,6 +5044,9 @@ def sync_all_group_names():
         sync_names_file()
     except Exception as e:
         log("groups.json name sync failed", e)
+    for k in ("provider_used", "failover_used", "chat"):  # owner 17.11 19:43: this worker thread keeps the _ctx of its last run (an automation that went to Groq),
+        if hasattr(_ctx, k):                              # and the minute sync read it — the name flipped to "Groq" while Claude Work answered
+            delattr(_ctx, k)
     for chat in [PRIMARY, *[j for j in load_groups() if j != LOCAL]]:
         m = get_override(chat) or kv_get(K("last_model", chat)) or CFG.get("claude_model") or "sonnet"
         sync_group_name(chat, m)
