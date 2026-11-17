@@ -2431,32 +2431,99 @@ def versioning_mod():
     return mod
 
 
+MODEL_DESC_RULES = (  # (words that must all be in the lowercase model id, short purpose in Hebrew) - first match wins; by model type, not a benchmark
+    (("sonnet[1m]",), "סונט עם הקשר ארוך מאוד: מסמכים וקבצים גדולים"),
+    (("opusplan",), "אופוס מתכנן וסונט מבצע: משימות קוד גדולות"),
+    (("haiku",), "מהיר וזול: שאלות קצרות, סטטוס, חיפוש"),
+    (("sonnet",), "מאוזן: עבודה רגילה, סיכומים, אקסל, קוד"),
+    (("opus",), "הכי חזק: תכנון, ניתוח לעומק, באגים קשים (יקר)"),
+    (("fable",), "המתקדם ביותר: משימות קשות במיוחד (יקר מאוד)"),
+    (("coder",), "מתמחה בכתיבה ועריכת קוד"),
+    (("starcoder",), "מתמחה בהשלמת קוד"),
+    (("devstral",), "מתמחה בקוד ובעבודה על קבצים"),
+    (("smollm",), "זעיר: משימות פשוטות מאוד"),
+    (("granite4",), "קטן ומהיר: משימות פשוטות"),
+    (("dicta",), "עברית: תמלול ותיקון טקסט"),
+    (("r1",), "חושב לפני שעונה: היגיון וחישוב (איטי)"),
+    (("nemotron", "ultra"), "ענק: ניתוח מורכב (איטי)"),
+    (("nemotron", "lightning"), "מהיר וקל: שאלות קצרות"),
+    (("nemotron", "vl"), "מבין גם תמונות, שיחה כללית"),
+    (("nemotron",), "מודל כללי של NVIDIA"),
+    (("gpt-oss-120b",), "גדול: שיחה, סיכום וניתוח כללי"),
+    (("gpt-oss-20b",), "קטן ומהיר: שאלות פשוטות"),
+    (("gpt-oss",), "מודל פתוח כללי"),
+    (("llama-3.3-70b",), "גדול: שיחה כללית טובה"),
+    (("llama",), "מודל פתוח כללי של Meta"),
+    (("gemini", "lite"), "הכי מהיר וזול של גוגל: שאלות קצרות"),
+    (("gemini", "flash"), "מהיר: שימוש כללי, סיכומים"),
+    (("gemini",), "מודל כללי של גוגל"),
+    (("gemma",), "קטן ופתוח של גוגל: שיחה וסיכומים קלים"),
+    (("deepseek",), "חזק בקוד ובהיגיון"),
+    (("qwen3-4b", ), "קטן: שאלות פשוטות בלבד"),
+    (("qwen",), "מודל כללי של Alibaba"),
+    (("mistral", "large"), "גדול: שיחה וניתוח כלליים"),
+    (("mistral",), "מודל כללי בינוני"),
+    (("phi4",), "קטן ומהיר: שיחה וחישוב"),
+    (("minimax",), "מודל כללי מהיר"),
+    (("glm",), "מודל כללי"),
+    (("ernie",), "מודל כללי של Baidu"),
+    (("ling",), "מודל כללי מהיר"),
+    (("longcat",), "מודל כללי מהיר"),
+    (("big-pickle",), "מודל חינמי של OpenCode, כללי"),
+)
+
+
+def model_desc(m):
+    """A short Hebrew purpose for a model id (owner 17.11 07:25); '' when nothing is known - never an invented claim."""
+    k = str(m or "").lower().split("/")[-1].split(":")[0]
+    for words, txt in MODEL_DESC_RULES:
+        if all(w in k for w in words):
+            return txt
+    return ""
+
+
+def _model_name_he(m):
+    return model_he(str(m).split("/")[-1].split(":")[0])
+
+
+def _model_lines(ms, cap=8):
+    """One line per model of a provider: number, Hebrew name and what it is for (the number is /N M's M)."""
+    ms = [str(m) for m in ms if m]
+    out = []
+    for i, m in enumerate(ms[:cap], 1):
+        d = model_desc(m)
+        out.append(f"     {i}) {_model_name_he(m)}" + (f" — {d}" if d else ""))
+    if len(ms) > cap:
+        out.append(f"     … ועוד {len(ms) - cap} (הפעלה לפי מספר: /N {cap + 1} ומעלה)")
+    return out
+
+
 def _model_words_line(ms, cap=6):
-    """The models of one provider, numbered like the providers are ('= 1) סונט 2) אופוס · עוד 2') — owner 16.11 21:35."""
+    """The models of one provider on one line ('1) סונט 2) אופוס'), for places with no room."""
     ms = [str(m) for m in ms if m][:cap]
-    txt = " ".join(f"{i + 1}) {model_he(m.split('/')[-1].split(':')[0])}" for i, m in enumerate(ms))
-    return txt
+    return " ".join(f"{i + 1}) {_model_name_he(m)}" for i, m in enumerate(ms))
 
 
 def _provider_row(k, cur, cm, ok=None, detail="", models=None):
     """One provider in the /ספק list: number, Hebrew name, its models numbered after '=', 👉 on the one answering now."""
     p = providers()[k]
     icon = "🔀" if k == "auto" else "🏠" if provider_is_local(k) else "☁️"
+    lines = []
     if k == "auto":
         body = "הסוכן בוחר לבד (מהזול ליקר)"
     elif models is not None:
-        body = "= " + _model_words_line(models) if models else "= מביא מודל משלו"
+        body, lines = ("" if models else "= מביא מודל משלו"), _model_lines(models)
     else:
         c = provider_check(k)
         ms = [x for x in MODELS if x != "auto"] if k == "claude" else c["models"]
-        body = "= " + _model_words_line(ms) if ms else "= מביא מודל משלו"
+        body, lines = ("" if ms else "= מביא מודל משלו"), _model_lines(ms)
         ok, detail = c["ok"], c["detail"]
     if k == cur and cm:
         body += f" · עכשיו: {model_he(cm)}"
     st = "" if ok is None else (" ✅" if ok else f" ⚪ · {str(detail)[:40]}")
     if ok and k == "ollama" and detail:  # which of this computer's Ollama hosts serves it (owner 17.11)
         st += f" · {str(detail)[:80]}"
-    return f"{'👉 ' if k == cur else ''}{icon} */{provider_number(k)}* *{AI_HE.get(k) or p.get('label') or k}* {body}{st}"
+    return f"{'👉 ' if k == cur else ''}{icon} */{provider_number(k)}* *{AI_HE.get(k) or p.get('label') or k}* {body}{st}" + ("\n" + "\n".join(lines) if lines else "")
 
 
 def _peer_rows(peer_brief, local):
@@ -2471,12 +2538,12 @@ def _peer_rows(peer_brief, local):
         if not k or k == "auto" or (p.get("where") == "local") != local:
             continue
         row = (f"{'👉 ' if p.get('active') else ''}{'🏠' if local else '☁️'} */{provider_number(k)}* *{AI_HE.get(k) or p.get('label') or k}* "
-               + ("= " + _model_words_line(p.get("models") or []) if p.get("models") else "= מביא מודל משלו"))
+               + ("" if p.get("models") else "= מביא מודל משלו"))
         if p.get("ok"):
             row += " ✅" + (f" · {str(p.get('detail') or '')[:60]}" if k == "ollama" else "")  # ollama detail = which of its hosts serves it
         else:
             row += f" ⚪ · {str(p.get('detail') or '')[:40]}"
-        out.append(row)
+        out.append(row + ("\n" + "\n".join(_model_lines(p.get("models") or [])) if p.get("models") else ""))
     return out or ["💤 אין שם בינה מסוג זה"]
 
 
@@ -4735,7 +4802,7 @@ def model_not_in_provider(name, chat=None):
         lines.append("בספק אוטומטי הגשר בוחר לבד ספק ומודל, ולכן אי אפשר לקבוע בו מודל של Claude.")
     elif ms:
         lines.append(f"*המודלים של {label}* (הפעלה: /{provider_number(cur)} מספר):")
-        lines += [f"{i}) {model_he(m.split('/')[-1].split(':')[0])} → /{provider_number(cur)} {i}" for i, m in enumerate(ms, 1)]
+        lines += [f"{i}) {_model_name_he(m)}" + (f" — {model_desc(m)}" if model_desc(m) else "") + f" → /{provider_number(cur)} {i}" for i, m in enumerate(ms, 1)]
     else:
         lines.append(f"ל-{label} אין בחירת מודל: הוא מביא מודל משלו.")
     lines += ["", f"כדי להשתמש ב-{MODELS[name]['he']}: קודם עבור לספק Claude עם /{provider_number('claude')}, ואז /מודל {name}."]

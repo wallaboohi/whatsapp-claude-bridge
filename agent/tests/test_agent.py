@@ -2815,3 +2815,12 @@ def test_a_claude_model_on_another_provider_is_an_error_not_a_switch(agent):
     assert mod.active_provider(chat)[0] == "cloudflare" and "לא אפשרי" in out and "1)" in out and "/1" in out
     mod.set_provider("claude", chat=chat)
     assert "המודל הוחלף" in mod.owner_command("/מודל haiku", chat)
+
+
+def test_every_model_in_the_list_says_what_it_is_for(agent):
+    """Owner 17.11 07:25: a short purpose next to each model; nothing invented for a model nobody knows."""
+    mod, _ = agent
+    assert "מהיר וזול" in mod.model_desc("haiku") and "קוד" in mod.model_desc("@cf/qwen/qwen2.5-coder-32b-instruct")
+    assert mod.model_desc("some-unknown-model-x") == ""
+    t = mod.providers_text()
+    assert "1) הייקו — " in t and "2) סונט — " in t
