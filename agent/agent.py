@@ -704,12 +704,53 @@ def report_restart():
 
 def disconnects_24h():
     """Owner 17.11: how many times the bridge disconnected from WhatsApp in the last 24 hours (conn_log)."""
+    r = disconnects_split_24h()
+    return None if r is None else r[0] + r[1]
+
+
+def disconnects_split_24h(long_secs=60):
+    """Owner 17.11 22:55: '9 disconnects' looked wrong because most are WhatsApp's own reconnects of 1-3 seconds. Returns
+    (long, short): a disconnect is long when the next 'connected' came after long_secs or more (or never came)."""
     since = (dt.datetime.now() - dt.timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
     try:
         with mdb() as db:
-            return db.execute("SELECT COUNT(*) FROM conn_log WHERE event = 'disconnected' AND at >= ?", (since,)).fetchone()[0]
+            rows = db.execute("SELECT at, event FROM conn_log WHERE at >= ? AND event IN ('disconnected', 'connected') ORDER BY at",
+                              (since,)).fetchall()
     except Exception:
         return None
+    long_n = short_n = 0
+    down_at = None
+    for at, ev in rows:
+        t = dt.datetime.fromisoformat(str(at)[:19])
+        if ev == "disconnected":
+            if down_at is None:
+                down_at = t
+        elif down_at is not None:
+            if (t - down_at).total_seconds() >= long_secs:
+                long_n += 1
+            else:
+                short_n += 1
+            down_at = None
+    if down_at is not None:
+        long_n += 1
+    return long_n, short_n
+
+
+def answered_ais_text():
+    """Owner 17.11 22:55: the AIs that really answered in the last model check (kv model_answers), with its time."""
+    try:
+        ans = json.loads(kv_get("model_answers") or "{}")
+    except ValueError:
+        ans = {}
+    names = []
+    for n, models in ans.items():
+        if any((r or {}).get("ok") for r in (models or {}).values()):
+            label = AI_HE.get(n) or (providers().get(n) or {}).get("short") or n
+            if label not in names:
+                names.append(label)
+    at = (kv_get("model_answers_at") or "").replace("T", " ")
+    when = f" (בדיקה {at[8:10]}.{at[5:7]} {at[11:16]})" if len(at) >= 16 else ""
+    return (", ".join(names) if names else "אין נתון עדיין") + when
 
 
 def code_rev():
@@ -734,14 +775,20 @@ def restart_notice_text(chat, reason=""):
              f"🖥️ *מחשב:* {CFG.get('host_label') or socket.gethostname()}",
              f"🧠 *ספק:* {short}"]
     if model:
-        lines.append(f"🎚️ *מודל:* {model_he(model)}")
+        try:
+            auto = get_override(chat) is None  # owner 17.11 22:55: say that the model was picked by auto
+        except Exception:
+            auto = False
+        lines.append(f"🎚️ *מודל:* {model_he(model)}" + (" _(נבחר אוטומטית)_" if auto else ""))
     lines.append(f"{'🏠' if location.startswith('🏠') else '☁️'} *מיקום:* {location.split(' ', 1)[-1]}")
     lines.append("🔌 *סטטוס:* מחובר כרגע")
-    lines.append(f"⏱ *אופליין היום:* {hm(down_today_min())}")
-    n = disconnects_24h()
-    if n is not None:
-        lines.append(f"🔁 *ניתוקים ב-24 שעות:* {n}")
-    lines.append(f"🧩 *בינות מחוברות:* {connected_ais_text()}")
+    lines.append(f"⏱ *אופליין היום (המחשב הזה):* {hm(down_today_min())}")
+    sp = disconnects_split_24h()
+    if sp is not None:
+        lines.append(f"🔁 *ניתוקים ב-24 שעות:* {sp[0]} ממושכים (דקה ומעלה)"
+                     + (f" _· ועוד {sp[1]} קצרים של שניות, חיבור מחדש אוטומטי_" if sp[1] else ""))
+    lines.append(f"✅ *בינות שענו בבדיקה האחרונה:* {answered_ais_text()}")
+    lines.append(f"🧩 *כל הבינות המחוברות:* {connected_ais_text(limit=99)}")
     if reason:
         lines.append(f"⏸️ *סיבה:* {reason}")
     rev = code_rev()
@@ -1558,6 +1605,7 @@ def daily_model_check(timeout=120):
         prev = {}
     now = model_answer_matrix(timeout)
     kv_set("model_answers", json.dumps(now, ensure_ascii=False))
+    kv_set("model_answers_at", dt.datetime.now().isoformat(timespec="minutes"))
     if not prev:
         log("daily model check: first snapshot saved, nothing to compare yet")
         return
