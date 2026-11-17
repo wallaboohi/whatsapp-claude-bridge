@@ -90,7 +90,10 @@ def proxy(tmp_path, monkeypatch):
             seen["auth"] = self.headers.get("Authorization")
             req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             seen["req"] = req
-            if seen.get("fail"):
+            if seen.get("quota") and seen["auth"] in seen["quota"]:
+                raw = json.dumps({"error": {"message": "rate limit"}}).encode()
+                self.send_response(429)
+            elif seen.get("fail"):
                 raw = json.dumps({"error": {"message": "bad key"}}).encode()
                 self.send_response(401)
             elif req.get("stream"):
@@ -141,6 +144,19 @@ def test_http_non_stream_stream_and_errors(proxy):
     assert st == 401 and json.loads(raw)["error"] == {"type": "authentication_error", "message": "bad key"}
     assert _post(base + "/p/nope/v1/messages", {})[0] == 404
     assert json.loads(_post(base + "/p/t/v1/messages/count_tokens", {"messages": [{"role": "user", "content": "x" * 400}]})[1])["input_tokens"] >= 100
+
+
+def test_quota_error_retries_with_the_second_account_key(proxy, tmp_path):
+    """Owner 17.11 22:31: a second account's key (secrets/<key_file>2) answers when the first one's quota is out."""
+    base, seen = proxy
+    body = {"model": "claude-x", "max_tokens": 5, "messages": [{"role": "user", "content": "ping"}]}
+    seen["quota"] = ["Bearer SECRET-KEY"]
+    assert _post(base + "/p/t/v1/messages", body)[0] == 429  # no second key: the quota error goes back as is
+    (tmp_path / "secrets" / "t.key2").write_text("SECOND-KEY", encoding="utf-8")
+    st, raw = _post(base + "/p/t/v1/messages", body)
+    assert st == 200 and json.loads(raw)["content"][0]["text"] == "pong" and seen["auth"] == "Bearer SECOND-KEY" and "SECOND-KEY" not in raw
+    seen["quota"] = ["Bearer SECRET-KEY", "Bearer SECOND-KEY"]
+    assert _post(base + "/p/t/v1/messages", body)[0] == 429  # both out: one quota error, no loop
 
 
 def test_models_come_from_the_provider_and_prove_the_key(proxy):

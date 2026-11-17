@@ -58,13 +58,17 @@ def upstream_base(p):
     return base
 
 
-def read_key(p):
+def read_key(p, n=1):
+    """n=2: the provider's second account key (secrets/<key_file>2), owner 17.11 22:31 — a second quota for the same provider."""
     if not p.get("key_file"):
         return ""
     try:
-        return open(os.path.join(ROOT, "secrets", p["key_file"]), encoding="utf-8").read().strip()
+        return open(os.path.join(ROOT, "secrets", p["key_file"] + ("2" if n == 2 else "")), encoding="utf-8").read().strip()
     except OSError:
         return ""
+
+
+QUOTA_CODES = (402, 429)
 
 
 # ---------------- request: Anthropic -> OpenAI ----------------
@@ -350,13 +354,17 @@ class Handler(BaseHTTPRequestHandler):
         url = upstream_base(p).rstrip("/") + "/chat/completions"
         hdr = {"Content-Type": "application/json", "Authorization": "Bearer " + key, "User-Agent": UA}
         r = None
-        for attempt in (1, 2):  # the second one only after a "max_tokens too large" answer, with the limit the provider named
+        key2 = read_key(p, 2)
+        for attempt in (1, 2, 3):  # a retry only after "max_tokens too large" (with the provider's limit) or a quota error (with the 2nd key)
             try:
                 r = urllib.request.urlopen(urllib.request.Request(url, data=json.dumps(req).encode(), headers=hdr, method="POST"), timeout=600)
                 break
             except urllib.error.HTTPError as e:
                 msg = upstream_message(e.read().decode("utf-8", "replace"), e.reason)
-                cap = token_cap(msg, req) if e.code == 400 and attempt == 1 else None
+                if e.code in QUOTA_CODES and key2 and hdr["Authorization"] != "Bearer " + key2:
+                    hdr["Authorization"] = "Bearer " + key2  # owner 17.11 22:31: the first account's quota is out, the second account answers
+                    continue
+                cap = token_cap(msg, req) if e.code == 400 and attempt < 3 else None
                 if not cap:
                     return self._json(e.code, error_body(e.code, msg))
                 req["max_completion_tokens" if "max_completion_tokens" in req else "max_tokens"] = cap
