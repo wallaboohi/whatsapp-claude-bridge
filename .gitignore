@@ -55,3 +55,11 @@ qr.png
 /store/
 agent/7
 agent/'*
+
+# ---- runtime state / scratch (owner 18.11: not code, never "for review") ----
+agent/engine.json
+agent/adb_keeper.json
+agent/tmp_*
+/date(*
+/messages.db
+.recycle/

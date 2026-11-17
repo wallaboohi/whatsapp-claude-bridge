@@ -291,14 +291,22 @@ def restart_gate(what="restart"):
     peers = [p for p in (CFG.get("peers") or []) if peer_alias(p)]
     if not peers:
         return
-    limit = time.time() + 60 * int(CFG.get("restart_wait_minutes", 10))
+    t0 = time.time()
+    limit = t0 + 60 * int(CFG.get("restart_wait_minutes", 10))
+    # owner 18.11: a peer that does not answer at all (asleep, off, no network) is not "restarting": waiting 10 minutes on it
+    # left this agent not answering (00:33-00:44). Unreachable -> give up after restart_unreachable_seconds (default 60).
+    unreach_limit = t0 + int(CFG.get("restart_unreachable_seconds", 60))
     while True:
-        waiting = []
+        waiting, unreachable = [], True
         for peer in peers:
             b = peer_fetch(peer, timeout=10)
             if not b or b.get("agent_alive", True) is False or not (b.get("bridge") or {}).get("connected", True):
                 waiting.append(peer.get("name") or "?")
+                unreachable = unreachable and not b
         if not waiting:
+            return
+        if unreachable and time.time() >= unreach_limit:
+            log(f"{what}: the other computer ({', '.join(waiting)}) does not answer at all; going ahead")
             return
         if time.time() >= limit:
             log(f"{what}: the other computer ({', '.join(waiting)}) is still not up after waiting; going ahead")
@@ -540,7 +548,7 @@ def _peers_included():
 def day_sync():
     """Daily before the release, the midnight session change and the 23:50 update (config day_sync_time, default 23:15; day_sync false = off):
     save the day's code (tracked files, only if the tests pass), pull + push the shared hub, and when the code changed rebuild
-    the bridge and restart the agent so tomorrow starts on the newest version. Untracked files are only reported."""
+    the bridge and restart the agent so tomorrow starts on the newest version. New files are saved too, except secret-like ones."""
     if not CFG.get("day_sync", True):
         return
     rc, remotes = _git("remote")
@@ -566,9 +574,26 @@ def day_sync():
             rc, out = _git(*_git_author(), "commit", "-q", "-m",
                            f"Daily sync {host} {dt.date.today().isoformat()}: {len(changed)} files")
             notes.append(f"💾 נשמרו {len(changed)} קבצים ששונו היום." if rc == 0 else f"⚠️ השמירה נכשלה: {out[-200:]}")
-    _, untracked = _git("ls-files", "--others", "--exclude-standard")
-    if untracked.strip():
-        notes.append("📄 קבצים חדשים שלא נשמרו (בכוונה, לבדיקה שלך): " + ", ".join(untracked.split()[:8]))
+    # New files are saved too (owner 18.11: nothing is left out "for review"). Runtime/personal files belong in .gitignore;
+    # anything that looks like a secret, a database or a large file is held back and named, so a key never reaches hub/GitHub.
+    _, untracked = _git("ls-files", "--others", "--exclude-standard", "-z")
+    new_ok, held = [], []
+    for f in [x for x in untracked.split("\0") if x]:
+        full, low = os.path.join(ROOT, f), f.lower()
+        secretish = any(w in low for w in ("secret", "token", "apikey", "api_key", "password", ".env", "credential", ".pem", ".key"))
+        big = os.path.isfile(full) and os.path.getsize(full) > 5 * 1024 * 1024
+        (held if secretish or big or low.endswith((".db", ".db-wal", ".db-shm")) else new_ok).append(f)
+    if new_ok:
+        fail = _day_sync_tests(False, day_sync_plan(new_ok)[1])
+        if fail:
+            notes.append(f"⚠️ {len(new_ok)} קבצים חדשים *לא נשמרו*: הבדיקות נכשלו ({fail}).")
+        else:
+            _git("add", "--", *new_ok)
+            rc, out = _git(*_git_author(), "commit", "-q", "-m",
+                           f"Daily sync {host} {dt.date.today().isoformat()}: {len(new_ok)} new files")
+            notes.append(f"💾 נשמרו {len(new_ok)} קבצים חדשים." if rc == 0 else f"⚠️ שמירת הקבצים החדשים נכשלה: {out[-200:]}")
+    if held:
+        notes.append("🔐 לא נשמרו כי נראים כסוד, מסד או קובץ גדול: " + ", ".join(held[:8]))
     ok, note = _hub_sync()
     if note:
         notes.append(note)
@@ -7682,6 +7707,13 @@ def plugin_hold_watch():
     kv_set("plugin_hold_at", now.isoformat(timespec="seconds"))
     holds = plugin_holds()
     if holds and not os.path.exists(RESTART_FILE):
+        # owner 18.11: restarting again and again (00:09, 00:15, 00:20, 00:33) never got the hold released: every restart made
+        # this machine look "down" to the backup again. One restart per hold_restart_minutes (default 60); after that only log.
+        prev = kv_get("plugin_hold_restart_at") or ""
+        if prev and now - dt.datetime.fromisoformat(prev) < dt.timedelta(minutes=int(CFG.get("hold_restart_minutes", 60))):
+            log("plugins held by", holds, "- already restarted for it at", prev, "; not restarting again")
+            return
+        kv_set("plugin_hold_restart_at", now.isoformat(timespec="seconds"))
         log("plugins held by", holds, "while running here: restarting")
         _ctx.chat = PRIMARY
         try:
