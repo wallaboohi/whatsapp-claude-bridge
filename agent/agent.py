@@ -3971,6 +3971,37 @@ def dictionary_hints(text, limit=25):
     return head.format(owner=OWNER) + "\n" + "\n".join(hits[:limit])
 
 
+def dictionary_autofix(chat, mid, text):
+    """Owner 17.11: the bridge, not the AI, corrects the owner's own WhatsApp message by the transcription dictionary.
+    Only entries without a `(condition)` are applied (a conditional one such as "cable" may be a real word), whole words
+    with an optional one-letter prefix; the message is edited in place. Returns the corrected text or ''."""
+    try:
+        lines = open(DICT_FILE, encoding="utf-8").read().splitlines()
+    except OSError:
+        return ""
+    new = text
+    for ln in lines:
+        entry = ln.split("#", 1)[0].strip().lstrip("-*• ").strip()
+        if "→" not in entry:
+            continue
+        wrong, right = (x.strip() for x in entry.split("→", 1))
+        if not wrong or not right or "(" in wrong or "(" in right:
+            continue
+        for w in (x.strip() for x in wrong.split("/")):
+            if w:
+                new = re.sub(r"(?<![א-ת])([והבכלמש]{0,2})" + re.escape(w) + r"(?![א-ת])",
+                             lambda m, r=right: m.group(1) + r, new)
+    if new == text or not mid:
+        return ""
+    try:
+        bridge("/edit_message", {"jid": chat, "id": mid, "text": new}, timeout=20)
+        log("dictionary fix applied to the owner's message", mid)
+        return new
+    except Exception as e:
+        log("dictionary fix failed", mid, e)
+        return ""
+
+
 def raw_text(text):
     """The owner's own words: without the attachment line(s) the agent adds and the voice-note marker."""
     lines = [l for l in (text or "").splitlines() if not l.strip().startswith(T["attached"].split("{")[0].strip())]
@@ -5514,6 +5545,10 @@ def run_command(row):
         if rm and rm.group(2).strip() and not guest:  # /כלל בסיס <rule>: Claude checks it and adds it to this conversation's rules file
             body = RULE_PROMPT.format(owner=OWNER, rule=rm.group(2).strip(), path=os.path.join(HOME, rules_rel(chat)),
                                       general=os.path.join(HOME, "CLAUDE.md"))
+        if not guest and src == "wa" and mid and raw_text(text) == text.strip():
+            fixed = dictionary_autofix(chat, mid, text)  # owner 17.11: fix the message itself, then answer by the fixed text
+            if fixed:
+                body = fixed.lstrip("!").strip()
         prompt = T["prompt"].format(owner=(guest or {}).get("speaker") or OWNER, when=when, text=body, where=where, dest=dest)
         hints = None if guest else dictionary_hints(body)
         if hints:
