@@ -1233,7 +1233,8 @@ def remote_claude_status(p, max_age=120):
         return hit[1], hit[2]
     up, who = False, ""
     try:
-        r = subprocess.run(["ssh", "-n", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", host, "claude auth status"],  # owner 17.11 19:47: -n = no stdin; with an open stdin the remote claude waited for input, timed out at 25 s and the work account showed "not ready"
+        git_ssh = r"C:\Program Files\Git\usr\bin\ssh.exe"  # owner 17.11 19:55: Windows' ssh.exe started from Python hangs before connecting (25 s timeout); Git's answers in under a second
+        r = subprocess.run([git_ssh if os.path.exists(git_ssh) else "ssh", "-n", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", host, "claude auth status"],  # owner 17.11 19:47: -n = no stdin; with an open stdin the remote claude waited for input, timed out at 25 s and the work account showed "not ready"
                            stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=25)
         m = re.search(r"\{.*\}", r.stdout, re.S)
         o = json.loads(m.group(0)) if m else {}
