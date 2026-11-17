@@ -4873,10 +4873,15 @@ def owner_command(text, chat=None):
         return "לא מכיר את המודל הזה. אפשרויות: " + ", ".join(MODELS) + "\n\n" + models_guide(chat)
     hours = 1 if "hour" in parts[1:] else None
     set_override(name, hours, chat)
+    moved = ""
+    if name != "auto" and active_provider(chat)[0] != "claude":  # owner 17.11 07:20: a Claude model (/מודל חייקו) was ignored on auto, Cloudflare answered
+        was = prov_short(active_provider(chat)[0])
+        set_provider("claude", chat=chat)
+        moved = f" · עברתי גם לספק *Claude* (היית על {was}, והמודל הזה קיים רק ב-Claude)"
     target = chat or PRIMARY
     threading.Thread(target=sync_group_name, args=(target, get_override(target) or kv_get(K("last_model", target)) or name),
                      daemon=True).start()
-    return f"✅ המודל הוחלף ל-*{MODELS[name]['he']}*{' לשעה' if hours else ''} ({MODELS[name]['cost']}). חזרה לאוטו: /מודל אוטו"
+    return f"✅ המודל הוחלף ל-*{MODELS[name]['he']}*{' לשעה' if hours else ''}{moved} ({MODELS[name]['cost']}). חזרה לאוטו: /מודל אוטו"
 
 
 T_BACK_HE = ("[המשך מהנייד: ההודעות האחרונות בשיחה הזו נכתבו בלוח הבקרה במחשב ולא הופיעו בקבוצה בווצאפ. "

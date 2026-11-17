@@ -2804,3 +2804,14 @@ def test_answer_journal_ranks_stable_fast_ai_and_switch_sees_real_failures(agent
     monkeypatch.setattr(mod, "set_provider", lambda *a, **k: sets.append(a))
     out = mod.switch_provider("nvidia")
     assert not sets and "בהודעות אמיתיות נכשל" in out
+
+
+def test_a_claude_model_pulls_the_conversation_back_to_claude(agent):
+    """Owner 17.11 07:20: on auto, '/מודל חייקו' set only the model and Cloudflare answered; now the conversation moves to Claude."""
+    mod, _ = agent
+    chat = "claude-model-group@g.us"
+    mod.set_provider("auto", chat=chat)
+    out = mod.owner_command("/מודל haiku", chat)
+    assert mod.active_provider(chat)[0] == "claude" and "עברתי גם לספק" in out
+    out = mod.owner_command("/מודל אוטו", chat)
+    assert mod.active_provider(chat)[0] == "claude" and "עברתי" not in out
