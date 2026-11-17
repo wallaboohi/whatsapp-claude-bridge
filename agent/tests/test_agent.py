@@ -2333,9 +2333,9 @@ def test_every_answer_says_where_the_model_runs(agent, monkeypatch, tmp_path):
     assert "🏠 לפטופ" in mod.ai_tag("opus")
     mod.set_provider("groq")
     assert "☁️ ענן" in mod.ai_tag("opus")
-    t = mod.providers_text()  # owner 16.11 21:35: four host sections, remote first; every provider numbered, models numbered after '='
-    assert "מארח מרוחק" in t and "מארח מקומי" in t
-    assert t.index("מארח מרוחק") < t.index("מארח מקומי") and t.index("גרוק") < t.index("מארח מקומי") < t.index("אולמה")
+    t = mod.providers_text()  # owner 16.11 21:35: four sections (cloud / local × this computer / the other), remote first
+    assert "בענן" in t and "מקומי" in t and "מארח מרוחק" not in t  # owner 17.11: no machine is called a remote host
+    assert t.index("בענן") < t.index("מקומי") and t.index("גרוק") < t.index("מקומי") < t.index("אולמה")
     rows = mod.ai_status_lines()
     assert rows[0] == mod.REMOTE_HEAD and mod.LOCAL_HEAD in rows and "Ollama" in " ".join(rows[rows.index(mod.LOCAL_HEAD):])
 

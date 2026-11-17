@@ -2454,24 +2454,36 @@ def _provider_row(k, cur, cm, ok=None, detail="", models=None):
     if k == cur and cm:
         body += f" · עכשיו: {model_he(cm)}"
     st = "" if ok is None else (" ✅" if ok else f" ⚪ · {str(detail)[:40]}")
+    if ok and k == "ollama" and detail:  # which of this computer's Ollama hosts serves it (owner 17.11)
+        st += f" · {str(detail)[:80]}"
     return f"{'👉 ' if k == cur else ''}{icon} */{provider_number(k)}* *{AI_HE.get(k) or p.get('label') or k}* {body}{st}"
 
 
-def _peer_rows(peer_brief, cur, local):
-    """The laptop's own rows in the /ספק list, from its /brief; '..........' until it answers (owner 16.11 21:35)."""
+def _peer_rows(peer_brief, local):
+    """The other computer's own rows in the /ספק list, from its /brief (owner 16.11 21:35; 17.11: the real list, not dots)."""
+    if not peer_brief:
+        return ["💤 לא מחובר כעת"]
+    if not (peer_brief or {}).get("providers"):
+        return ["⏳ עוד לא עדכן את התוכנה"]
     out = []
     for p in (peer_brief or {}).get("providers") or []:
         k = p.get("key")
         if not k or k == "auto" or (p.get("where") == "local") != local:
             continue
-        out.append(f"{'👉 ' if k == cur else ''}{'🏠' if local else '☁️'} */{provider_number(k)}* *{AI_HE.get(k) or p.get('label') or k}* "
-                   + ("= " + _model_words_line(p.get("models") or []) if p.get("models") else "= מביא מודל משלו"))
-    return out or [".........."]
+        row = (f"{'👉 ' if p.get('active') else ''}{'🏠' if local else '☁️'} */{provider_number(k)}* *{AI_HE.get(k) or p.get('label') or k}* "
+               + ("= " + _model_words_line(p.get("models") or []) if p.get("models") else "= מביא מודל משלו"))
+        if p.get("ok"):
+            row += " ✅" + (f" · {str(p.get('detail') or '')[:60]}" if k == "ollama" else "")  # ollama detail = which of its hosts serves it
+        else:
+            row += f" ⚪ · {str(p.get('detail') or '')[:40]}"
+        out.append(row)
+    return out or ["💤 אין שם בינה מסוג זה"]
 
 
 def providers_text():
-    """Owner 16.11 21:35: the provider list as four host sections (remote / local × this computer / the laptop),
-    every provider numbered and every model numbered after '=' — switch with /N and /N M."""
+    """Owner 16.11 21:35: the provider list as four sections (cloud / local × this computer / the other one),
+    every provider numbered and every model numbered after '=' — switch with /N and /N M.
+    Owner 17.11: a machine is never a 'remote host' — each section says where the AI runs, on which computer."""
     cur, cm = active_provider()
     allp, names = providers(), [k for k in provider_order() if k in providers()]
     peer = (CFG.get("peers") or [None])[0]
@@ -2485,10 +2497,10 @@ def providers_text():
     rem = ["auto" if "auto" in names else ""] + [k for k in names if k != "auto" and not provider_is_local(k)]
     loc = [k for k in names if k != "auto" and provider_is_local(k)]
     lines = ["*🔌 ספק הבינה של הגשר* (כל השיחות עוברות דרכו) · מודל של ספק: /N M"]
-    lines += ["", f"☁️ *מארח מרוחק · {machine_tag()}*"] + [_provider_row(k, cur, cm) for k in rem if k]
-    lines += ["", f"☁️ *מארח מרוחק · 💻 {peer_name}*"] + _peer_rows(peer_brief, cur, local=False)
-    lines += ["", f"🏠 *מארח מקומי · {machine_tag()}*"] + [_provider_row(k, cur, cm) for k in loc]
-    lines += ["", f"🏠 *מארח מקומי · 💻 {peer_name}*"] + _peer_rows(peer_brief, cur, local=True)
+    lines += ["", f"*{machine_tag()}* · ☁️ *בענן*"] + [_provider_row(k, cur, cm) for k in rem if k]
+    lines += ["", f"*💻 {peer_name}* · ☁️ *בענן*"] + _peer_rows(peer_brief, local=False)
+    lines += ["", f"*{machine_tag()}* · 🏠 *מקומי*"] + [_provider_row(k, cur, cm) for k in loc]
+    lines += ["", f"*💻 {peer_name}* · 🏠 *מקומי*"] + _peer_rows(peer_brief, local=True)
     words = " ".join(f"/{provider_number(k)}" for k in provider_order())
     lines += ["", f"החלפה: / ומספר ({words}) או השם · מודל: /N M (למשל /ספק 3 2) או /<שם מודל> · איפוס הקבוצה: /ספק כאן איפוס · כל המחשב: /ספק מחשב <שם> · בדיקת מענה: /בדוק מענה"]
     return "\n".join(lines)

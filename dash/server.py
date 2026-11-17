@@ -534,7 +534,8 @@ def brief():
             "dash_version": VERSION, "bridge": {k: b.get(k) for k in ("connected", "version", "paused", "error", "connected_since", "health")},
             "agent_alive": alive, "heartbeat": hb, "listen_paused": kv("listen_paused") or "", "groups": gl, "tunnels": tunnels,
             "services": services(), "backup_dir": backup_dir_abs(), "cost": cost_summary(),
-            "host_label": c.get("host_label") or "", "account": c.get("claude_account") or "", "git": git_state(), "ai": ai_brief()}
+            "host_label": c.get("host_label") or "", "account": c.get("claude_account") or "", "git": git_state(), "ai": ai_brief(),
+            "providers": ai_providers_brief()}
 
 
 def _first_doc_line(path):
@@ -855,6 +856,22 @@ def ai_brief():
     p = _providers().get(pname) or {}
     return {"provider": pname, "short": p.get("short") or p.get("label") or pname, "model": pmodel or p.get("model") or "",
             "where": "local" if (p.get("where") == "local" or p.get("hosts")) else "remote", "claude": claude_account_info(), "engine": engine_info()}
+
+
+def ai_providers_brief():
+    """Owner 17.11: every AI of this computer, in the shape the other computer's /ספק draws — key, label, where, its models,
+    which one answers now, and the probe result (so the laptop's sections are a real list, not dots)."""
+    pname, _pm = active_provider()
+    out = []
+    for k, p in _providers().items():
+        if k == "auto":
+            continue
+        chk = provider_check_cached(k)
+        out.append({"key": k, "label": p.get("short") or p.get("label") or k,
+                    "where": "local" if (p.get("where") == "local" or p.get("hosts")) else "remote",
+                    "models": list(chk.get("models") or [])[:6], "active": k == pname,
+                    "ok": bool(chk["ok"]), "detail": chk.get("detail") or ""})
+    return out
 
 
 def claude_login_start():
