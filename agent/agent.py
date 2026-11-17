@@ -2858,6 +2858,8 @@ def reply(text, quoted=None):
 
 def broadcast_system_notice(text):
     """Send machine-wide maintenance notices to every enabled WhatsApp group handled by this agent."""
+    if len(text) > 150 and hebrew_share(text) < 0.35:  # owner 17.11: machine notices are Hebrew too, English is translated first
+        text = ensure_hebrew(text)
     body = italic(text.strip()) if CFG.get("reply_italic", True) else text.strip()
     message = CFG["reply_prefix"] + body
     for chat, g in load_groups().items():
@@ -6472,7 +6474,10 @@ def update_check():
     write_json(os.path.join(HERE, "update_check.json"), res)
     if res.get("available") and kv_get("update_notified") != res["latest"]:
         kv_set("update_notified", res["latest"])
-        reply(T["update"].format(latest=res["latest"], current=res["current"], notes=(res.get("notes") or "")[:800]))
+        notes = (res.get("notes") or "")[:800]
+        if notes and hebrew_share(notes) < 0.35:  # owner 17.11: the release notes are English commit subjects; Hebrew only
+            notes = ensure_hebrew(notes)
+        reply(T["update"].format(latest=res["latest"], current=res["current"], notes=notes))
 
 
 def group_check():
