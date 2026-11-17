@@ -43,6 +43,8 @@ def db():
     c = sqlite3.connect(DB)
     c.execute("""CREATE TABLE IF NOT EXISTS sms (id INTEGER PRIMARY KEY, sender TEXT, ts TEXT, read INTEGER,
                  cls TEXT, reason TEXT, status TEXT DEFAULT 'new')""")
+    if "body" not in [r[1] for r in c.execute("PRAGMA table_info(sms)")]:
+        c.execute("ALTER TABLE sms ADD COLUMN body TEXT")  # owner 17.11: full content is kept locally
     return c
 
 
@@ -62,9 +64,9 @@ def sync():
     last = c.execute("SELECT COALESCE(MAX(id),0) FROM sms").fetchone()[0]
     n = 0
     for _id, addr, ms, read, body in fetch(last):
-        cls, why = classify(addr, body)  # body is dropped here
+        cls, why = classify(addr, body)  
         ts = dt.datetime.fromtimestamp(ms / 1000).isoformat(timespec="seconds")
-        c.execute("INSERT OR IGNORE INTO sms(id,sender,ts,read,cls,reason) VALUES(?,?,?,?,?,?)", (_id, addr, ts, read, cls, why))
+        c.execute("INSERT OR IGNORE INTO sms(id,sender,ts,read,cls,reason,body) VALUES(?,?,?,?,?,?,?)", (_id, addr, ts, read, cls, why, body))
         n += 1
     c.commit()
     return {"new": n, "last_id": c.execute("SELECT MAX(id) FROM sms").fetchone()[0]}
@@ -78,6 +80,29 @@ def summary():
     return {"last_7_days": counts, "recent_important": imp}
 
 
+def delete(ids):
+    """Delete from the phone AND the local copy. Only with the owner's explicit approval (caller passes --approved)."""
+    c = db()
+    res = {}
+    for i in ids:
+        rc, out = phone_sync.adb("shell", f"content delete --uri content://sms/{int(i)}", timeout=60)
+        gone = not fetch_one(i)
+        if gone:
+            c.execute("DELETE FROM sms WHERE id=?", (int(i),))
+        res[i] = "deleted" if gone else "phone refused: " + out[:120]
+    c.commit()
+    return res
+
+
+def fetch_one(i):
+    rc, out = phone_sync.adb("shell", f"content query --uri content://sms --projection _id --where '_id={int(i)}'", timeout=60)
+    return "_id=" in out
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "summary"
+    if cmd == "delete":
+        if "--approved" not in sys.argv:
+            sys.exit("refusing: deletion needs the owner's explicit approval (--approved)")
+        print(json.dumps(delete([a for a in sys.argv[2:] if a.isdigit()]), ensure_ascii=False)); sys.exit()
     print(json.dumps(sync() if cmd == "sync" else summary(), ensure_ascii=False, indent=1))
