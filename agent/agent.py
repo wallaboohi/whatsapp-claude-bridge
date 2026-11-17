@@ -662,10 +662,59 @@ def report_restart():
     except Exception:
         info = {}
     wait_bridge(300)
-    broadcast_system_notice(f"✅ עליתי מחדש ({dt.datetime.now():%H:%M}) · {machine_tag()}"
-                            + (f" · ⏱ התנתקות היום: {hm(down_today_min())}" if down_today_min() else "")
-                            + f"\n🔌 {connected_ais_text()}"
-                            + (f"\nסיבה: {restart_reason_he(info['reason'])}" if info.get("reason") else ""))
+    reason = restart_reason_he(info["reason"]) if info.get("reason") else ""
+    for chat, g in load_groups().items():
+        if not chat.endswith("@g.us") or (g or {}).get("guest"):
+            continue
+        send_group_notice(chat, restart_notice_text(chat, reason))
+
+
+def disconnects_24h():
+    """Owner 17.11: how many times the bridge disconnected from WhatsApp in the last 24 hours (conn_log)."""
+    since = (dt.datetime.now() - dt.timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with mdb() as db:
+            return db.execute("SELECT COUNT(*) FROM conn_log WHERE event = 'disconnected' AND at >= ?", (since,)).fetchone()[0]
+    except Exception:
+        return None
+
+
+def code_rev():
+    try:
+        r = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True, text=True, timeout=10, creationflags=NO_WINDOW)
+        return r.stdout.strip()
+    except Exception:
+        return ""
+
+
+def restart_notice_text(chat, reason=""):
+    """Owner 17.11 12:15: the restart notice is built per group, one detail per line (icon + bold name + plain value). Bridge lines are
+    shared; provider / model / location come from what this group hosts, and a line with no known value is left out (never guessed)."""
+    short, model, location = status_ai_info(None, chat)
+    name, pm = active_provider(chat)
+    if not model and name in ("claude", "auto"):
+        try:
+            model = get_override(chat) or CFG.get("claude_model")
+        except Exception:
+            model = CFG.get("claude_model")
+    lines = [f"🤖 ✅ *עליתי מחדש*", f"🕐 *שעה:* {dt.datetime.now():%H:%M}",
+             f"🖥️ *מחשב:* {CFG.get('host_label') or socket.gethostname()}",
+             f"🧠 *ספק:* {short}"]
+    if model:
+        lines.append(f"🎚️ *מודל:* {model_he(model)}")
+    lines.append(f"{'🏠' if location.startswith('🏠') else '☁️'} *מיקום:* {location.split(' ', 1)[-1]}")
+    lines.append("🔌 *סטטוס:* מחובר כרגע")
+    lines.append(f"⏱ *אופליין היום:* {hm(down_today_min())}")
+    n = disconnects_24h()
+    if n is not None:
+        lines.append(f"🔁 *ניתוקים ב-24 שעות:* {n}")
+    lines.append(f"🧩 *בינות מחוברות:* {connected_ais_text()}")
+    if reason:
+        lines.append(f"⏸️ *סיבה:* {reason}")
+    rev = code_rev()
+    if rev:
+        lines.append(f"🔄 *קוד:* {rev}")
+    return "\n".join(lines)
 
 
 AI_HE = {"claude": "קלוד", "claude_work": "קלוד עבודה", "codex": "קודקס", "copilot": "קופילוט", "gemini": "גמיני", "gemini_cli": "גמיני CLI", "ollama": "אולמה מקומי",
@@ -2947,6 +2996,12 @@ def reply(text, quoted=None):
     send(chat, CFG["reply_prefix"] + body, quoted=quoted)
 
 
+def send_group_notice(chat, text):
+    """One machine notice to one group, in the tool's style (prefix, no italic wrapping of the whole text: lines carry their own icons and bold)."""
+    if not send(chat, text):
+        log("system notice send failed", chat)
+
+
 def broadcast_system_notice(text):
     """Send machine-wide maintenance notices to every enabled WhatsApp group handled by this agent."""
     if len(text) > 150 and hebrew_share(text) < 0.35:  # owner 17.11: machine notices are Hebrew too, English is translated first
@@ -4992,17 +5047,31 @@ class StatusMsg:
             details.append(self.ai_location)
         return " · ".join(details)
 
+    def _detail_lines(self):
+        lines = [f"{machine_tag().replace('🖥️ ', '🖥️ *מחשב:* ')}", f"🧠 *ספק:* {self.ai_short}" if self.ai_short else ""]
+        if self.ai_model:
+            lines.append(f"🎚️ *מודל:* {model_he(self.ai_model)}")
+        if self.ai_location:
+            lines.append(f"{self.ai_location.split(' ', 1)[0]} *מיקום:* {self.ai_location.split(' ', 1)[-1]}")
+        return [l for l in lines if l]
+
     def _text(self):
-        # the hourglass flips (⏳ ↔ ⌛) on every edit so the owner sees it is alive (owner request 08.11)
+        # the hourglass flips (⏳ ↔ ⌛) on every edit so the owner sees it is alive (owner request 08.11); owner 17.11: one detail per line
         icon = "⏳" if self.tick % 2 == 0 else "⌛"
         prefix = CFG["reply_prefix"]
         if self.tick % 2 and prefix.strip() == "🤖":
             prefix = prefix.replace("🤖", "🦾")  # the robot "moves" too while working (owner request 08.11)
-        return prefix + italic(f"{icon} {machine_tag()} · {self._ai_details()} · {self.stage} · {self._elapsed()}")
+        st, _, det = self.stage.partition(" · ")
+        lines = [f"{icon} בעבודה · ⏱ {self._elapsed()}"] + self._detail_lines() + [f"🔹 *פעולה:* {st}"]
+        if det:
+            lines.append(f"📎 *פרט:* {det}")
+        lines.append(f"🪜 *שלבים עד כה:* {len(self.steps)}")
+        return prefix + italic("\n".join(lines))
 
     def _final(self):
         n = len(self.steps)
-        return CFG["reply_prefix"] + italic(f"✅ {machine_tag()} · {self._ai_details()} · סיימתי · {self._elapsed()}" + (f" · {n} שלבים" if n else ""))
+        lines = [f"✅ סיימתי · ⏱ {self._elapsed()}"] + self._detail_lines() + ([f"🪜 *שלבים:* {n}"] if n else [])
+        return CFG["reply_prefix"] + italic("\n".join(lines))
 
     def _start(self):
         if self.done.is_set():
