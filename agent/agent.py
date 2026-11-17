@@ -1330,6 +1330,20 @@ def _probe_http(p, big=False):
     return ok, "" if ok else "the answer had no content"
 
 
+def _probe_remote_claude(p, timeout=60):
+    """Owner 17.11 22:31: a real one-word answer from Claude Code on the other computer (the work account), over the same ssh as the
+    status check. Before this the switch check sent an HTTP request to an empty address, so /13 always showed "not answering"."""
+    git_ssh = r"C:\Program Files\Git\usr\bin\ssh.exe"
+    r = subprocess.run([git_ssh if os.path.exists(git_ssh) else "ssh", "-n", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", p.get("ssh") or "",
+                        'claude -p --model haiku "Reply with the single word OK"'], stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=timeout, creationflags=NO_WINDOW)
+    out = (r.stdout or "").strip()
+    if r.returncode == 0 and out:
+        return True, ""
+    err = "\n".join(x for x in ((r.stderr or "") + "\n" + out).splitlines() if x.strip() and not x.startswith("**")).strip()
+    return False, err[-300:] or f"exit {r.returncode}"
+
+
 def provider_probe(name, timeout=90, big=False):
     """Owner 16.11: availability (no quota) and a real answer for one provider, through the bridge's own paths. Returns
     {"name","available","avail_detail","answered" (True / False / None = not testable),"seconds","reason","he" (Hebrew line for a fault),"raw"}."""
@@ -1352,6 +1366,8 @@ def provider_probe(name, timeout=90, big=False):
                 res["answered"] = True
             finally:
                 _ctx.probe = False
+        elif kind == "claude-remote":
+            res["answered"], raw = _probe_remote_claude(p, timeout)
         elif kind == "opencode":
             r = subprocess.run([opencode_bin(), "run", "--auto", "--format", "json", "-m", p.get("model") or ""], input=probe_prompt(big), capture_output=True,
                                text=True, encoding="utf-8", errors="replace", timeout=timeout, creationflags=NO_WINDOW)
@@ -1491,6 +1507,10 @@ def _probe_model(name, p, model, timeout=120):
                 _run_cli(name, p2, PROBE_PROMPT, model, None, None, None, timeout)
             finally:
                 _ctx.probe = False
+        elif p.get("kind") == "claude-remote":
+            ok, raw = _probe_remote_claude(p, timeout)
+            if not ok:
+                return False, round(time.time() - t0, 1), raw
         elif p.get("kind") == "opencode":
             r = subprocess.run([opencode_bin(), "run", "--auto", "--format", "json", "-m", model], input=PROBE_PROMPT, capture_output=True,
                                text=True, encoding="utf-8", errors="replace", timeout=timeout, creationflags=NO_WINDOW)
@@ -5247,14 +5267,18 @@ class StatusMsg:
         end = self.ended or time.time()
         lines = [f"✅ סיימתי · ⏱ {self._elapsed()}"] + self._detail_lines()
         if self.steps:  # owner 17.11 16:45: two short process lines: icons in order, and the words below them
-            seq = []
+            seq = []  # owner 17.11 22:31 (approved): no repeats and only the last few kinds of step — the chain grew without end in a loop
             for s in self.steps:
                 head = s["text"].split(" · ", 1)[0].strip()
-                if not seq or seq[-1] != head:
-                    seq.append(head)
+                if head in seq:
+                    seq.remove(head)
+                seq.append(head)
+            keep = int(CFG.get("final_steps_max", 6))
+            more = len(seq) - keep
+            seq = seq[-keep:]
             icons = " ".join(stage_icon(h) or "▫️" for h in seq)
             words = " ← ".join(h.split(" ", 1)[-1] if stage_icon(h) else h for h in seq)
-            lines.append(f"🪜 {icons}")
+            lines.append(f"🪜 {icons}" + (f" (+{more} קודמים)" if more > 0 else ""))
             lines.append(words)
         lines.append(f"⏱ *סה״כ מקבלת ההודעה עד התשובה:* {self._elapsed()}")
         return CFG["reply_prefix"] + italic("\n".join(lines))
