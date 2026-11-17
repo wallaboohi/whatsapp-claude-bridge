@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.2.0 — 2026-11-17
+- Tests follow the shorter location wording and the four-section provider list (fixes the failed nightly release 1.2.0) (owner 17.11 04:23)
+- Provider list as four host sections with numbered Hebrew models, /N M, model words, commands index completed, shorter restart/ID notices (owner 16.11 21:58)
+- Answer journal of every AI (agent.db ai_journal: answers, failures, seconds), auto pick ranks by the record of the days, switch check also refuses an AI whose r
+- Daily sync YB-PC-HW 2026-11-16: 8 files
+- Switch check sends a real-sized message to cloud AIs; short model names accepted; /sonnet /opus /haiku (and Hebrew) as direct commands (owner 16.11 21:38)
+- Switching AI checks for a real answer first (refused with the reason when it does not answer); one slow peer check no longer starts a failover (retried before t
+- AI lists split into titled remote / local sections (/ספק, switch list, /בדוק מענה), each line marked ☁️ or 🏠 (owner 16.11)
+- New free local models on the desktop Y: drive with /aliases (owner 16.11)
+- restart.request that is not UTF-8 no longer raises in restart_wanted (owner 16.11)
+- Backup laptop takes over the desktop at once: peer check interval configurable (peer_watch_seconds), laptop set to 15s and after_minutes 0 (owner 16.11)
+- A group name the other computer wrote over is put back by the computer that answers the group (owner 16.11)
+- Only the computer that answers a group renames it: the backup laptop kept renaming the desktop's groups (owner 16.11)
+- peer_sync never copies one computer's role settings (failover, plugins, peers, names) to the other (owner 16.11)
+- Desktop hosts, laptop is its automatic backup: conversations, automations and reminders move together, unanswered messages are replayed, code and changed files 
+- Dead models dropped (inkling-2-small, gemini-pro-latest, CLI flash-latest) and a daily per-model answer check that reports only changes (owner 16.11)
+- home_sync once an hour, and at once when the dictionary changed (owner 16.11)
+- Provider numbers and spelling table, grouped switch message with reason/code/return time, OpenCode switch fix, no Claude tips on other AIs
+- OpenRouter aliases merged into the existing list (owner 16.11)
+- OpenRouter switch words /openrouter and /openrauter (owner 16.11)
+- Group names: prefix (HW desktop / LAP laptop), then the provider, then the whole group name (owner 16.11)
+
 ## 1.1.10 — 2026-11-16
 בדיקת זמינות וסטטוס מנועים פעם בשעה ובפקודה /בדוק זמינות; בדיקת תגובה יומית לספקים תומכים; בדיקת לחיצת יד לשרתי MCP והעברת קריאות WhatsApp דרך API מבוקר.
 
