@@ -284,8 +284,35 @@ RESTART_REQ = threading.Event()
 RESTART_FILE = os.path.join(HERE, "restart.request")  # Claude (or anyone) creates it: the agent restarts after the current answer
 
 
+def restart_gate(what="restart"):
+    """Owner 17.11 16:17: the system is always online through one of the two computers. Before this one restarts (agent or bridge) the
+    other must be up with its agent alive and its bridge connected; if it is itself restarting we wait for it to come back, and only then
+    restart (never both at once). Waits up to config restart_wait_minutes (default 10); a peer that stays down is not waited on forever."""
+    peers = [p for p in (CFG.get("peers") or []) if peer_alias(p)]
+    if not peers:
+        return
+    limit = time.time() + 60 * int(CFG.get("restart_wait_minutes", 10))
+    while True:
+        waiting = []
+        for peer in peers:
+            b = peer_fetch(peer, timeout=10)
+            if not b or b.get("agent_alive", True) is False or not (b.get("bridge") or {}).get("connected", True):
+                waiting.append(peer.get("name") or "?")
+        if not waiting:
+            return
+        if time.time() >= limit:
+            log(f"{what}: the other computer ({', '.join(waiting)}) is still not up after waiting; going ahead")
+            return
+        log(f"{what}: waiting for the other computer ({', '.join(waiting)}) to be up before restarting")
+        time.sleep(15)
+
+
 def restart_now(reason):
     """Exit cleanly; run-agent.cmd starts the agent again within ~15 s and the new process reports in the group."""
+    try:
+        restart_gate("agent restart")
+    except Exception:
+        log("restart_gate error", traceback.format_exc())
     kv_set("restart_pending", json.dumps({"at": dt.datetime.now().isoformat(timespec="seconds"), "reason": reason}, ensure_ascii=False))
     log("restart requested:", reason)
     os._exit(0)
@@ -387,6 +414,10 @@ def _rebuild_bridge():
         os.replace(new, exe)
     except OSError as e:
         return f"החלפת קובץ הגשר נכשלה: {e}"
+    try:
+        restart_gate("bridge swap")  # the other computer must be up first (owner 17.11)
+    except Exception:
+        log("restart_gate error", traceback.format_exc())
     # only the old process runs now (the loop starts the new exe after it exits), and it keeps its original image name
     subprocess.run(["taskkill", "/F", "/IM", "whatsapp-bridge.exe"], capture_output=True, creationflags=NO_WINDOW)
     return ""
@@ -5250,13 +5281,17 @@ class StatusMsg:
                 pass
             time.sleep(1)
         last = text
-        while self.mid and not self.done.wait(float(CFG.get("status_edit_seconds", 5))):
+        edits = 0
+        # owner 17.11 16:20: many edits in a short time look like abuse to WhatsApp (ban risk): an edit at most every 20 s
+        # (config status_edit_seconds, never below 15), every 60 s after the first 10 edits
+        while self.mid and not self.done.wait(max(15.0, float(CFG.get("status_edit_seconds", 20))) * (3 if edits >= 10 else 1)):
             self.tick += 1
             new = self._text()
             if new != last:
                 try:
                     bridge("/edit_message", {"jid": self.chat, "id": self.mid, "text": new}, timeout=20)
                     last = new
+                    edits += 1
                 except Exception as e:
                     log("status edit failed", e)
         self.loop_done.set()
@@ -7403,8 +7438,11 @@ def failover_tick(peer, name, peer_st):
     fc = failover_cfg()
     if not fc or fc["for"] != name:
         return
-    if (peer_st or {}).get("grace"):  # only its agent is restarting: nothing to take over, nothing to hand back
-        return
+    if (peer_st or {}).get("grace"):
+        # Owner 17.11 16:17: while the peer restarts, we hold its work at once (no waiting), and hand back when it is up again.
+        if not (fc.get("auto") and fc.get("cover_restarts", True)):
+            return
+        fc = {**fc, "after_minutes": 0}
     st = failover_state(name)
     snap = _fo_snapshot(name)
     st, acts = failover_step(st, peer_st, dt.datetime.now(), fc, name, (snap or {}).get("at"))
