@@ -8952,8 +8952,12 @@ def chrome_has_window():
     """Owner 17.11 15:15: Chrome running with --no-startup-window (background only) left the Claude extension limited on the laptop;
     the desktop keeps one minimized window open. True when some chrome process has a window (minimized counts)."""
     try:
+        # 17.11 16:15: MainWindowHandle is 0 for a minimized Chrome window (and from a background session), so the old check
+        # restarted Chrome every 10 minutes. Instead: the main browser process must not carry --no-startup-window.
         out = subprocess.run(["powershell", "-NoProfile", "-Command",
-                              "(Get-Process chrome -EA 0 | Where-Object {$_.MainWindowHandle -ne 0} | Measure-Object).Count"],
+                              "(Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | Where-Object "
+                              "{$_.CommandLine -and $_.CommandLine -notmatch '--type=' -and $_.CommandLine -notmatch 'no-startup-window'}"
+                              " | Measure-Object).Count"],
                              capture_output=True, text=True, timeout=30, creationflags=NO_WINDOW).stdout.strip()
         return int(out or 0) > 0
     except Exception:
