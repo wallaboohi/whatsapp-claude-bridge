@@ -336,3 +336,91 @@ def react_to_message(chat_jid: str, message_id: str, emoji: str, sender: str = "
 if __name__ == "__main__":
     # Initialize and run the server
     mcp.run(transport='stdio')
+
+# ---- Phone tools over adb (read-only; owner 17.11.2026). No input injection, no sending. ----
+import subprocess as _sp  # noqa: E402
+import json as _json  # noqa: E402
+import os as _os  # noqa: E402
+
+
+def _adb(*args: str, timeout: int = 40) -> str:
+    cfg = {}
+    try:
+        p = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "agent", "config.json")
+        cfg = _json.load(open(p, encoding="utf-8")).get("phone", {})
+    except Exception:
+        pass
+    cmd = ["adb"] + (["-s", cfg["adb"]] if cfg.get("adb") else []) + list(args)
+    r = _sp.run(cmd, capture_output=True, timeout=timeout)
+    return r.stdout.decode("utf-8", "replace")
+
+
+@mcp.tool()
+def phone_status() -> Dict[str, Any]:
+    """Phone state: battery, charging, foreground app, screen awake, network, model/Android."""
+    g = lambda c: _adb("shell", c).strip()  # noqa: E731
+    bat = g("dumpsys battery")
+    pick = lambda k: next((l.split(":", 1)[1].strip() for l in bat.splitlines() if l.strip().startswith(k + ":")), "")  # noqa: E731
+    return {"model": g("getprop ro.product.model"), "android": g("getprop ro.build.version.release"),
+            "battery": pick("level"), "ac": pick("AC powered"), "usb": pick("USB powered"),
+            "foreground": g("dumpsys window | grep -m1 mCurrentFocus"),
+            "awake": g("dumpsys power | grep -m1 mWakefulness")}
+
+
+@mcp.tool()
+def phone_screenshot() -> Dict[str, Any]:
+    """Screenshot of the phone to a PNG file; returns the path (read it as an image)."""
+    import time
+    d = _os.path.expanduser("~/phone-data/screens"); _os.makedirs(d, exist_ok=True)
+    path = _os.path.join(d, time.strftime("%Y%m%d-%H%M%S") + ".png")
+    r = _sp.run(["adb", "exec-out", "screencap", "-p"], capture_output=True, timeout=40)
+    open(path, "wb").write(r.stdout)
+    return {"path": path, "bytes": len(r.stdout)}
+
+
+@mcp.tool()
+def phone_notifications(limit: int = 30) -> List[Dict[str, str]]:
+    """Current notification-shade items (app, title, text). Read-only."""
+    import re
+    out, cur, res = _adb("shell", "dumpsys notification --noredact", timeout=60), None, []
+    for l in out.splitlines():
+        m = re.search(r"NotificationRecord\(\w+: pkg=(\S+)", l)
+        if m:
+            cur = {"app": m.group(1), "title": "", "text": ""}; res.append(cur)
+        elif cur:
+            s = l.strip()
+            if s.startswith("android.title=") and not cur["title"]:
+                cur["title"] = s.split("(", 1)[-1].rstrip(")")
+            elif s.startswith("android.text=") and not cur["text"]:
+                cur["text"] = s.split("(", 1)[-1].rstrip(")")
+    return [x for x in res if x["title"] or x["text"]][:limit]
+
+
+@mcp.tool()
+def phone_call_log(limit: int = 20) -> List[Dict[str, Any]]:
+    """Recent calls (number, type 1=in 2=out 3=missed, time, duration sec). Numbers only; resolve names via search_contacts."""
+    import re, datetime
+    out = _adb("shell", f"content query --uri content://call_log/calls --projection number:type:date:duration --sort 'date DESC' | head -{int(limit)}")
+    rows = []
+    for m in re.finditer(r"number=(\S*?), type=(\d+), date=(\d+), duration=(\d+)", out):
+        rows.append({"number": m.group(1), "type": int(m.group(2)),
+                     "time": datetime.datetime.fromtimestamp(int(m.group(3)) / 1000).strftime("%Y-%m-%d %H:%M"),
+                     "duration": int(m.group(4))})
+    return rows
+
+
+@mcp.tool()
+def phone_apps() -> List[str]:
+    """Third-party apps installed on the phone (package names)."""
+    return [l[8:] for l in _adb("shell", "pm list packages -3").splitlines() if l.startswith("package:")]
+
+
+@mcp.tool()
+def phone_tools_index() -> Dict[str, List[str]]:
+    """Table of contents of all bridge tools by area (WhatsApp, SMS, phone, data)."""
+    return {
+        "whatsapp": ["list_chats", "list_messages", "search_all", "get_message_context", "send_message (draft)", "send_file", "get_group_info", "react_to_message", "download_media"],
+        "sms": ["sms_index", "sms_search", "sms_show", "sms_send.py (draft+approval)"],
+        "phone": ["phone_status", "phone_screenshot", "phone_notifications", "phone_call_log", "phone_apps", "tools/phone_sync.py (files)"],
+        "data": ["list_transcripts", "list_polls", "list_drafts"],
+    }
