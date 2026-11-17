@@ -2892,3 +2892,33 @@ def test_push_to_live_run(agent):
         assert not agent.push_to_live("other@g.us", "x")
     finally:
         agent._live_runs.pop("c@g.us", None)
+
+
+def test_finished_status_lists_step_durations_and_total(agent, monkeypatch):
+    """Owner 17.11 13:55: the finished message shows each step with how long it took, and the total until the answer."""
+    mod = agent[0]
+    monkeypatch.setattr(mod, "status_ai_info", lambda *a, **k: ("Claude", "", ""))
+    monkeypatch.setitem(mod.CFG, "reply_prefix", "🤖 ")
+    st = mod.StatusMsg("", "chat@g.us", wa=False)
+    st.t0 = 1000.0
+    st.steps = [{"at": "", "ts": 1000.0, "text": "קריאת הקשר"}, {"at": "", "ts": 1003.0, "text": "ניסוח תשובה"}]
+    st.ended = 1011.0
+    text = st._final()
+    assert "סיימתי · ⏱ 0:11" in text
+    assert "1. קריאת הקשר · 0:03" in text and "2. ניסוח תשובה · 0:08" in text
+    assert "סה״כ מקבלת ההודעה עד התשובה" in text and "0:11" in text
+
+
+def test_quick_answer_gets_finished_status_only_when_wa(agent, monkeypatch):
+    """Owner 17.11 13:55: a quick answer's details go in one finished status message, sent before the answer."""
+    mod = agent[0]
+    sent = []
+    monkeypatch.setattr(mod, "send", lambda chat, text, **k: sent.append(text))
+    monkeypatch.setattr(mod, "status_ai_info", lambda *a, **k: ("Claude", "", ""))
+    quiet = mod.StatusMsg("", "chat@g.us", wa=False)
+    quiet.send_finished()
+    assert sent == [], "a PC-only conversation sends no WhatsApp status"
+    loud = mod.StatusMsg("", "chat@g.us", wa=True)
+    loud.timer.cancel()
+    loud.send_finished()
+    assert len(sent) == 1 and "סיימתי" in sent[0]

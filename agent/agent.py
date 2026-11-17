@@ -493,6 +493,8 @@ def _peers_included():
         name = p.get("name") or peer_alias(p) or "?"
         b = peer_fetch(p, timeout=10)
         if not b:
+            if peer_machine_up(p):  # owner 17.11: the computer answers over ssh; only its dashboard tunnel is down (not an outage)
+                return f"המחשב '{name}' דולק ו-ssh שלו עונה, אבל הלוח שלו לא עונה דרך המנהרה, ואי אפשר לוודא שהשינויים שלו נכללו"
             return f"המחשב '{name}' לא זמין, ואי אפשר לוודא שהשינויים שלו נכללו"
         g = b.get("git") or {}
         if not g.get("head"):
@@ -5109,7 +5111,7 @@ class StatusMsg:
         self.ai_short, self.ai_model, self.ai_location = status_ai_info(model, self.chat)
         self.react_to = react_to if wa and CFG.get("status_reactions", True) else None
         self._reacted, self._react_t = "", 0.0
-        self.steps, self.tick = [], 0
+        self.steps, self.tick, self.ended = [], 0, None
         self._save(False)
         self.timer = threading.Timer(8, self._start)
         if wa:  # PC-only conversations show progress in the dashboard only
@@ -5128,7 +5130,7 @@ class StatusMsg:
         self.ai_short, self.ai_model, self.ai_location = status_ai_info(self.model, self.chat, use_run_state=True)
         self._react_stage(st)
         if not self.steps or self.steps[-1]["text"] != text:
-            self.steps.append({"at": dt.datetime.now().isoformat(timespec="seconds"), "text": text})
+            self.steps.append({"at": dt.datetime.now().isoformat(timespec="seconds"), "ts": time.time(), "text": text})
             self._save(False)
 
     def _react_stage(self, st):
@@ -5142,9 +5144,13 @@ class StatusMsg:
         except Exception as e:
             log("stage reaction failed", e)
 
-    def _elapsed(self):
-        e = int(time.time() - self.t0)
+    @staticmethod
+    def _fmt(secs):
+        e = max(0, int(secs))
         return f"{e // 60}:{e % 60:02d}"
+
+    def _elapsed(self):
+        return self._fmt((self.ended or time.time()) - self.t0)
 
     def _ai_details(self, stage_included=True):
         details = [f"🧠 {self.ai_short}"] if self.ai_short else []
@@ -5176,9 +5182,24 @@ class StatusMsg:
         return prefix + italic("\n".join(lines))
 
     def _final(self):
-        n = len(self.steps)
-        lines = [f"✅ סיימתי · ⏱ {self._elapsed()}"] + self._detail_lines() + ([f"🪜 *שלבים:* {n}"] if n else [])
+        """Owner 17.11 13:55 (approved): the finished message shows the steps with how long each took, and the total from receiving
+        the message until the answer."""
+        end = self.ended or time.time()
+        lines = [f"✅ סיימתי · ⏱ {self._elapsed()}"] + self._detail_lines()
+        if self.steps:
+            lines.append("🪜 *שלבים:*")
+            for i, s in enumerate(self.steps):
+                nxt = self.steps[i + 1]["ts"] if i + 1 < len(self.steps) else end
+                lines.append(f"{i + 1}. {s['text']} · {self._fmt(nxt - s['ts'])}")
+        lines.append(f"⏱ *סה״כ מקבלת ההודעה עד התשובה:* {self._elapsed()}")
         return CFG["reply_prefix"] + italic("\n".join(lines))
+
+    def send_finished(self):
+        """A quick answer (finished before the progress message was due) never got one: its finished message, with the details,
+        goes out on its own right before the answer (owner 17.11 13:55: the answer carries no AI line)."""
+        self.finish()
+        if self.wa:
+            send(self.chat, self._final())
 
     def _start(self):
         if self.done.is_set():
@@ -5213,6 +5234,8 @@ class StatusMsg:
                 log("status final edit failed", e)
 
     def finish(self):
+        if self.ended is None:
+            self.ended = time.time()
         self._save(True)
         self.done.set()
         self.timer.cancel()
@@ -5902,7 +5925,11 @@ def run_command(row):
             out += ("\n\n💡 לניתוח לעומק: התחל את ההודעה ב-!! (המודל החזק להודעה אחת; הסשן נשאר על המודל הנוכחי כדי לא לשלם שוב על כל ההקשר)."
                     if LANG == "he" else "\n\n💡 For deep analysis start the message with !! (strongest model for one message).")
         out = strip_own_header(out) if answer and not stopped else out  # owner 17.11: the bridge adds the AI line; the AI's own copy doubled it
-        reply((ai_tag(model) if answer and not stopped and not status.mid else "") + out,  # owner 17.11 13:43: a finished status message already shows computer/provider/model; the answer starts without repeating it
+        if answer and not stopped and not status.mid:  # owner 17.11 13:55: the details live in the status message only, so a quick answer gets its finished one
+            status.send_finished()
+        # owner 17.11 13:55 (approved): a WhatsApp answer carries no AI line (its status message has the details). A dashboard-only
+        # answer has no status message in WhatsApp, so it keeps the line (owner 13.11: the answer opens with who answered).
+        reply((ai_tag(model) if answer and not stopped and not status.wa else "") + out,
                quoted=mid if (CFG.get("quote_replies", True) and src == "wa") else None)
         send_outbox(started)
         if answer and not stopped and not guest and time.time() - started >= float(CFG.get("push_long_minutes", 5)) * 60:
