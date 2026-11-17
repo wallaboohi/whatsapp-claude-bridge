@@ -5,6 +5,9 @@ Nothing is sent, edited or deleted by this tool; any future send/edit/delete goe
 Usage (from the tool root):
   uv run -q --no-project python -I -X utf8 tools/sms_sync.py sync      new messages since the last run (agent runs it every 5 min)
   uv run -q --no-project python -I -X utf8 tools/sms_sync.py summary   JSON digest: counts by class, last important ones
+  uv run -q --no-project python -I -X utf8 tools/sms_sync.py index [N]          table of contents: one row per sender (count, unread, last, classes)
+  uv run -q --no-project python -I -X utf8 tools/sms_sync.py search <words> [--limit N]   full-text search (snippets, metadata)
+  uv run -q --no-project python -I -X utf8 tools/sms_sync.py show <id>        full local copy of one SMS (owner reading only)
 """
 import datetime as dt
 import json
@@ -45,6 +48,11 @@ def db():
                  cls TEXT, reason TEXT, status TEXT DEFAULT 'new')""")
     if "body" not in [r[1] for r in c.execute("PRAGMA table_info(sms)")]:
         c.execute("ALTER TABLE sms ADD COLUMN body TEXT")  # owner 17.11: full content is kept locally
+    # Owner 17.11 13:50: fast retrieval. Full-text index over the local body + sender (rowid = sms.id).
+    c.execute("CREATE VIRTUAL TABLE IF NOT EXISTS sms_fts USING fts5(body, sender, tokenize='unicode61')")
+    c.execute("CREATE INDEX IF NOT EXISTS sms_sender_ts ON sms(sender, ts)")
+    c.execute("INSERT INTO sms_fts(rowid, body, sender) SELECT id, body, sender FROM sms "
+              "WHERE id NOT IN (SELECT rowid FROM sms_fts)")  # backfill (no-op once everything is indexed)
     return c
 
 
@@ -66,7 +74,9 @@ def sync():
     for _id, addr, ms, read, body in fetch(last):
         cls, why = classify(addr, body)  
         ts = dt.datetime.fromtimestamp(ms / 1000).isoformat(timespec="seconds")
-        c.execute("INSERT OR IGNORE INTO sms(id,sender,ts,read,cls,reason,body) VALUES(?,?,?,?,?,?,?)", (_id, addr, ts, read, cls, why, body))
+        cur = c.execute("INSERT OR IGNORE INTO sms(id,sender,ts,read,cls,reason,body) VALUES(?,?,?,?,?,?,?)", (_id, addr, ts, read, cls, why, body))
+        if cur.rowcount:
+            c.execute("INSERT INTO sms_fts(rowid, body, sender) VALUES(?,?,?)", (_id, body, addr))
         n += 1
     c.commit()
     return {"new": n, "last_id": c.execute("SELECT MAX(id) FROM sms").fetchone()[0]}
@@ -80,6 +90,45 @@ def summary():
     return {"last_7_days": counts, "recent_important": imp}
 
 
+def index(limit=40):
+    """Table of contents: one row per sender (count, unread, last time, class mix, last reason). Metadata only."""
+    c = db()
+    rows = c.execute("""SELECT sender, COUNT(*), SUM(CASE WHEN read=0 THEN 1 ELSE 0 END), MAX(ts),
+                        SUM(cls='important'), SUM(cls='spam'), SUM(cls='personal'), MAX(id)
+                        FROM sms GROUP BY sender ORDER BY MAX(id) DESC LIMIT ?""", (int(limit),)).fetchall()
+    senders = [{"sender": r[0], "count": r[1], "unread": r[2] or 0, "last": r[3], "important": r[4] or 0,
+                "spam": r[5] or 0, "personal": r[6] or 0} for r in rows]
+    total = c.execute("SELECT COUNT(*) FROM sms").fetchone()[0]
+    return {"total": total, "senders_shown": len(senders), "senders": senders}
+
+
+def _fts_query(q):
+    toks = [t for t in re.split(r"\s+", q.strip()) if t]
+    return " ".join('"' + t.replace('"', '""') + '"*' for t in toks)
+
+
+def search(q, limit=20):
+    """Full-text search over the local bodies. Returns metadata plus a short snippet (not the full text)."""
+    c = db()
+    fq = _fts_query(q)
+    if not fq:
+        return {"results": []}
+    rows = c.execute("""SELECT s.id, s.sender, s.ts, s.read, s.cls, s.reason,
+                        snippet(sms_fts, 0, '[', ']', '…', 12) FROM sms_fts
+                        JOIN sms s ON s.id = sms_fts.rowid WHERE sms_fts MATCH ? ORDER BY s.id DESC LIMIT ?""",
+                     (fq, int(limit))).fetchall()
+    return {"results": [dict(zip(("id", "sender", "ts", "read", "cls", "reason", "snippet"), r)) for r in rows]}
+
+
+def show(i):
+    """Full local copy of one SMS (for the owner's own reading; never sent anywhere by this tool)."""
+    c = db()
+    r = c.execute("SELECT id, sender, ts, read, cls, reason, body FROM sms WHERE id=?", (int(i),)).fetchone()
+    if not r:
+        return {"error": "not found"}
+    return dict(zip(("id", "sender", "ts", "read", "cls", "reason", "body"), r))
+
+
 def delete(ids):
     """Delete from the phone AND the local copy. Only with the owner's explicit approval (caller passes --approved)."""
     c = db()
@@ -89,6 +138,7 @@ def delete(ids):
         gone = not fetch_one(i)
         if gone:
             c.execute("DELETE FROM sms WHERE id=?", (int(i),))
+            c.execute("DELETE FROM sms_fts WHERE rowid=?", (int(i),))
         res[i] = "deleted" if gone else "phone refused: " + out[:120]
     c.commit()
     return res
@@ -105,4 +155,15 @@ if __name__ == "__main__":
         if "--approved" not in sys.argv:
             sys.exit("refusing: deletion needs the owner's explicit approval (--approved)")
         print(json.dumps(delete([a for a in sys.argv[2:] if a.isdigit()]), ensure_ascii=False)); sys.exit()
-    print(json.dumps(sync() if cmd == "sync" else summary(), ensure_ascii=False, indent=1))
+    if cmd == "index":
+        out = index(int(sys.argv[2]) if len(sys.argv) > 2 else 40)
+    elif cmd == "search":
+        args = sys.argv[2:]
+        lim = int(args[args.index("--limit") + 1]) if "--limit" in args else 20
+        words = [a for i, a in enumerate(args) if a != "--limit" and not (i and args[i - 1] == "--limit")]
+        out = search(" ".join(words), lim)
+    elif cmd == "show":
+        out = show(sys.argv[2])
+    else:
+        out = sync() if cmd == "sync" else summary()
+    print(json.dumps(out, ensure_ascii=False, indent=1))

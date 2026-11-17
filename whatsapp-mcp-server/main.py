@@ -279,6 +279,35 @@ def search_all(query: str, limit: int = 30) -> List[Dict[str, Any]]:
     return extras.search(query, limit)
 
 
+def _sms(*args: str) -> Any:
+    """Owner 17.11: SMS (local copy, agent/sms.db) through tools/sms_sync.py - read-only commands only."""
+    import json, os, subprocess, sys
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    r = subprocess.run([sys.executable, "-I", "-X", "utf8", os.path.join(root, "tools", "sms_sync.py"), *args],
+                       capture_output=True, text=True, encoding="utf-8", timeout=120)
+    if r.returncode != 0:
+        return {"error": (r.stderr or r.stdout)[-300:]}
+    return json.loads(r.stdout)
+
+
+@mcp.tool()
+def sms_index(limit: int = 40) -> Dict[str, Any]:
+    """SMS table of contents: one row per sender (count, unread, last time, important/spam/personal counts)."""
+    return _sms("index", str(limit))
+
+
+@mcp.tool()
+def sms_search(query: str, limit: int = 20) -> Dict[str, Any]:
+    """Full-text search in the owner's local SMS copy (fast). Returns metadata and a short snippet per SMS."""
+    return _sms("search", query, "--limit", str(limit))
+
+
+@mcp.tool()
+def sms_show(sms_id: int) -> Dict[str, Any]:
+    """Full text of one SMS from the local copy (id from sms_search / sms_index). For the owner's reading only."""
+    return _sms("show", str(int(sms_id)))
+
+
 @mcp.tool()
 def list_transcripts(query: Optional[str] = None, chat_jid: Optional[str] = None, limit: int = 20) -> List[Dict[str, Any]]:
     """Transcripts of voice notes (made locally by the agent). Optional text filter and chat filter."""
