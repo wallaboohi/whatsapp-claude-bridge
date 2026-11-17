@@ -5112,6 +5112,7 @@ class StatusMsg:
         self.react_to = react_to if wa and CFG.get("status_reactions", True) else None
         self._reacted, self._react_t = "", 0.0
         self.steps, self.tick, self.ended = [], 0, None
+        self.hold, self.loop_done = False, threading.Event()  # owner 17.11 15:15: hold = the answer will be merged into this message
         self._save(False)
         self.timer = threading.Timer(8, self._start)
         if wa:  # PC-only conversations show progress in the dashboard only
@@ -5201,6 +5202,37 @@ class StatusMsg:
         if self.wa:
             send(self.chat, self._final())
 
+    def _full(self, answer):
+        a = answer.strip()
+        return self._final() + "\n\n" + (italic(a) if CFG.get("reply_italic", True) else a)
+
+    def finalize(self, answer=None):
+        """Owner 17.11 15:15 (third request): ONE message for the whole exchange. The status message gets its last edit with the
+        steps AND the answer pasted at its end, instead of a second message. True when the answer went in. WhatsApp allows edits for
+        about 15 minutes and a limited length; on failure the caller sends the answer separately."""
+        self.finish()
+        if self.mid and self.wa:
+            self.loop_done.wait(30)
+        elif self.wa and answer:  # a quick answer never had a status message: one message with the finished details and the answer
+            return bool(send(self.chat, self._full(answer)))
+        if not self.mid or not self.wa:
+            return False
+        if answer:
+            full = self._full(answer)
+            if len(full) < 20000:
+                try:
+                    r = bridge("/edit_message", {"jid": self.chat, "id": self.mid, "text": full}, timeout=20)
+                    if r.get("success") is not False and not r.get("error"):
+                        return True
+                    log("status merge refused", r)
+                except Exception as e:
+                    log("status merge failed", e)
+        try:
+            bridge("/edit_message", {"jid": self.chat, "id": self.mid, "text": self._final()}, timeout=20)
+        except Exception as e:
+            log("status final edit failed", e)
+        return False
+
     def _start(self):
         if self.done.is_set():
             return
@@ -5227,7 +5259,8 @@ class StatusMsg:
                     last = new
                 except Exception as e:
                     log("status edit failed", e)
-        if self.done.is_set() and self.mid:  # leave the final state (owner request 07.11): no delete
+        self.loop_done.set()
+        if self.done.is_set() and self.mid and not self.hold:  # leave the final state (owner request 07.11): no delete
             try:
                 bridge("/edit_message", {"jid": self.chat, "id": self.mid, "text": self._final()}, timeout=20)
             except Exception as e:
@@ -5884,6 +5917,7 @@ def run_command(row):
         try:
             answer = claude(prompt, model=model, session=not CFG.get("fresh_sessions"), on_stage=status.set_stage, chat=chat,
                             raw=raw_text(text.lstrip("!")), timeout=limit_min * 60 if limit_min else None)
+            status.hold = bool(answer) and status.wa  # the answer is merged into the status message below (owner 17.11 15:15)
         except LimitHit as e:
             parked = True
             wait_for_limit(cid, chat, mid, src, e.until, mid_run=True)
@@ -5925,12 +5959,14 @@ def run_command(row):
             out += ("\n\n💡 לניתוח לעומק: התחל את ההודעה ב-!! (המודל החזק להודעה אחת; הסשן נשאר על המודל הנוכחי כדי לא לשלם שוב על כל ההקשר)."
                     if LANG == "he" else "\n\n💡 For deep analysis start the message with !! (strongest model for one message).")
         out = strip_own_header(out) if answer and not stopped else out  # owner 17.11: the bridge adds the AI line; the AI's own copy doubled it
-        if answer and not stopped and not status.mid:  # owner 17.11 13:55: the details live in the status message only, so a quick answer gets its finished one
-            status.send_finished()
-        # owner 17.11 13:55 (approved): a WhatsApp answer carries no AI line (its status message has the details). A dashboard-only
-        # answer has no status message in WhatsApp, so it keeps the line (owner 13.11: the answer opens with who answered).
-        reply((ai_tag(model) if answer and not stopped and not status.wa else "") + out,
-               quoted=mid if (CFG.get("quote_replies", True) and src == "wa") else None)
+        shown = (ai_tag(model) if answer and not stopped and not status.wa else "") + out
+        merged = False
+        if status.hold:  # owner 17.11 15:15: status + answer = one message (edited at the end); fallback: a separate answer
+            merged = status.finalize(shown)
+            if merged and cur_chat() == PRIMARY:
+                kv_set("last_tool_msg", json.dumps({"ts": dt.datetime.now().isoformat(timespec="seconds"), "text": out.strip()[:300]}, ensure_ascii=False))
+        if not merged:
+            reply(shown, quoted=mid if (CFG.get("quote_replies", True) and src == "wa") else None)
         send_outbox(started)
         if answer and not stopped and not guest and time.time() - started >= float(CFG.get("push_long_minutes", 5)) * 60:
             with adb() as db:  # Claude may already have queued its own push (a question waiting for the owner)
@@ -8900,10 +8936,22 @@ def chrome_running():
         return True  # unknown: do not start a second copy
 
 
+def chrome_has_window():
+    """Owner 17.11 15:15: Chrome running with --no-startup-window (background only) left the Claude extension limited on the laptop;
+    the desktop keeps one minimized window open. True when some chrome process has a window (minimized counts)."""
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command",
+                              "(Get-Process chrome -EA 0 | Where-Object {$_.MainWindowHandle -ne 0} | Measure-Object).Count"],
+                             capture_output=True, text=True, timeout=30, creationflags=NO_WINDOW).stdout.strip()
+        return int(out or 0) > 0
+    except Exception:
+        return True  # unknown: do not open another window
+
+
 def chrome_start():
     """Starts Chrome in the background (no window; the Claude extension connects inside it). Returns a short status."""
     exe = CFG.get("chrome_exe") or CHROME_EXE
-    if chrome_running():
+    if chrome_running() and chrome_has_window():
         return "כרום כבר פועל במחשב, והתוסף של Claude מחובר דרכו."
     if not os.path.exists(exe):
         return "לא מצאתי את כרום במחשב הזה."
@@ -8922,7 +8970,7 @@ def chrome_keeper():
     time.sleep(120)
     while True:
         try:
-            if not chrome_running():
+            if not chrome_running() or not chrome_has_window():
                 msg = chrome_start()
                 log("chrome keeper:", msg)
                 _ctx.chat = PRIMARY
