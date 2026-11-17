@@ -2838,3 +2838,18 @@ def test_a_restarting_agent_is_not_an_outage_while_its_computer_answers(agent, m
     monkeypatch.setattr(mod, "peer_machine_up", lambda p: True)
     old = (mod.dt.datetime.now() - mod.dt.timedelta(seconds=400)).isoformat(timespec="seconds")
     assert not mod._grace_state(peer, {"off_since": old}, {}).get("grace")  # a long agent outage still fails over
+
+
+def test_auto_model_by_complexity_inside_a_provider(agent):
+    """Owner 17.11 07:33: no pinned model -> the model of the matching class for the request's complexity; coder models only for code."""
+    mod, _ = agent
+    assert mod.complexity_tier("מה הסטטוס?") == 1 and mod.complexity_tier("תסכם לי את הדוח ותשלח טיוטה") == 2
+    assert mod.complexity_tier("תכנן ארכיטקטורה לבדיקה") == 3 and mod.complexity_tier("!! תבדוק") == 3
+    assert mod.model_class("llama3.1:8b")[0] == 0 and mod.model_class("gemini-3-flash-preview")[0] == 1
+    assert mod.model_class("nemotron-3-ultra-550b-a55b:free")[0] == 2 and mod.model_class("qwen3-coder:30b")[1] is True
+    mp = mod.auto_model_map("openrouter_free")
+    assert mod.model_class(mp[1])[0] == 0 and mod.model_class(mp[3])[0] == 2
+    cf = mod.provider_model_list("cloudflare")
+    assert "coder" not in (mod.auto_model("cloudflare", "מה השעה?", 1) or "")  # a coder model only when the request is code
+    assert "coder" in mod.auto_model("cloudflare", "תכתוב סקריפט python", 2)
+    assert "מצב אוטו" in mod.routing_note("groq") and "/רמות" in mod.commands_index()

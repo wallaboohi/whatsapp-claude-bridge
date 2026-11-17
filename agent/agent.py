@@ -1077,7 +1077,7 @@ def _note_answer(name, seconds):
     try:
         latency_add(name or "claude", seconds)
         quota_note(name or "claude")
-        ai_state_set(name or "claude", True, seconds=seconds, model=getattr(_ctx, "force_model", None) or (providers().get(name or "claude") or {}).get("model") or "")
+        ai_state_set(name or "claude", True, seconds=seconds, model=getattr(_ctx, "auto_model_used", None) or getattr(_ctx, "force_model", None) or (providers().get(name or "claude") or {}).get("model") or "")
     except Exception as e:
         log("note answer failed", e)
 
@@ -1573,6 +1573,7 @@ def _run_auto(*a, **k):
         _ctx.force_model = None
         _ctx.models_tried = []
         _ctx.light_task = False
+        _ctx.task_text = ""  # the request text of the router never leaks into a later probe
 
 
 MONTHS_EN = {m: i + 1 for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"))}
@@ -1913,6 +1914,15 @@ def provider_env(name=None, model=None):
         model = _ctx.force_model  # owner 16.11: the same provider, its next model (a rate-limited model is not a dead provider)
     _ctx.provider_used = name
     p = providers().get(name) or {}
+    _ctx.auto_model_used, _ctx.auto_tier = None, 0
+    if model is None and name != "claude" and CFG.get("model_routing", True) and p.get("kind") != "anthropic-key":
+        try:  # owner 17.11 07:33: no model pinned -> the model by the complexity of this request
+            txt = getattr(_ctx, "task_text", "") or ""
+            am = auto_model(name, txt) if txt.strip() else None  # no request text (a probe, a check): the provider's own default
+            if am:
+                model, _ctx.auto_model_used, _ctx.auto_tier = am, am, complexity_tier(txt)
+        except Exception as e:
+            log("auto_model failed", e)
     if p.get("kind") == "anthropic-key":
         return dict(os.environ, ANTHROPIC_API_KEY=provider_key(p)), model
     if p.get("kind") == "cli":  # owner 14.11: an agent CLI (Gemini CLI, Copilot, Codex) brings its own model and sign-in
@@ -2183,7 +2193,7 @@ def switch_provider(name, model=None, chat=None):
     ms = [x for x in MODELS if x != "auto"] if name == "claude" else list(c.get("models") or [])
     num = provider_number(name)
     mlines = [f"{ln}  ← /{num} {i}" for i, ln in enumerate((x for x in _model_lines(ms) if x.strip()[:1].isdigit()), 1)]  # owner 17.11: the models on entering a provider
-    details = (f"\n*המודלים כאן* (הפעלה: /{num} מספר):\n" + "\n".join(mlines) if mlines else "\nהספק מביא מודל משלו.") + f"\nפקודות: {' '.join(provider_switch_words(name))}"
+    details = (f"\n*המודלים כאן* (הפעלה: /{num} מספר):\n" + "\n".join(mlines) if mlines else "\nהספק מביא מודל משלו.") + routing_note(name) + f"\nפקודות: {' '.join(provider_switch_words(name))}"
     return ((f"✅ ספק {scope}: *{ps[name]['label']}*" + (f" · מודל {cm or ps[name].get('model')}" if name != "claude" else "")
             + (". חזרה לספק המחשב: /ספק כאן איפוס" if chat else ". כל השיחות עוברות דרכו מההודעה הבאה (חוץ מקבוצות עם ספק משלהן). חזרה: /ספק מחשב claude"))
             + answered + details) + tried_he(c.get("tried"), c.get("working") if c.get("tried") else None)
@@ -2200,7 +2210,7 @@ def effective_model(model):
     p = providers().get(name) or {}
     if p.get("kind") in ("cli", "opencode"):
         return pm or p.get("model") or None
-    return pm or p.get("model") or model
+    return pm or (getattr(_ctx, "auto_model_used", None) if used == name or used is None else None) or p.get("model") or model
 
 
 def hebrew_share(text):
@@ -2254,10 +2264,11 @@ def ai_tag(model=None):
         name = getattr(_ctx, "provider_used", None) or auto_pick() or "claude"
     p = providers().get(name) or {}
     short = p.get("short") or (p.get("label") or name).split("·")[0].strip()
-    m = (p.get("model") or None) if p.get("kind") in ("cli", "opencode") else effective_model(model)  # a CLI brings its own model: never show the group's (Codex showed Gemini)
+    m = (getattr(_ctx, "auto_model_used", None) or p.get("model") or None) if p.get("kind") in ("cli", "opencode") else effective_model(model)  # a CLI brings its own model: never show the group's (Codex showed Gemini)
     kind, place = where_of(name, m)
     eng = getattr(_ctx, "engine_used", "claude")
-    extra = (f" · מנוע {(ENGINES.get(eng) or {}).get('short', eng)}" if eng not in ("claude", "cli", "opencode") else "") + (f" · 🔁 {getattr(_ctx, 'failover_why', '') or 'מכסת Claude נגמרה'}, ולכן עונה {short}" if getattr(_ctx, "failover_used", False) else "")
+    extra = (f" · מנוע {(ENGINES.get(eng) or {}).get('short', eng)}" if eng not in ("claude", "cli", "opencode") else "") + (f" · 🔁 {getattr(_ctx, 'failover_why', '') or 'מכסת Claude נגמרה'}, ולכן עונה {short}" if getattr(_ctx, "failover_used", False) else "") \
+        + (f" · 🎚️ בקשה {TIER_HE.get(getattr(_ctx, 'auto_tier', 0), '')} (מודל אוטומטי)" if getattr(_ctx, "auto_model_used", None) and getattr(_ctx, "auto_tier", 0) else "")
     return f"🧠 {short}" + (f" · {model_he(m)}" if m else "") + (f" · 🏠 {place}" if kind == "local" else " · ☁️ ענן") + extra + "\n"
 
 
@@ -2482,6 +2493,125 @@ def model_desc(m):
         if all(w in k for w in words):
             return txt
     return ""
+
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# Owner 17.11 07:33: automatic model per request, inside the provider that was chosen (provider "auto" or a provider with no pinned
+# model). The message is classified (1 light / 2 regular / 3 complex), every model of the provider has a class (small / mid / large,
+# from its name: size in billions of parameters, lite / mini / ultra / opus ...), and the pick is the model of the matching class
+# that the journal of the last days shows answering best (answer rate and speed per provider+model+tier). Claude keeps its own router.
+TIER_HE = {1: "קלה", 2: "רגילה", 3: "מורכבת"}
+CODE_WORDS = ("קוד", "סקריפט", "פונקציה", "באג", "python", "agent.py", "קומפיל", "גיט", "regex", "sql", "תקן את", "refactor")
+NOT_CHAT = ("detector", "embed", "guard", "rerank", "whisper", "tts", "video", "image", "moderation")
+_MODEL_LIST_CACHE = {}
+
+
+def complexity_tier(text):
+    """1 = light (short lookup / status), 2 = regular work, 3 = complex (planning, deep analysis, long or code-heavy requests)."""
+    t = (text or "").lstrip()
+    if t.startswith("!!") and not t.startswith("!!!"):
+        return 3
+    t = t.lstrip("!").strip()
+    heavy = sum(1 for w in HEAVY_WORDS if w in t)
+    if any(w in t for w in DEEP_WORDS) or len(t) > 1200 or (heavy >= 3 and len(t) > 400):
+        return 3
+    if is_light_task(t):
+        return 1
+    return 2
+
+
+def is_code_task(text):
+    t = (text or "").lower()
+    return any(w in t for w in CODE_WORDS)
+
+
+def model_class(m):
+    """(class 0 small / 1 mid / 2 large, is_coder) of a model id, from its name only: parameter count, then size words."""
+    k = re.sub(r":(latest|free)$", "", str(m or "").lower().split("/")[-1])  # keep a size tag such as ":8b"
+    coder = "coder" in k or "starcoder" in k or "devstral" in k
+    if any(w in k for w in ("ultra", "opus", "fable", "large", "-pro", "550b", "120b", "70b")):
+        return 2, coder
+    if re.search(r"(?<![a-z])(lite|lightning|mini|tiny|smol|haiku|granite4)|small-", k) and "mistral-small" not in k:
+        return 0, coder
+    mm = re.findall(r"(?<![\d.])(\d+(?:\.\d+)?)b(?![a-z])", k)
+    if mm:
+        size = max(float(x) for x in mm)
+        return (0 if size <= 9 else 1 if size <= 35 else 2), coder
+    if "flash" in k or "sonnet" in k:
+        return 1, coder
+    return 1, coder
+
+
+def provider_model_list(name):
+    """The chat models of a provider for routing: the static list, or the live one for Ollama / OpenRouter (cached 5 minutes)."""
+    hit = _MODEL_LIST_CACHE.get(name)
+    if hit and time.time() - hit[0] < 300:
+        return hit[1]
+    p = providers().get(name) or {}
+    ms = list(p.get("models") or [])
+    if p.get("probe") == "ollama" or p.get("free_list") == "openrouter" or (not ms and p.get("kind") not in ("cli", "claude", "auto")):
+        try:
+            ms = list(provider_check(name).get("models") or []) or ms
+        except Exception:
+            pass
+    if not ms and p.get("model"):
+        ms = [p["model"]]
+    ms = [m for m in ms if m and not any(w in str(m).lower() for w in NOT_CHAT)]
+    _MODEL_LIST_CACHE[name] = (time.time(), ms)
+    return ms
+
+
+def model_record(name, model, days=14):
+    """(runs, answer rate, median seconds) of provider+model from the journal; None under 3 runs."""
+    try:
+        cut = (dt.datetime.now() - dt.timedelta(days=days)).isoformat(timespec="seconds")
+        with adb() as db:
+            rows = db.execute("SELECT ok, seconds FROM ai_journal WHERE provider = ? AND model = ? AND at >= ?", (name, model, cut)).fetchall()
+    except Exception:
+        return None
+    if len(rows) < 3:
+        return None
+    ok = [r[1] for r in rows if r[0] and r[1]]
+    return len(rows), sum(1 for r in rows if r[0]) / len(rows), (sorted(ok)[len(ok) // 2] if ok else None)
+
+
+def model_score(name, model):
+    """0..1 from what the journal knows about this model (unknown = 0.7, a neutral prior): 70% answer rate, 30% speed."""
+    rec = model_record(name, model)
+    if not rec:
+        return 0.7
+    _, rate, med = rec
+    speed = 1.0 if med is None or med <= 10 else 0.7 if med <= 30 else 0.4 if med <= 60 else 0.1
+    return 0.7 * rate + 0.3 * speed
+
+
+def auto_model(name, text="", tier=None):
+    """The model of provider `name` for a request, or None when the provider has fewer than two chat models (nothing to choose).
+    Class by complexity (tier 1 small, 2 mid, 3 large; the nearest class when the provider lacks it), coder models only for code,
+    then the best record in the journal, then the provider's own default, then the list order."""
+    ms = provider_model_list(name)
+    if len(ms) < 2:
+        return None
+    tier = tier or complexity_tier(text)
+    code = is_code_task(text)
+    default = (providers().get(name) or {}).get("model")
+    cands = []
+    for i, m in enumerate(ms):
+        cls, coder = model_class(m)
+        if coder and not code:
+            continue
+        target = tier - 1
+        dist = abs(cls - target) - (1 if (coder and code and cls >= 1) else 0)
+        lean = (cls - target) * (1 if tier == 3 else -1) * -0.1  # on a tie: larger for complex, smaller for light
+        cands.append((dist + lean, -model_score(name, m), 0 if m == default else 1, i, m))
+    if not cands:
+        cands = [(0, 0, 0, i, m) for i, m in enumerate(ms)]
+    return sorted(cands)[0][4]
+
+
+def auto_model_map(name):
+    """{tier: model} of a provider, for the messages (what "auto" would pick for a light / regular / complex request)."""
+    return {t: auto_model(name, "", t) for t in (1, 2, 3)}
 
 
 def _model_name_he(m):
@@ -3861,6 +3991,7 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
         sid = None
     # owner 16.11: a short message on "auto" goes to a fast free provider; the Claude subscription is kept for real work
     light = bool(CFG.get("light_routing", True)) and chosen == "auto" and is_light_task(raw if raw is not None else prompt)
+    _ctx.task_text = raw if raw is not None else prompt
     try:
         try:
             try:
@@ -4785,7 +4916,7 @@ def commands_index():
         out += [f"  {provider_line(n)}" for n in group]
     out += ["", "🔀 */אוטו* הגשר בוחר לבד לפי היומן",
             "", "*🧩 מודלים:* /ספק (הרשימה המלאה) · /N M (מודל M של בינה N) · /מודל (מודלי Claude) · /sonnet /opus /haiku · /מודל חינמי",
-            "*🔎 בדיקות:* /זמינות (זמינות) · /בדוק מענה (תשובה אמיתית מכולן) · /יומן (ציונים לפי ימים) · /מצב <בינה>",
+            "*🔎 בדיקות:* /זמינות (זמינות) · /בדוק מענה (תשובה אמיתית מכולן) · /יומן (ציונים לפי ימים) · /רמות (איזה מודל אוטו בוחר) · /מצב <בינה>",
             "*⚙️ שליטה:* /ספק כאן איפוס · /ספק מחשב <שם> · /מנוע · /הפעל מחדש · /סשן חדש · /תקרה (שימוש) · /בריאות · /מחכים",
             "*🖥️ מחשבים וחשבונות:* /חשבונות · /גיבוי (מעבר בין הנייח לנייד) · /גרסה · /🛞 (הקראה)",
             "*📑 אחר:* /חפש <מלל> · /כלל בסיס <כלל> · /כרום · /תוכן (זה)"]
@@ -4811,12 +4942,49 @@ def model_not_in_provider(name, chat=None):
     return "\n".join(lines)
 
 
+def routing_note(name):
+    """What "auto" does inside a provider, for the message on entering it (owner 17.11 07:33)."""
+    if name == "claude":
+        return "\n🎚️ *מצב אוטו (/מודל אוטו):* קלה → הייקו · רגילה → סונט · מורכבת → אופוס (או `!!` לאופוס להודעה אחת)."
+    mp = auto_model_map(name)
+    if not any(mp.values()):
+        return ""
+    nm = {t: _model_name_he(m) for t, m in mp.items() if m}
+    return (f"\n🎚️ *מצב אוטו (כשלא נקבע מודל):* קלה → {nm.get(1, '—')} · רגילה → {nm.get(2, '—')} · מורכבת → {nm.get(3, '—')}. "
+            f"הבחירה לפי מורכבות ההודעה וציוני המודלים מהיומן. קביעת מודל קבועה: /{provider_number(name)} מספר.")
+
+
+def routing_report():
+    """/רמות: for every provider, which model "auto" gives a light / regular / complex request, and what the journal learned of each."""
+    out = ["🎚️ *בחירת מודל אוטומטית לפי מורכבות* (בספק אוטו או בספק בלי מודל קבוע)",
+           "קלה = שאלה קצרה · רגילה = סיכום, טיוטה, אקסל · מורכבת = תכנון, ניתוח לעומק, בקשה ארוכה או `!!`", ""]
+    for n in provider_order():
+        if n == "auto":
+            continue
+        if n == "claude":
+            out.append(f"*{prov_short(n)}* /{provider_number(n)}: קלה → הייקו · רגילה → סונט · מורכבת → אופוס")
+            continue
+        mp = auto_model_map(n)
+        if not any(mp.values()):
+            out.append(f"*{prov_short(n)}* /{provider_number(n)}: מודל אחד, אין מה לבחור")
+            continue
+        out.append(f"*{prov_short(n)}* /{provider_number(n)}: " + " · ".join(f"{TIER_HE[t]} → {_model_name_he(m)}" for t, m in mp.items() if m))
+        for m in provider_model_list(n)[:8]:
+            rec = model_record(n, m)
+            if rec:
+                out.append(f"   {_model_name_he(m)}: למדתי מ-{rec[0]} הרצות · ענה {round(rec[1] * 100)}%" + (f" · חציון {rec[2]:g} שנ׳" if rec[2] else ""))
+    out += ["", "המנגנון לומד מכל הרצה ובדיקה (agent.db ai_journal). קביעת מודל: /N M · חזרה לאוטו: /ספק N"]
+    return "\n".join(out)
+
+
 def owner_command(text, chat=None):
     """Slash commands answered locally (no Claude run, no cost), for this conversation. Returns reply text or None."""
     if re.match(r"^/\s*(בדוק\s+זמינות|זמינות)\s*$", text.strip()):
         return engine_status_report(live=False)
     if re.match(r"^/\s*(בדוק\s+מענה|בדיקת\s+בינות|מענה)\s*$", text.strip()):  # owner 16.11: availability + a real answer from every AI
         return probe_report(live=True)
+    if re.match(r"^/\s*(רמות|מורכבות|routing)\s*$", text.strip()):  # owner 17.11 07:33: what the automatic model does in every provider
+        return routing_report()
     if re.match(r"^/\s*(יומן|יומן בינות|journal)\s*$", text.strip()):  # owner 16.11 21:55: the record of every AI
         return journal_report()
     if re.match(r"^/\s*(תוכן|תוכן עניינים|פקודות|index|commands)\s*$", text.strip()):  # owner 16.11 21:55: table of contents of the numbered commands
