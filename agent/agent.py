@@ -5902,7 +5902,8 @@ def run_command(row):
             out += ("\n\n💡 לניתוח לעומק: התחל את ההודעה ב-!! (המודל החזק להודעה אחת; הסשן נשאר על המודל הנוכחי כדי לא לשלם שוב על כל ההקשר)."
                     if LANG == "he" else "\n\n💡 For deep analysis start the message with !! (strongest model for one message).")
         out = strip_own_header(out) if answer and not stopped else out  # owner 17.11: the bridge adds the AI line; the AI's own copy doubled it
-        reply((ai_tag(model) if answer and not stopped else "") + out, quoted=mid if (CFG.get("quote_replies", True) and src == "wa") else None)
+        reply((ai_tag(model) if answer and not stopped and not status.mid else "") + out,  # owner 17.11 13:43: a finished status message already shows computer/provider/model; the answer starts without repeating it
+               quoted=mid if (CFG.get("quote_replies", True) and src == "wa") else None)
         send_outbox(started)
         if answer and not stopped and not guest and time.time() - started >= float(CFG.get("push_long_minutes", 5)) * 60:
             with adb() as db:  # Claude may already have queued its own push (a question waiting for the owner)
