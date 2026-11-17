@@ -45,7 +45,7 @@ def test_a_run_that_crosses_five_minutes_waits_for_the_owners_ok(agent, monkeypa
         mod.ask_slow_approval(cid, mod.PRIMARY, "m9", "wa", (600, "ollama", "bridge-qwen3-4b:latest", "לפטופ"))
     finally:
         mod._ctx.chat = None
-    assert "10 דקות" in sent[-1] and "מקומי, לפטופ" in sent[-1] and "כן" in sent[-1]
+    assert "10 דקות" in sent[-1] and "🏠 לפטופ" in sent[-1] and "כן" in sent[-1]
     with mod.adb() as db:
         assert db.execute("SELECT status FROM commands WHERE id = ?", (cid,)).fetchone()[0] == "waiting_approval"
     assert "מאשר" in mod.owner_command("כן", mod.PRIMARY)

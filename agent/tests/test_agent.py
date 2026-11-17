@@ -971,9 +971,9 @@ def test_cli_status_shows_actual_provider_and_remote_location(agent):
     final = st._final()
     st.finish()
     mod._ctx.chat = None
-    assert "💬 מנסח תשובה" in text and "🧠 קופילוט" in text and "☁️ מרוחק (ענן)" in text and "סונט" not in text
+    assert "💬 מנסח תשובה" in text and "🧠 קופילוט" in text and "☁️ ענן" in text and "סונט" not in text
     assert text.index("🖥️") < text.index("🧠 קופילוט") < text.index("💬 מנסח תשובה")
-    assert "קופילוט" in final and "☁️ מרוחק (ענן)" in final and "סונט" not in final
+    assert "קופילוט" in final and "☁️ ענן" in final and "סונט" not in final
 
 
 def test_downtime_notice_lists_messages_sent_while_down(agent, monkeypatch):
@@ -2329,12 +2329,12 @@ def test_every_answer_says_where_the_model_runs(agent, monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "provider_host", lambda p, m=None, max_age=20: {"url": "http://127.0.0.1:11435", "label": "לפטופ (ברירת מחדל)"})
     assert mod.where_of("ollama", "qwen3:8b") == ("local", "לפטופ")  # the host that serves it, without the parenthesis
     mod.set_provider("ollama", "qwen3:8b")
-    assert "🏠 מקומי, לפטופ" in mod.ai_tag("opus")
+    assert "🏠 לפטופ" in mod.ai_tag("opus")
     mod.set_provider("groq")
-    assert "☁️ מרוחק" in mod.ai_tag("opus")
-    t = mod.providers_text()  # owner 16.11: two titled sections, remote first, the one local provider under the local heading
-    assert t.count("🏠") == 2 and t.index(mod.REMOTE_HEAD) < t.index(mod.LOCAL_HEAD) < t.index("(ollama)")
-    assert t.index("(groq)") < t.index(mod.LOCAL_HEAD)
+    assert "☁️ ענן" in mod.ai_tag("opus")
+    t = mod.providers_text()  # owner 16.11 21:35: four host sections, remote first; every provider numbered, models numbered after '='
+    assert "מארח מרוחק" in t and "מארח מקומי" in t
+    assert t.index("מארח מרוחק") < t.index("מארח מקומי") and t.index("גרוק") < t.index("מארח מקומי") < t.index("אולמה")
     rows = mod.ai_status_lines()
     assert rows[0] == mod.REMOTE_HEAD and mod.LOCAL_HEAD in rows and "Ollama" in " ".join(rows[rows.index(mod.LOCAL_HEAD):])
 
