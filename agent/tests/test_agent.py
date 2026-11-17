@@ -1721,6 +1721,7 @@ def test_failover_carries_reminders_and_returns_changed_files(agent, tmp_path, m
     x.execute("INSERT INTO day_summary VALUES ('16.11')")
     x.commit()
     x.close()
+    os.utime(state_db, (time.time(), time.time()))  # the file's time follows the (possibly simulated) clock
     mod.failover_tick(peer, "לפטופ", {})  # 4. back: release, then the hand-back from the new process
     mod._failover_loaded.clear()
     mod.failover_tick(peer, "לפטופ", {})
@@ -2253,7 +2254,7 @@ def test_a_dead_translator_is_not_four_dead_rungs(agent, monkeypatch):
 def test_the_wait_after_a_failure_is_the_servers_own_reset(agent):
     """Owner 16.11: a sign-in / quota failure waits quietly for as long as the server itself says, not a fixed two hours."""
     mod, _ = agent
-    assert mod.reset_minutes("Please try again at Dec 14th, 2026", 120) == 60 * 24 * 14  # a real date, capped at two weeks
+    assert mod.reset_minutes("Please try again at Dec 14th, 2099", 120) == 60 * 24 * 14  # a real date, capped at two weeks
     assert mod.reset_minutes("Please retry in 16m7.9s.", 120) == 16
     assert mod.reset_minutes("retry in 2h5m", 120) == 125
     assert mod.reset_minutes("nothing it says", 120) == 120
