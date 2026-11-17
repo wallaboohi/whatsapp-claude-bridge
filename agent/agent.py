@@ -8946,6 +8946,20 @@ def adb_keeper():
         time.sleep(300)
 
 
+def sms_sync_loop():
+    """Owner 17.11: every 5 minutes tools/sms_sync.py sync (read-only over adb; metadata only in agent/sms.db). Config "sms": {"enabled": true}."""
+    if not (CFG.get("sms") or {}).get("enabled", True) or not os.path.exists(os.path.join(ROOT, "tools", "sms_sync.py")):
+        return
+    time.sleep(120)
+    while True:
+        try:
+            subprocess.run([sys.executable, "-I", "-X", "utf8", os.path.join(ROOT, "tools", "sms_sync.py"), "sync"],
+                           capture_output=True, timeout=400, creationflags=NO_WINDOW, cwd=ROOT)
+        except Exception as e:
+            log("sms sync failed", e)
+        time.sleep(300)
+
+
 def _adb_tell(text):
     """Owner 14.11: no WhatsApp messages about the phone's adb going down or coming back: the keeper heals quietly and only logs."""
     log("adb (not sent to WhatsApp):", text)
@@ -9105,7 +9119,7 @@ if __name__ == "__main__":
         failover_resume()  # backup machine still holding another machine's plugins
     except Exception:
         log("failover resume failed", traceback.format_exc())
-    for target in [worker, slow_worker, command_worker, scheduler, event_listener, watchdog, tunnel_keeper, peer_watch, local_health_watch, push_loop, keep_awake, chrome_keeper, adb_keeper] + list(_threads):
+    for target in [worker, slow_worker, command_worker, scheduler, event_listener, watchdog, tunnel_keeper, peer_watch, local_health_watch, push_loop, keep_awake, chrome_keeper, adb_keeper, sms_sync_loop] + list(_threads):
         threading.Thread(target=target, daemon=True).start()
     if _defer:
         threading.Thread(target=deferred_plugins, daemon=True).start()
