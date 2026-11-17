@@ -1942,12 +1942,51 @@ def reachable(url, timeout=3):
         return False
 
 
+_acct_cache = {}
+
+
+def account_pct(name):
+    """How full one Claude account is (0-100: the higher of the 5-hour and weekly meters), None when unknown. Cached 5 minutes; 100 while
+    that account's own limit is on (owner 17.11)."""
+    lim = kv_get("limit_until:" + name) or ""
+    if lim > dt.datetime.now().isoformat(timespec="seconds") or (name == "claude" and limit_raw()):
+        return 100.0
+    hit = _acct_cache.get(name)
+    if hit and time.time() - hit[0] < 300:
+        return hit[1]
+    p = providers().get(name) or {}
+    d, _ = _claude_probe(None if p.get("kind") == "claude" else p.get("ssh"))
+    vals = [float(x["utilization"]) for x in ((d or {}).get("usage") or {}).values()
+            if isinstance(x, dict) and x.get("utilization") is not None] if d else []
+    v = max(vals) if vals else None
+    _acct_cache[name] = (time.time(), v)
+    return v
+
+
+def balance_account(name):
+    """Owner 17.11 11:22: the two Claude accounts (work = the laptop's, personal = this computer's) back each other up. At 80% of the
+    chosen one the run goes to the other while it is lower; when both are above 80% the lower one works until its limit ends."""
+    if name not in ("claude", "claude_work") or not CFG.get("account_balance", True):
+        return name
+    other = "claude" if name == "claude_work" else "claude_work"
+    a, b = account_pct(name), account_pct(other)
+    if a is None or b is None or a < float(CFG.get("account_switch_pct", 80)) or b >= a:
+        return name
+    if not provider_ready(other):
+        return name
+    _ctx.account_switched = (name, other, a, b)
+    log("account balance:", name, f"{a:.0f}%", "->", other, f"{b:.0f}%")
+    return other
+
+
 def provider_env(name=None, model=None):
     """(env for the claude process or None = the normal sign-in, model to pass or None = the bridge's own choice)."""
     if name is None:
         name, model = (getattr(_ctx, "force_provider", None), None) if getattr(_ctx, "force_provider", None) else active_provider()
     if name == "auto":  # owner 13.11: the cheapest provider that is ready now (the ladder in providers.json "auto")
         name, model = auto_pick(), None
+    if not getattr(_ctx, "force_provider", None):
+        name = balance_account(name)
     if model is None and getattr(_ctx, "force_model", None):
         model = _ctx.force_model  # owner 16.11: the same provider, its next model (a rate-limited model is not a dead provider)
     _ctx.provider_used = name
@@ -3921,6 +3960,12 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
         reset = parse_limit(result + "\n" + errtext)
         if reset:
             reset = meter_reset(result + "\n" + errtext) or reset  # owner 13.11: the real reset (weekly = days), not "+60 minutes"
+            if getattr(_ctx, "provider_used", None) == "claude_work":  # owner 17.11: the work account's limit is its own, not the personal one's
+                until = reset + dt.timedelta(minutes=2)
+                kv_set("limit_until:claude_work", until.isoformat(timespec="seconds"))
+                _acct_cache.pop("claude_work", None)
+                raise ProviderDown("claude_work", "quota", max(1, int((until - dt.datetime.now()).total_seconds() // 60)),
+                                   raw=f"מתחדשת ב-{until:%d.%m %H:%M}. נא לעבור לספק אחר")
             raise LimitHit(set_limit(reset))
     if (not res or res.get("is_error")) and AUTH_RE.search(result + "\n" + errtext):
         raise AuthError((result or errtext).strip()[:200])
@@ -4091,6 +4136,8 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
     chosen = active_provider(chat)[0]
     _ctx.no_failover = interactive and chosen != "auto" and not getattr(_ctx, "automation_cmd", False)
     lu = limit_until()
+    if lu and chosen == "claude" and CFG.get("account_balance", True) and provider_ready("claude_work") and (account_pct("claude_work") or 100) < 100:
+        lu = None  # owner 17.11: the personal account is out, the work account takes over (provider_env)
     if lu and _ctx.no_failover:
         if chosen == "claude":
             raise AIDown("claude", f"נגמרה המכסה עד {lu:%H:%M}")
