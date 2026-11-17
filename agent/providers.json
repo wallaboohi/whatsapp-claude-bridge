@@ -324,5 +324,23 @@
   "cost": "מנוי ChatGPT",
   "where": "remote",
   "how": "Codex CLI (npm i -g @openai/codex), מחובר לחשבון (~/.codex/auth.json). המכסה לפי החשבון. התחברות מחדש: codex login בחלון. נבדק 14.11: קרא קובץ וענה."
+ },
+ "claude_work": {
+  "label": "Claude · חשבון העבודה (רץ בלפטופ)",
+  "kind": "claude-remote",
+  "ssh": "4-MINE",
+  "home": "C:\\Users\\walla\\whatsapp-mcp\\agent\\home",
+  "how": "Claude Code רץ בלפטופ, בחשבון העבודה שמחובר שם (yakirb@4-mine.com, מנוי Team). הנייח מארח את השיחה ושולח אליו את ההודעה ב-ssh, בלי להתחבר לשום חשבון בנייח. אין מעבר אוטומטי אליו: רק בבחירה ידנית.",
+  "short": "Claude עבודה",
+  "aliases": [
+   "עבודה",
+   "קלוד עבודה",
+   "קלוד_עבודה",
+   "claude_work",
+   "חשבון עבודה",
+   "team"
+  ],
+  "cost": "מנוי",
+  "where": "remote"
  }
 }

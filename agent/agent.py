@@ -668,7 +668,7 @@ def report_restart():
                             + (f"\nסיבה: {restart_reason_he(info['reason'])}" if info.get("reason") else ""))
 
 
-AI_HE = {"claude": "קלוד", "codex": "קודקס", "copilot": "קופילוט", "gemini": "גמיני", "gemini_cli": "גמיני CLI", "ollama": "אולמה מקומי",
+AI_HE = {"claude": "קלוד", "claude_work": "קלוד עבודה", "codex": "קודקס", "copilot": "קופילוט", "gemini": "גמיני", "gemini_cli": "גמיני CLI", "ollama": "אולמה מקומי",
          "groq": "גרוק", "cloudflare": "קלאודפלייר", "nvidia": "אנבידיה", "openrouter_free": "אופןראוטר", "opencode": "אופנקוד"}
 
 
@@ -1140,6 +1140,39 @@ def translator_up(max_age=30):
     return ok
 
 
+_remote_claude_cache = {}
+
+
+def remote_claude_status(p, max_age=120):
+    """(up, account e-mail) of Claude Code on the computer named in provider p["ssh"], over ssh (cached): `claude auth status`."""
+    host = p.get("ssh") or ""
+    hit = _remote_claude_cache.get(host)
+    if hit and time.time() - hit[0] < max_age:
+        return hit[1], hit[2]
+    up, who = False, ""
+    try:
+        r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", host, "claude auth status"],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=25)
+        m = re.search(r"\{.*\}", r.stdout, re.S)
+        o = json.loads(m.group(0)) if m else {}
+        plan = str(o.get("subscriptionType") or "").capitalize()
+        up, who = bool(o.get("loggedIn")), (o.get("email") or "") + (f" ({plan})" if plan else "")
+    except Exception as e:
+        log("remote claude check failed", host, str(e)[:120])
+    _remote_claude_cache[host] = (time.time(), up, who)
+    return up, who
+
+
+def remote_claude_up(p, fresh=False):
+    if fresh:
+        _remote_claude_cache.pop(p.get("ssh") or "", None)
+    return remote_claude_status(p)[0]
+
+
+def remote_claude_account(p):
+    return remote_claude_status(p)[1]
+
+
 def provider_ready(name):
     """Cheap readiness (no network): not cooling down, a key is saved where one is needed, the subscription's limit is not on."""
     p = providers().get(name) or {}
@@ -1147,6 +1180,8 @@ def provider_ready(name):
         return False
     if p.get("kind") == "claude":
         return limit_raw() is None
+    if p.get("kind") == "claude-remote":
+        return remote_claude_up(p)
     if p.get("kind") == "opencode":
         return bool(opencode_bin())
     if p.get("kind") == "cli":
@@ -1928,6 +1963,10 @@ def provider_env(name=None, model=None):
             log("auto_model failed", e)
     if p.get("kind") == "anthropic-key":
         return dict(os.environ, ANTHROPIC_API_KEY=provider_key(p)), model
+    if p.get("kind") == "claude-remote":  # owner 17.11: Claude Code of the other computer, its own account; this computer signs in to nothing
+        if not remote_claude_up(p):
+            raise ProviderDown(name, "unreachable", 30)
+        return dict(os.environ), model or None
     if p.get("kind") == "cli":  # owner 14.11: an agent CLI (Gemini CLI, Copilot, Codex) brings its own model and sign-in
         if not cli_ready(p):
             raise ProviderDown(name, "unreachable", 30)
@@ -2040,6 +2079,10 @@ def provider_check(name, prefer=None):
         cost = {"claude": "מנוי", "ollama": "מקומי"}
         rows = [f"{'✅' if provider_ready(n) else '⚪'} {providers()[n].get('short') or n} ({providers()[n].get('cost') or cost.get(n, '')})" for n in auto_ladder()]
         return {"ok": auto_pick() is not None, "detail": "מהזול ליקר: " + " ← ".join(rows), "models": []}
+    if p["kind"] == "claude-remote":
+        ok = remote_claude_up(p, fresh=True)
+        return {"ok": ok, "detail": remote_claude_account(p) if ok else "הלפטופ לא עונה ב-ssh או ש-Claude לא מחובר בו",
+                "models": [k for k in MODELS if k != "auto"]}
     if p["kind"] == "claude":
         u = claude_usage()
         return {"ok": bool(u), "detail": claude_account() if u else "לא הצלחתי לקרוא את מד השימוש",
@@ -3737,7 +3780,17 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
         model = pmodel
     qwen_env = None
     if eng == "claude":
-        cmd = [shutil.which("claude") or "claude", "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", mode]
+        rp = providers().get(getattr(_ctx, "provider_used", None)) or {}
+        if rp.get("kind") == "claude-remote" and not guest and tools is None:  # owner 17.11: the same run, on the other computer's Claude account
+            cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", rp.get("ssh"),
+                   f'cd /d {rp.get("home")} && claude -p --output-format stream-json --verbose --permission-mode {mode}'
+                   + (f" --model {model}" if model and re.fullmatch(r"[\w.\[\]-]+", model) else "")]
+            if append:  # no quoting of long Hebrew text through the remote shell: the rules ride in the prompt
+                prompt = append + "\n\n---\n" + prompt
+                append = None
+            model = None
+        else:
+            cmd = [shutil.which("claude") or "claude", "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", mode]
         if model:
             cmd += ["--model", model]
         if append:
