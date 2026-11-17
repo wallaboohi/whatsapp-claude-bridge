@@ -4723,6 +4723,25 @@ def commands_index():
     return "\n".join(out)
 
 
+def model_not_in_provider(name, chat=None):
+    """Owner 17.11 07:24: the error of '/מודל <Claude model>' while the conversation is on another provider: what that provider
+    does have (numbered, with the command of each) and how to reach the model (switch provider first, by the owner)."""
+    cur = active_provider(chat)[0]
+    p = providers().get(cur) or {}
+    label = AI_HE.get(cur) or p.get("label") or cur
+    ms = [str(m) for m in (p.get("models") or [p.get("model")]) if m][:8]
+    lines = [f"⛔ לא אפשרי: *{MODELS[name]['he']}* הוא מודל של Claude, ואתה בספק *{label}* (שינוי מודל לא מחליף ספק).", ""]
+    if cur == "auto":
+        lines.append("בספק אוטומטי הגשר בוחר לבד ספק ומודל, ולכן אי אפשר לקבוע בו מודל של Claude.")
+    elif ms:
+        lines.append(f"*המודלים של {label}* (הפעלה: /{provider_number(cur)} מספר):")
+        lines += [f"{i}) {model_he(m.split('/')[-1].split(':')[0])} → /{provider_number(cur)} {i}" for i, m in enumerate(ms, 1)]
+    else:
+        lines.append(f"ל-{label} אין בחירת מודל: הוא מביא מודל משלו.")
+    lines += ["", f"כדי להשתמש ב-{MODELS[name]['he']}: קודם עבור לספק Claude עם /{provider_number('claude')}, ואז /מודל {name}."]
+    return "\n".join(lines)
+
+
 def owner_command(text, chat=None):
     """Slash commands answered locally (no Claude run, no cost), for this conversation. Returns reply text or None."""
     if re.match(r"^/\s*(בדוק\s+זמינות|זמינות)\s*$", text.strip()):
@@ -4872,16 +4891,13 @@ def owner_command(text, chat=None):
     if name not in MODELS:
         return "לא מכיר את המודל הזה. אפשרויות: " + ", ".join(MODELS) + "\n\n" + models_guide(chat)
     hours = 1 if "hour" in parts[1:] else None
+    if name != "auto" and active_provider(chat)[0] != "claude":  # owner 17.11 07:24: a model the provider does not have is an error, never a silent provider switch
+        return model_not_in_provider(name, chat)
     set_override(name, hours, chat)
-    moved = ""
-    if name != "auto" and active_provider(chat)[0] != "claude":  # owner 17.11 07:20: a Claude model (/מודל חייקו) was ignored on auto, Cloudflare answered
-        was = prov_short(active_provider(chat)[0])
-        set_provider("claude", chat=chat)
-        moved = f" · עברתי גם לספק *Claude* (היית על {was}, והמודל הזה קיים רק ב-Claude)"
     target = chat or PRIMARY
     threading.Thread(target=sync_group_name, args=(target, get_override(target) or kv_get(K("last_model", target)) or name),
                      daemon=True).start()
-    return f"✅ המודל הוחלף ל-*{MODELS[name]['he']}*{' לשעה' if hours else ''}{moved} ({MODELS[name]['cost']}). חזרה לאוטו: /מודל אוטו"
+    return f"✅ המודל הוחלף ל-*{MODELS[name]['he']}*{' לשעה' if hours else ''} ({MODELS[name]['cost']}). חזרה לאוטו: /מודל אוטו"
 
 
 T_BACK_HE = ("[המשך מהנייד: ההודעות האחרונות בשיחה הזו נכתבו בלוח הבקרה במחשב ולא הופיעו בקבוצה בווצאפ. "

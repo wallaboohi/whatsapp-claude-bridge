@@ -2806,12 +2806,12 @@ def test_answer_journal_ranks_stable_fast_ai_and_switch_sees_real_failures(agent
     assert not sets and "בהודעות אמיתיות נכשל" in out
 
 
-def test_a_claude_model_pulls_the_conversation_back_to_claude(agent):
-    """Owner 17.11 07:20: on auto, '/מודל חייקו' set only the model and Cloudflare answered; now the conversation moves to Claude."""
+def test_a_claude_model_on_another_provider_is_an_error_not_a_switch(agent):
+    """Owner 17.11 07:24: '/מודל חייקו' while on Cloudflare: an error that lists the provider's numbered models; no silent provider switch."""
     mod, _ = agent
     chat = "claude-model-group@g.us"
-    mod.set_provider("auto", chat=chat)
+    mod.set_provider("cloudflare", chat=chat)
     out = mod.owner_command("/מודל haiku", chat)
-    assert mod.active_provider(chat)[0] == "claude" and "עברתי גם לספק" in out
-    out = mod.owner_command("/מודל אוטו", chat)
-    assert mod.active_provider(chat)[0] == "claude" and "עברתי" not in out
+    assert mod.active_provider(chat)[0] == "cloudflare" and "לא אפשרי" in out and "1)" in out and "/1" in out
+    mod.set_provider("claude", chat=chat)
+    assert "המודל הוחלף" in mod.owner_command("/מודל haiku", chat)
