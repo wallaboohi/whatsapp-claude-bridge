@@ -2824,3 +2824,17 @@ def test_every_model_in_the_list_says_what_it_is_for(agent):
     assert mod.model_desc("some-unknown-model-x") == ""
     t = mod.providers_text()
     assert "1) הייקו — " in t and "2) סונט — " in t
+
+
+def test_a_restarting_agent_is_not_an_outage_while_its_computer_answers(agent, monkeypatch):
+    """Owner 17.11 07:28: every planned restart of the desktop agent made the laptop take over and hand back."""
+    mod, _ = agent
+    peer = {"name": "x", "ssh": "h"}
+    off = (mod.dt.datetime.now() - mod.dt.timedelta(seconds=20)).isoformat(timespec="seconds")
+    monkeypatch.setattr(mod, "peer_machine_up", lambda p: True)
+    assert mod._grace_state(peer, {"off_since": off}, {}).get("grace") is True
+    monkeypatch.setattr(mod, "peer_machine_up", lambda p: False)  # the computer itself does not answer: down at once
+    assert not mod._grace_state(peer, {"off_since": off}, {}).get("grace")
+    monkeypatch.setattr(mod, "peer_machine_up", lambda p: True)
+    old = (mod.dt.datetime.now() - mod.dt.timedelta(seconds=400)).isoformat(timespec="seconds")
+    assert not mod._grace_state(peer, {"off_since": old}, {}).get("grace")  # a long agent outage still fails over

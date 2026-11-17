@@ -2180,8 +2180,10 @@ def switch_provider(name, model=None, chat=None):
     set_provider(name, model, chat=chat)
     _, cm = active_provider(chat)
     scope = "בקבוצה הזו" if chat else "הגשר"
-    ms = provider_models(name, 6)
-    details = (f"\nמודלים: {', '.join(ms)}" if ms else "") + f"\nפקודות: {' '.join(provider_switch_words(name))}"
+    ms = [x for x in MODELS if x != "auto"] if name == "claude" else list(c.get("models") or [])
+    num = provider_number(name)
+    mlines = [f"{ln}  ← /{num} {i}" for i, ln in enumerate((x for x in _model_lines(ms) if x.strip()[:1].isdigit()), 1)]  # owner 17.11: the models on entering a provider
+    details = (f"\n*המודלים כאן* (הפעלה: /{num} מספר):\n" + "\n".join(mlines) if mlines else "\nהספק מביא מודל משלו.") + f"\nפקודות: {' '.join(provider_switch_words(name))}"
     return ((f"✅ ספק {scope}: *{ps[name]['label']}*" + (f" · מודל {cm or ps[name].get('model')}" if name != "claude" else "")
             + (". חזרה לספק המחשב: /ספק כאן איפוס" if chat else ". כל השיחות עוברות דרכו מההודעה הבאה (חוץ מקבוצות עם ספק משלהן). חזרה: /ספק מחשב claude"))
             + answered + details) + tried_he(c.get("tried"), c.get("working") if c.get("tried") else None)
@@ -6003,6 +6005,34 @@ def peer_fetch_confirmed(peer, tries=None, gap=5):
     return brief
 
 
+def peer_machine_up(peer):
+    """Is the other COMPUTER alive (its ssh answers) even though its agent does not? True = only the agent is down (a restart)."""
+    alias = peer_alias(peer)
+    if not alias:
+        return False
+    try:
+        return _ssh(alias, "echo ok", timeout=15).returncode == 0
+    except Exception:
+        return False
+
+
+def _grace_state(peer, state, cfg):
+    """Owner 17.11 07:28: a planned agent restart (a few dozen seconds) looked like an outage and the laptop took over and handed back each
+    time. While the peer's computer still answers over ssh, the agent being down is a restart for the first failover.agent_grace_seconds
+    (default 180): the failover is not told it is off. A computer that does not answer at all is down at once, as before."""
+    off = (state or {}).get("off_since")
+    if not off:
+        return state
+    grace = int(((cfg.get("failover") or {}).get("agent_grace_seconds", 180)))
+    try:
+        secs = (dt.datetime.now() - dt.datetime.fromisoformat(off)).total_seconds()
+    except ValueError:
+        return state
+    if secs < grace and peer_machine_up(peer):
+        return {**state, "grace": True}
+    return state
+
+
 def peer_watch():
     """Every 2 minutes (config peer_watch_seconds): is each other machine (config peers) up, and is its bridge connected? Alerts go to OUR primary
     control group — so a machine whose own bridge is down still gets reported. Config peer_watch (default on)."""
@@ -6023,7 +6053,7 @@ def peer_watch():
                     state, msgs = peer_watch_step(state, brief, dt.datetime.now(), CFG, name)
                     kv_set(key, json.dumps(state, ensure_ascii=False))
                     try:
-                        failover_tick(peer, name, state)
+                        failover_tick(peer, name, _grace_state(peer, state, CFG))
                     except Exception:
                         log("failover error", traceback.format_exc())
                     for m in msgs:
@@ -6750,6 +6780,8 @@ def failover_tick(peer, name, peer_st):
     """Called by peer_watch after every check of a peer."""
     fc = failover_cfg()
     if not fc or fc["for"] != name:
+        return
+    if (peer_st or {}).get("grace"):  # only its agent is restarting: nothing to take over, nothing to hand back
         return
     st = failover_state(name)
     snap = _fo_snapshot(name)
