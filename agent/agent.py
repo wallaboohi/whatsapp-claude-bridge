@@ -2192,8 +2192,8 @@ def switch_provider(name, model=None, chat=None):
     scope = "בקבוצה הזו" if chat else "הגשר"
     ms = [x for x in MODELS if x != "auto"] if name == "claude" else list(c.get("models") or [])
     num = provider_number(name)
-    mlines = [f"{ln}  ← /{num} {i}" for i, ln in enumerate((x for x in _model_lines(ms) if x.strip()[:1].isdigit()), 1)]  # owner 17.11: the models on entering a provider
-    details = (f"\n*המודלים כאן* (הפעלה: /{num} מספר):\n" + "\n".join(mlines) if mlines else "\nהספק מביא מודל משלו.") + routing_note(name) + f"\nפקודות: {' '.join(provider_switch_words(name))}"
+    mlines = _model_lines(ms, num)  # owner 17.11: the models on entering a provider, each starting with its command
+    details = (f"\n\n{RLM}*המודלים כאן* (הפקודה בתחילת כל שורה):\n" + "\n".join(mlines) if mlines else "\nהספק מביא מודל משלו.") + routing_note(name) + f"\nפקודות: {' '.join(provider_switch_words(name))}"
     return ((f"✅ ספק {scope}: *{ps[name]['label']}*" + (f" · מודל {cm or ps[name].get('model')}" if name != "claude" else "")
             + (". חזרה לספק המחשב: /ספק כאן איפוס" if chat else ". כל השיחות עוברות דרכו מההודעה הבאה (חוץ מקבוצות עם ספק משלהן). חזרה: /ספק מחשב claude"))
             + answered + details) + tried_he(c.get("tried"), c.get("working") if c.get("tried") else None)
@@ -2618,16 +2618,28 @@ def _model_name_he(m):
     return model_he(str(m).split("/")[-1].split(":")[0])
 
 
-def _model_lines(ms, cap=8):
-    """One line per model of a provider: number, Hebrew name and what it is for (the number is /N M's M)."""
+RLM = "\u200f"  # right-to-left mark: every line starts on the right in WhatsApp, whatever its first character
+
+
+def _model_lines(ms, num, cap=8):
+    """One line per model, the command first: `/4 2` · name — what it is for (owner 17.11 07:35: right-aligned, the code is the start of the line)."""
     ms = [str(m) for m in ms if m]
     out = []
     for i, m in enumerate(ms[:cap], 1):
         d = model_desc(m)
-        out.append(f"     {i}) {_model_name_he(m)}" + (f" — {d}" if d else ""))
+        out.append(f"{RLM}`/{num} {i}` · {_model_name_he(m)}" + (f" — {d}" if d else ""))
     if len(ms) > cap:
-        out.append(f"     … ועוד {len(ms) - cap} (הפעלה לפי מספר: /N {cap + 1} ומעלה)")
+        out.append(f"{RLM}… ועוד {len(ms) - cap}: `/{num} {cap + 1}` ומעלה")
     return out
+
+
+def _provider_head(k, label, active=False, icon="☁️", status=""):
+    """Two lines: the provider (Hebrew · English, status) and its command words."""
+    he = AI_HE.get(k) or label or k
+    en = (label or "").split("·")[0].strip()
+    en = "" if not en or en == he or k == "auto" else f" · {en}"
+    words = " ".join(f"`{w}`" for w in provider_switch_words(k)) if k in providers() else f"`/{provider_number(k)}`"
+    return f"{RLM}{'👉 ' if active else ''}{icon} *{he}*{en}{status}\n{RLM}פקודה: {words}"
 
 
 def _model_words_line(ms, cap=6):
@@ -2637,25 +2649,27 @@ def _model_words_line(ms, cap=6):
 
 
 def _provider_row(k, cur, cm, ok=None, detail="", models=None):
-    """One provider in the /ספק list: number, Hebrew name, its models numbered after '=', 👉 on the one answering now."""
+    """One provider in the /ספק list: its two header lines, then its models, each starting with its command."""
     p = providers()[k]
     icon = "🔀" if k == "auto" else "🏠" if provider_is_local(k) else "☁️"
-    lines = []
+    lines, note = [], ""
     if k == "auto":
-        body = "הסוכן בוחר לבד (מהזול ליקר)"
+        note = f"\n{RLM}הסוכן בוחר לבד ספק (מהזול ליקר) ואת המודל לפי מורכבות ההודעה"
     elif models is not None:
-        body, lines = ("" if models else "= מביא מודל משלו"), _model_lines(models)
+        lines = _model_lines(models, provider_number(k))
     else:
         c = provider_check(k)
         ms = [x for x in MODELS if x != "auto"] if k == "claude" else c["models"]
-        body, lines = ("" if ms else "= מביא מודל משלו"), _model_lines(ms)
+        lines = _model_lines(ms, provider_number(k))
         ok, detail = c["ok"], c["detail"]
+    if not lines and k != "auto":
+        note = f"\n{RLM}מביא מודל משלו (אין בחירת מודל)"
     if k == cur and cm:
-        body += f" · עכשיו: {model_he(cm)}"
+        note += f"\n{RLM}המודל עכשיו: {model_he(cm)}"
     st = "" if ok is None else (" ✅" if ok else f" ⚪ · {str(detail)[:40]}")
     if ok and k == "ollama" and detail:  # which of this computer's Ollama hosts serves it (owner 17.11)
         st += f" · {str(detail)[:80]}"
-    return f"{'👉 ' if k == cur else ''}{icon} */{provider_number(k)}* *{AI_HE.get(k) or p.get('label') or k}* {body}{st}" + ("\n" + "\n".join(lines) if lines else "")
+    return _provider_head(k, p.get("label"), k == cur, icon, st) + note + ("\n" + "\n".join(lines) if lines else "") + "\n"  # a blank line between providers
 
 
 def _peer_rows(peer_brief, local):
@@ -2669,13 +2683,10 @@ def _peer_rows(peer_brief, local):
         k = p.get("key")
         if not k or k == "auto" or (p.get("where") == "local") != local:
             continue
-        row = (f"{'👉 ' if p.get('active') else ''}{'🏠' if local else '☁️'} */{provider_number(k)}* *{AI_HE.get(k) or p.get('label') or k}* "
-               + ("" if p.get("models") else "= מביא מודל משלו"))
-        if p.get("ok"):
-            row += " ✅" + (f" · {str(p.get('detail') or '')[:60]}" if k == "ollama" else "")  # ollama detail = which of its hosts serves it
-        else:
-            row += f" ⚪ · {str(p.get('detail') or '')[:40]}"
-        out.append(row + ("\n" + "\n".join(_model_lines(p.get("models") or [])) if p.get("models") else ""))
+        st = (" ✅" + (f" · {str(p.get('detail') or '')[:60]}" if k == "ollama" else "")) if p.get("ok") else f" ⚪ · {str(p.get('detail') or '')[:40]}"
+        ml = _model_lines(p.get("models") or [], provider_number(k)) if p.get("models") else []
+        out.append(_provider_head(k, p.get("label"), bool(p.get("active")), "🏠" if local else "☁️", st)
+                   + ("\n" + "\n".join(ml) if ml else f"\n{RLM}מביא מודל משלו (אין בחירת מודל)") + "\n")
     return out or ["💤 אין שם בינה מסוג זה"]
 
 
@@ -4934,8 +4945,8 @@ def model_not_in_provider(name, chat=None):
     if cur == "auto":
         lines.append("בספק אוטומטי הגשר בוחר לבד ספק ומודל, ולכן אי אפשר לקבוע בו מודל של Claude.")
     elif ms:
-        lines.append(f"*המודלים של {label}* (הפעלה: /{provider_number(cur)} מספר):")
-        lines += [f"{i}) {_model_name_he(m)}" + (f" — {model_desc(m)}" if model_desc(m) else "") + f" → /{provider_number(cur)} {i}" for i, m in enumerate(ms, 1)]
+        lines.append(f"{RLM}*המודלים של {label}* (הפקודה בתחילת כל שורה):")
+        lines += _model_lines(ms, provider_number(cur))
     else:
         lines.append(f"ל-{label} אין בחירת מודל: הוא מביא מודל משלו.")
     lines += ["", f"כדי להשתמש ב-{MODELS[name]['he']}: קודם עבור לספק Claude עם /{provider_number('claude')}, ואז /מודל {name}."]
