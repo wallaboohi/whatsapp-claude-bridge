@@ -3262,7 +3262,37 @@ def _stage_of(ev):
                     return "🛠️ מקמפל/בונה"
                 if "wa_send" in c:
                     return "📤 מכין טיוטה"
+                if "wa_push" in c:
+                    return "🔔 שולח התראה לטלפון"
+                if "wa_remind" in c:
+                    return "⏰ קובע תזכורת"
+                if re.search(r"pytest|unittest|\btest_", c):
+                    return "🧪 בודק (טסטים)"
+                if re.search(r"tesseract|ocr\.ps1|whisper|transcri", c, re.I):
+                    return "🎙️ קורא/מתמלל"
+                if re.search(r"restart|schtasks|rebuild|_rebuild_bridge", c, re.I):
+                    return "♻️ מפעיל מחדש"
+                if re.search(r"export_db|daily_report|\.pdf\b|openpyxl|xlsx", c, re.I):
+                    return "📊 מכין דוח"
+                if re.search(r"get_picture|wa_history|download", c, re.I):
+                    return "🖼️ מוריד מדיה/היסטוריה"
+                if "gsheet" in c or "sheets" in c.lower():
+                    return "🗂️ קורא/כותב גיליון"
                 return "⬛ מריץ פקודה (cmd)"
+            if tool in ("set_group", "set_about", "post_status"):
+                return "🏷️ מעדכן פרטי קבוצה"
+            if tool in ("list_drafts", "draft_card"):
+                return "📋 בודק טיוטות"
+            if tool == "send_poll":
+                return "📊 מכין סקר"
+            if tool == "mark_read":
+                return "👁️ מסמן כנקרא"
+            if tool in ("list_reminders", "wa_remind"):
+                return "⏰ בודק תזכורות"
+            if name == "Skill":
+                return "📚 קורא מדריך"
+            if name in ("TodoWrite", "TaskCreate", "TaskUpdate"):
+                return "🗒️ מעדכן רשימת משימות"
             return "⚙️ " + name
         if part.get("type") == "thinking":
             return "💬 מנסח תשובה"
