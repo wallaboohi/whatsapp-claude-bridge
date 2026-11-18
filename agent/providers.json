@@ -388,11 +388,39 @@
   },
   "aliases": [
    "codex_work",
+   "codex_bedroom",
    "קודקס עבודה",
    "codex עבודה"
   ],
   "cost": "מנוי ChatGPT (חשבון העבודה)",
   "where": "remote",
   "how": "Codex CLI שרץ בלפטופ, בחשבון ChatGPT שמחובר שם; הנייח שולח את ההודעה ב-ssh (כמו קלוד עבודה) ולא מתחבר לשום חשבון בעצמו. יקיר 18.11 12:28: כל ספק יכול לרוץ במחשב שבו הוא מחובר. נבדק 18.11: בנייח ובסלון נגמרה המכסה, בחדר השינה לא מחובר, בלפטופ עונה."
+ },
+ "codex_bedroom": {
+  "label": "Codex · חדר השינה (חשבון פרטי)",
+  "short": "Codex חדר שינה",
+  "kind": "cli",
+  "model": "",
+  "models": [],
+  "cli": {
+   "bin": "codex",
+   "args": [
+    "exec",
+    "--skip-git-repo-check",
+    "--dangerously-bypass-approvals-and-sandbox"
+   ],
+   "model_flag": "-m",
+   "prompt": "stdin:-",
+   "out": "file:-o",
+   "ssh": "PERROOM"
+  },
+  "aliases": [
+   "codex_bedroom",
+   "קודקס חדר שינה",
+   "codex חדר שינה"
+  ],
+  "cost": "ChatGPT חינמי (החשבון שמחובר בחדר השינה)",
+  "where": "remote",
+  "how": "Codex CLI שרץ בחדר השינה, בחשבון ChatGPT שיקיר חיבר שם (18.11 12:59, תוכנית חינמית); הנייח שולח ב-ssh ולא מתחבר בעצמו. נבדק 18.11 13:02: עונה."
  }
 }
