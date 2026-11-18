@@ -300,7 +300,8 @@ def restart_gate(what="restart"):
         waiting, unreachable = [], True
         for peer in peers:
             b = peer_fetch(peer, timeout=10)
-            if not b or b.get("agent_alive", True) is False or not (b.get("bridge") or {}).get("connected", True):
+            standby = bool((b or {}).get("session_lease", {}).get("standby"))  # owner 18.11: waits for the one identity on purpose
+            if not b or b.get("agent_alive", True) is False or not ((b.get("bridge") or {}).get("connected", True) or standby):
                 waiting.append(peer.get("name") or "?")
                 unreachable = unreachable and not b
         if not waiting:
