@@ -2520,7 +2520,7 @@ def switch_provider(name, model=None, chat=None):
     num = provider_number(name)
     mlines = _model_lines(ms, num)  # owner 17.11: the models on entering a provider, each starting with its command
     details = (f"\n\n{RLM}*המודלים כאן* (הפקודה בתחילת כל שורה):\n" + "\n".join(mlines) if mlines else "\nהספק מביא מודל משלו.") + routing_note(name) + f"\nפקודות: {' '.join(provider_switch_words(name))}"
-    return ((f"✅ ספק {scope}: *{ps[name]['label']}*" + (f" · מודל {cm or ps[name].get('model')}" if name != "claude" else "")
+    return ((f"✅ ספק {scope}: *{ps[name]['label']}*" + (f" · מודל {cm or ps[name].get('model')}" if name != "claude" and (cm or ps[name].get('model')) else "")
             + (". חזרה לספק המחשב: /ספק כאן איפוס" if chat else ". כל השיחות עוברות דרכו מההודעה הבאה (חוץ מקבוצות עם ספק משלהן). חזרה: /ספק מחשב claude"))
             + answered + details) + tried_he(c.get("tried"), c.get("working") if c.get("tried") else None)
 
@@ -3525,6 +3525,8 @@ class AuthError(Exception):
 
 
 LIMIT_ANY = re.compile(r"(?i)(hit your [^\n]{0,40}limit|usage limit reached|limit reached\s*[·|-]\s*resets)")
+LIMIT_DATE = re.compile(r"(?i)resets?\s*(?:on\s*)?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*(\d{1,2}),?\s*(?:at\s*)?(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)?")
+MONTHS_EN = {m: i + 1 for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"))}
 LIMIT_AT = re.compile(r"(?i)resets?\s*(?:at\s*)?(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)?")
 SIGNIN_RE = re.compile(r"sign-in ends between (\d{4}-\d{2}-\d{2}) and (\d{4}-\d{2}-\d{2})")
 AUTH_RE = re.compile(r"(?i)(invalid api key|please run /login|not logged in|authentication_error|oauth token (?:has )?expired|"
@@ -3611,6 +3613,15 @@ def parse_limit(text, now=None):
     if not text or not LIMIT_ANY.search(text):
         return None
     now = now or dt.datetime.now()
+    d = LIMIT_DATE.search(text)  # owner 18.11: the weekly limit names its day ("resets Nov 20, 5am"); it was read as "+60 minutes"
+    if d:
+        h, mi, ap = int(d[3]), int(d[4] or 0), (d[5] or "").lower().replace(".", "")
+        h = h + 12 if ap == "pm" and h < 12 else 0 if ap == "am" and h == 12 else h
+        try:
+            t = now.replace(month=MONTHS_EN[d[1][:3].lower()], day=int(d[2]), hour=h, minute=mi, second=0, microsecond=0)
+            return t if t > now else t.replace(year=t.year + 1)
+        except (KeyError, ValueError):
+            pass
     m = LIMIT_AT.search(text)
     if not m:
         return now + dt.timedelta(minutes=60)
@@ -4304,6 +4315,8 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
                 append = None
             model = None
         else:
+            if rp.get("kind") == "claude-remote":  # owner 18.11 21:59: a restricted/guest run of the work account runs HERE, on the personal
+                _ctx.provider_used = "claude"      # account — its limit text was charged to the work account (blocked 32 h by the personal week)
             cmd = [shutil.which("claude") or "claude", "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", mode]
             if live:
                 cmd += ["--input-format", "stream-json", "--replay-user-messages"]
@@ -4473,7 +4486,8 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
     if not res or res.get("is_error") or len(result) < 300:  # a real answer may talk about limits; only short / error results count
         reset = parse_limit(result + "\n" + errtext)
         if reset:
-            reset = meter_reset(result + "\n" + errtext) or reset  # owner 13.11: the real reset (weekly = days), not "+60 minutes"
+            if getattr(_ctx, "provider_used", None) != "claude_work":  # this computer's meter is the personal account's (owner 18.11 21:59)
+                reset = meter_reset(result + "\n" + errtext) or reset  # owner 13.11: the real reset (weekly = days), not "+60 minutes"
             if getattr(_ctx, "provider_used", None) == "claude_work":  # owner 17.11: the work account's limit is its own, not the personal one's
                 until = reset + dt.timedelta(minutes=2)
                 kv_set("limit_until:claude_work", until.isoformat(timespec="seconds"))
