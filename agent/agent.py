@@ -6742,6 +6742,9 @@ _backup_running = threading.Event()
 def backup():
     if _backup_running.is_set():
         return
+    if lease_standby() and not os.path.exists(os.path.join(STORE, "messages.db")):
+        log("backup skipped: standby PC without a WhatsApp store of its own (owner 18.11)")
+        return
     _backup_running.set()
     try:
         _backup()
@@ -7885,12 +7888,17 @@ def _put_db(path, blob, keep_own=False):
     tmp = path + ".lease-tmp"
     with open(tmp, "wb") as f:
         f.write(blob)
-    for ext in ("-wal", "-shm"):
+    for attempt in range(10):  # a reader of ours may still hold the file for a moment (Windows cannot replace an open file)
         try:
-            os.remove(path + ext)
-        except OSError:
-            pass
-    os.replace(tmp, path)
+            for ext in ("-wal", "-shm"):
+                if os.path.exists(path + ext):
+                    os.remove(path + ext)
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == 9:
+                raise
+            time.sleep(1)
 
 
 SESSION_DUMP = r'''import base64, os, sqlite3, tempfile
@@ -8113,6 +8121,28 @@ def session_backup_tick(peer, name, peer_st):
     lastm = session_copy_meta().get("messages_at") or ""
     with_msgs = not lastm or now - dt.datetime.fromisoformat(lastm) >= dt.timedelta(minutes=float(sc["messages_minutes"]))
     session_pull(src_peer, src_name, with_messages=with_msgs)
+
+
+def session_bootstrap():
+    """Owner 18.11: a backup PC that never ran a bridge has no messages.db, and the agent cannot start without one. Copy the
+    history (and the identity) from the first peer that answers: the host first, then the others. Retries every minute."""
+    fc = failover_cfg()
+    if not session_cfg() or not fc or os.path.exists(MSG_DB):
+        return
+    peers = sorted(CFG.get("peers") or [], key=lambda p: (p.get("name") or "") != fc["for"])
+    while not os.path.exists(MSG_DB):
+        for p in peers:
+            if not peer_alias(p):
+                continue
+            if session_pull(p, p.get("name") or peer_alias(p), with_messages=True):
+                src = os.path.join(SESSION_COPY, "messages.db")
+                if os.path.exists(src):
+                    with open(src, "rb") as f:
+                        _put_db(MSG_DB, f.read())
+                    log("session bootstrap: message history copied from", p.get("name"))
+                    return
+        log("session bootstrap: no peer gave a copy yet, retrying in a minute")
+        time.sleep(60)
 
 
 def session_resume_ok(name):
@@ -10048,6 +10078,10 @@ if __name__ == "__main__":
     for d in (OUTBOX, GROUPS_DIR, INBOX, LOCAL_FILES):
         os.makedirs(d, exist_ok=True)
     adb().close()
+    try:
+        session_bootstrap()  # owner 18.11: a backup without a store of its own gets the history first
+    except Exception:
+        log("session bootstrap failed", traceback.format_exc())
     _defer = False  # the service: our plugins wait while another machine holds them (failover); unknown = run them now
     if len(sys.argv) == 1 and plugin_hold_applies():
         try:

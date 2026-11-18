@@ -3141,3 +3141,22 @@ def test_tunnel_cmd_multi_peer_forwards_only_local(agent):
     cmd = mod.tunnel_cmd({"name": "נייח", "url": "http://127.0.0.1:8781", "tunnel": "ybhw", "reverse": True}, ssh="ssh", multi=True)
     assert cmd.count("-R") == 2
     assert mod.tunnel_cmd({"name": "נייח", "url": "http://127.0.0.1:8781", "tunnel": "ybhw"}, ssh="ssh").count("-R") == 2
+
+
+def test_session_bootstrap_copies_history_for_a_fresh_backup(agent, monkeypatch):
+    """Owner 18.11: a backup PC that never ran a bridge has no messages.db; the agent copies it from the host first."""
+    agent, _ = agent
+    monkeypatch.setitem(agent.CFG, "session_share", {"enabled": True})
+    monkeypatch.setitem(agent.CFG, "failover", {"for": "נייח", "plugins": ["x.py"]})
+    monkeypatch.setitem(agent.CFG, "peers", [{"name": "סלון", "tunnel": "SALON"}, {"name": "נייח", "tunnel": "ybhw"}])
+    monkeypatch.setattr(agent, "MSG_DB", os.path.join(agent.STORE, "fresh", "messages.db"))
+    asked = []
+
+    def pull(peer, name, with_messages=False):
+        asked.append(name)
+        os.makedirs(agent.SESSION_COPY, exist_ok=True)
+        _fake_session(os.path.join(agent.SESSION_COPY, "messages.db"), "x")
+        return "jid"
+    monkeypatch.setattr(agent, "session_pull", pull)
+    agent.session_bootstrap()
+    assert asked == ["נייח"] and os.path.exists(agent.MSG_DB)
