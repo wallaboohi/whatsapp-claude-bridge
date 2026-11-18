@@ -5458,6 +5458,8 @@ def sync_group_name(chat, model, label=None, force=False):
         return
     if not serves_here(chat):
         return  # owner 16.11: only the computer that answers a group names it (the backup laptop renamed the desktop's groups)
+    if lease_standby():
+        return  # owner 19.11: a backup waiting for the one WhatsApp identity has no connected bridge (a refused call every minute)
     pend = kv_get(K("name_pending", chat))
     if not force and pend and time.time() - float(pend) < 120:
         return  # a /ספק switch is being checked: its name is already up, the minute sync must not flip it back meanwhile
@@ -9631,7 +9633,7 @@ def push_loop():
     n = 0
     while True:
         try:
-            if push_on():
+            if push_on() and not lease_standby():  # owner 19.11: a backup at the lease gate keeps its queue until it holds the bridge
                 push_send_due()
                 if n % 60 == 0:  # every 10 minutes
                     if watches_people():
