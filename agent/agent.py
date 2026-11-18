@@ -546,6 +546,20 @@ def _peers_included():
     return ""
 
 
+def _nas_backup(notes):
+    """Owner 18.11: the TrueNAS (remote "nas", a bare repo on \\\\10.0.0.154\\YAKIR\\code-backup) keeps a copy of the code.
+    Every repo with a "nas" remote (this one, and config nas_backup_repos e.g. ppe-tracker) is pushed there daily."""
+    for path in [ROOT] + list(CFG.get("nas_backup_repos") or []):
+        rc, remotes = _git("-C", path, "remote")
+        if rc != 0 or "nas" not in remotes.split():
+            continue
+        _, br = _git("-C", path, "rev-parse", "--abbrev-ref", "HEAD")
+        rc, out = _git("-C", path, "push", "-q", "nas", f"HEAD:{br.strip() or 'main'}", timeout=300)
+        name = os.path.basename(path.rstrip("/\\"))
+        notes.append(f"🗄️ גיבוי קוד ל-TrueNAS ({name})." if rc == 0 else
+                     f"⚠️ גיבוי {name} ל-TrueNAS נכשל: " + (out.splitlines() or ["?"])[-1][:150])
+
+
 def day_sync():
     """Daily before the release, the midnight session change and the 23:50 update (config day_sync_time, default 23:15; day_sync false = off):
     save the day's code (tracked files, only if the tests pass), pull + push the shared hub, and when the code changed rebuild
@@ -601,6 +615,7 @@ def day_sync():
     if ok:
         rc, out = _git("push", "hub", "HEAD:main", timeout=300)
         notes.append("⬆️ נדחף ל-hub." if rc == 0 else "⚠️ הדחיפה ל-hub נכשלה: " + out.splitlines()[-1][:150])
+    _nas_backup(notes)
     _, after = _git("rev-parse", "HEAD")
     running = kv_get("running_head") or before
     _, diff = _git("diff", "--name-only", running, after) if running != after else (0, "")
