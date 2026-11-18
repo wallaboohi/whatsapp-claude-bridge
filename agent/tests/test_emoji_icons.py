@@ -1,0 +1,136 @@
+"""🔥 = emoji icons in the owner's own message (owner 18.11): the table / stemming module and the agent's reaction handling."""
+import datetime as dt
+import json
+import os
+import sys
+
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, HERE)
+
+import emoji_icons as ei  # noqa: E402
+from test_agent import agent  # noqa: E402,F401  (the agent fixture)
+
+
+def strip_added(text):
+    return "".join(c for c in text if not ei._EMOJI_RE.match(c) or c.isdigit() or c in "#*").replace("  ", " ")
+
+
+def test_owner_example_exactly():
+    assert ei.iconize("מחר ב-8 פגישה עם הספק על המשאית") == "מחר ב-8 ⏰ פגישה 🤝 עם הספק 🏭 על המשאית 🚚"
+
+
+def test_prefixes_plurals_and_construct_forms():
+    for word, emoji in (("והמשאיות", "🚚"), ("לגדר", "🚧"), ("בקסדות", "⛑️"), ("שבמחסן", "🏭"), ("ארוחת", "🍽️"), ("העובדים", "👷")):
+        assert ei.lookup(word) and ei.lookup(word)[0][0] == emoji, word
+
+
+def test_short_stems_do_not_misfire():
+    assert ei.lookup("שקר") is None and ei.lookup("בקר") is None and ei.lookup("האם") is None
+    assert ei.lookup("הים")[0][0] == "🌊"
+
+
+def test_text_and_order_kept_and_no_repeats():
+    t = "תזמין 3 משאיות לגדר, והקסדות הגיעו למחסן.\n*דחוף* לבדוק את המצלמות והמשאית בשער"
+    out = ei.iconize(t)
+    assert out != t
+    added = [w for w in out.split() if ei.is_emoji(w)]
+    assert len(added) == len(set(added))  # the same emoji never twice in one message
+    import re
+    assert re.sub(r" [^\sA-Za-z֐-׿\d.,:;!?*_~]+", "", out) == t  # only " <emoji>" was inserted
+    assert "לגדר 🚧," in out and "*דחוף* " in out  # before punctuation, after the closing bold mark
+
+
+def test_density_and_nothing_fits():
+    out = ei.iconize("משאית רכב אוטובוס מונית אופנוע רכבת מטוס מסוק")
+    assert sum(1 for w in out.split() if ei.is_emoji(w)) <= 4
+    assert ei.iconize("את זה של מי") == "את זה של מי"
+
+
+def test_twice_adds_nothing_twice():
+    once = ei.iconize("מחר ב-8 פגישה עם הספק על המשאית")
+    assert ei.iconize(once) == once
+
+
+def test_phrases_and_times():
+    assert "ארוחת בוקר 🍳" in ei.iconize("ארוחת בוקר בשעה 7:30")
+    assert "7:30 ⏰" in ei.iconize("ארוחת בוקר בשעה 7:30")
+    assert "ב-18.11 📅" in ei.iconize("ב-18.11 נסיעה")
+
+
+def test_ai_fallback_only_adds_valid_emoji():
+    seen = {}
+
+    def ai(prompt):
+        seen["p"] = prompt
+        return 'here: {"0": "🦒", "2": "not emoji", "4": "🦒", "9": "🐙"}'
+    out = ei.iconize("ג'ירפה נחמדה מאוד בגן החיות", ai=ai)
+    assert out.startswith("ג'ירפה 🦒 ") and out.count("🦒") == 1 and "🐙" not in out and "not" not in out
+    assert ei.iconize("ג'ירפה נחמדה", ai=lambda p: 1 / 0) == "ג'ירפה נחמדה"  # a broken AI = the table result
+
+
+def test_table_is_large_and_valid():
+    assert len(ei.WORDS) > 800
+    for w, (emojis, _, _) in ei.WORDS.items():
+        assert emojis and all(ei.is_emoji(e) for e in emojis), w
+
+
+def _own(db, mid, chat, content, minutes_ago, media=""):
+    ts = (dt.datetime.now().astimezone() - dt.timedelta(minutes=minutes_ago)).isoformat(sep=" ", timespec="seconds")
+    db.execute("INSERT INTO messages VALUES (?, ?, 'me', ?, ?, 1, ?, '')", (mid, chat, content, ts, media))
+    db.commit()
+
+
+def test_fire_edits_a_fresh_own_message(agent, monkeypatch):
+    mod, db = agent
+    calls, sent = [], []
+    monkeypatch.setattr(mod, "bridge", lambda path, body=None, timeout=180, tok=None: calls.append((path, body)) or {"success": True})
+    monkeypatch.setattr(mod, "send", lambda *a, **k: sent.append((a, k)) or True)
+    monkeypatch.setattr(mod, "fire_ai", lambda p: "")
+    chat = "972500000001@s.whatsapp.net"
+    _own(db, "F1", chat, "מחר ב-8 פגישה עם הספק על המשאית", 2)
+    mod.fire_icons(chat, "F1")
+    assert calls == [("/edit_message", {"jid": chat, "id": "F1", "text": "מחר ב-8 ⏰ פגישה 🤝 עם הספק 🏭 על המשאית 🚚"})]
+    assert not sent
+    assert mod.fire_is_ours(chat, "F1")
+
+
+def test_fire_old_message_is_answered_not_edited(agent, monkeypatch):
+    mod, db = agent
+    calls, sent = [], []
+    monkeypatch.setattr(mod, "bridge", lambda path, body=None, timeout=180, tok=None: calls.append(path) or {"success": True})
+    monkeypatch.setattr(mod, "send", lambda *a, **k: sent.append((a, k)) or True)
+    monkeypatch.setattr(mod, "fire_ai", lambda p: "")
+    monkeypatch.setattr(mod, "chat_title", lambda c: "דני")
+    other = "972500000001@s.whatsapp.net"
+    _own(db, "F2", other, "פגישה עם הספק", 40)
+    mod.fire_icons(other, "F2")
+    assert not calls and sent[0][0][0] == mod.PRIMARY and "פגישה 🤝 עם הספק 🏭" in sent[0][0][1]  # never to the other person
+    _own(db, "F3", mod.PRIMARY, "פגישה עם הספק", 40)
+    mod.fire_icons(mod.PRIMARY, "F3")
+    assert sent[1][0][0] == mod.PRIMARY and sent[1][1].get("quoted") == "F3"
+
+
+def test_fire_ignores_others_media_and_bot_answers(agent, monkeypatch):
+    mod, db = agent
+    calls = []
+    monkeypatch.setattr(mod, "bridge", lambda *a, **k: calls.append(a) or {"success": True})
+    monkeypatch.setattr(mod, "send", lambda *a, **k: calls.append(a) or True)
+    chat = "972500000001@s.whatsapp.net"
+    db.execute("INSERT INTO messages VALUES ('O1', ?, 'x', 'פגישה עם הספק', ?, 0, '', '')", (chat, dt.datetime.now().isoformat()))
+    db.commit()
+    _own(db, "O2", chat, "", 1, media="image")
+    _own(db, "O3", chat, mod.CFG["reply_prefix"] + "פגישה עם הספק", 1)
+    for m in ("O1", "O2", "O3", "missing"):
+        mod.fire_icons(chat, m)
+    assert not calls
+
+
+def test_fire_reaction_is_queued_once(agent, monkeypatch):
+    mod, _ = agent
+    monkeypatch.setattr(mod, "watches_people", lambda: True)
+    monkeypatch.setattr(mod, "note_reaction", lambda *a: None)
+    before = mod.work.qsize()
+    ev = {"type": "reaction", "chat_jid": "972500000001@s.whatsapp.net", "message_id": "R1", "emoji": "🔥"}
+    mod.handle_reaction_event(ev)
+    mod.handle_reaction_event(json.loads(json.dumps(ev)))
+    assert mod.work.qsize() == before + 1

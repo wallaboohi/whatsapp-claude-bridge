@@ -17,6 +17,7 @@ Runs as one background process (started at logon by Task Scheduler):
 import datetime as dt
 import importlib.util
 import wa_format  # WhatsApp formatting tools (owner 17.11)
+import emoji_icons  # 🔥 = emoji icons in the owner's own message (owner 18.11)
 import json
 import re
 import os
@@ -6839,6 +6840,103 @@ def read_other(chat, mid, wait=90):
         wheel_failure(f"לא הצלחתי להכין את ההקראה. הטקסט עדיין זמין: {t[:600]}", e)
 
 
+FIRE = "🔥"  # owner 18.11: 🔥 on one of his own messages = add fitting emoji icons to it
+FIRE_EDIT_WINDOW = 14 * 60  # WhatsApp lets a message be edited for 15 minutes; a minute of margin for the work itself
+_fire_recent = {}  # (chat, message id) -> when 🔥 work on it started / its edit was sent (no double work, no learning from our edit)
+_fire_lock = threading.Lock()
+
+
+def queue_fire(chat, mid):
+    """Reserve the 🔥 work before queueing it, so a repeated reaction event cannot iconize the same message twice at once."""
+    if not chat or not mid:
+        return False
+    now = time.time()
+    with _fire_lock:
+        if now - _fire_recent.get((chat, mid), 0) < 90:
+            return False
+        _fire_recent[(chat, mid)] = now
+        for old, at in list(_fire_recent.items()):
+            if now - at > 1800:
+                del _fire_recent[old]
+    work.put(lambda: fire_icons(chat, mid))
+    return True
+
+
+def fire_is_ours(chat, mid, within=1200):
+    return time.time() - _fire_recent.get((chat, mid), 0) < within
+
+
+def fire_ai(prompt):
+    """The cheap model picks emoji for the words the table does not know (config fire_icons_ai, default on). Daily caps apply;
+    no answer = the table result alone."""
+    if not CFG.get("fire_icons_ai", True):
+        return ""
+    return claude(prompt, model=CFG.get("light_model") or "haiku", session=False, timeout=90, chat=PRIMARY, tools="",
+                  budget_check=True) or ""
+
+
+def message_age(ts):
+    """Seconds since a messages.db timestamp, or None when it cannot be read."""
+    try:
+        s = str(ts)
+        when = dt.datetime.fromisoformat(s.replace(" ", "T", 1) if "T" not in s else s.replace("Z", "+00:00"))
+        if when.tzinfo is None:
+            when = when.astimezone()
+        return (dt.datetime.now().astimezone() - when).total_seconds()
+    except (TypeError, ValueError):
+        return None
+
+
+def fire_icons(chat, mid):
+    """Owner 18.11: 🔥 on one of HIS OWN text messages (any chat) → the same message, edited, with fitting emoji after his words
+    (emoji_icons.iconize: keyword table + the cheap model for the rest; his words and their order never change).
+    WhatsApp allows edits only for ~15 minutes: an older message (or a failed edit) gets the iconized text as an answer instead,
+    like 🛞 — quoting it in a control chat, and in the control group (never to the other person) for any other chat.
+    🔥 on someone else's message, a voice note / image or one of the bot's own answers is an ordinary reaction: nothing happens."""
+    try:
+        with mdb() as db:
+            r = db.execute("SELECT content, is_from_me, media_type, timestamp FROM messages WHERE id = ? AND chat_jid = ?",
+                           (mid, chat)).fetchone()
+    except sqlite3.Error as e:
+        log("fire db", e)
+        return
+    if not r or not r[1] or r[2] or not (r[0] or "").strip():
+        return
+    content, ts = r[0], r[3]
+    prefix = (CFG.get("reply_prefix") or "🤖").strip()
+    if content.lstrip().startswith(prefix):
+        return
+    control = chat == PRIMARY or chat in load_groups()
+    try:
+        new = emoji_icons.iconize(content, ai=fire_ai)
+    except Exception as e:
+        log("fire iconize failed", e)
+        return
+    if new == content:
+        log("fire: no fitting icon", chat, mid)
+        if control:
+            send(chat, CFG["reply_prefix"] + "🔥 _לא מצאתי אייקון שמתאים להודעה הזו._", quoted=mid)
+        return
+    age = message_age(ts)
+    why = "עברו יותר מ-15 דקות, ווצאפ כבר לא מאפשר לערוך אותה"
+    if age is None or age < FIRE_EDIT_WINDOW:
+        _fire_recent[(chat, mid)] = time.time()
+        try:
+            res = bridge("/edit_message", {"jid": chat, "id": mid, "text": new}, timeout=30)
+        except Exception as e:  # noqa: BLE001
+            res = {"success": False, "error": str(e)[:160]}
+        if res.get("success"):
+            log("fire: message iconized", chat, mid)
+            return
+        why = "העריכה נכשלה: " + str(res.get("error") or res.get("message") or "?")[:120]
+        log("fire edit failed", chat, mid, why)
+    note = f"🔥 _{why}. הנה הנוסח עם האייקונים להעתקה:_\n"
+    if control:
+        send(chat, CFG["reply_prefix"] + note + new, quoted=mid)
+    else:
+        send(PRIMARY, CFG["reply_prefix"] + f"🔥 _ההודעה שלך בשיחה עם {chat_title(chat)}:_\n" + note + new)
+
+
 def read_text(chat, text):
     """A voice note of `text` in this chat (🛞 modes) — independent of the voice_replies setting."""
     t = tts_clean(text)
@@ -9116,6 +9214,14 @@ def handle_reaction_event(ev):
     if cj == PRIMARY and emoji in ("✅", "✔️", "👍", "❌") and serves_here(cj):  # owner 17.11: ✅ on an SMS draft card sends that one SMS
         threading.Thread(target=sms_card_reaction, args=(mid, emoji), daemon=True).start()
         return
+    if emoji == FIRE and cj and mid and CFG.get("fire_icons", True):  # owner 18.11: 🔥 on his own message = emoji icons in it
+        if cj == PRIMARY or cj in load_groups():
+            if not serves_here(cj) or (not ((_groups_last or {}).get(cj) or {}).get("host") and not watches_people()):
+                return
+        elif not watches_people():
+            return
+        queue_fire(cj, mid)
+        return
     if emoji != READ_ALOUD or wheel_is_ours(cj, mid):
         return
     if cj == PRIMARY or cj in load_groups():
@@ -9135,7 +9241,7 @@ def learn_from_edit(chat, mid, new_text):
     """Owner 10.11: learn transcription fixes from the owner's own edits, without asking — the original text (as the
     agent received it, commands.text) against the edited one; each word swap goes to home/dictionary.md
     ("wrong → right  # date"). Junk (too long, numbers, whole rewrites) is skipped and logged, never added."""
-    if not mid or (chat != PRIMARY and chat not in load_groups()):
+    if not mid or (chat != PRIMARY and chat not in load_groups()) or fire_is_ours(chat, mid):  # our own 🔥 edit teaches nothing
         return
     with adb() as db:
         row = db.execute("SELECT text FROM commands WHERE msg_id = ? ORDER BY id LIMIT 1", (mid,)).fetchone()
