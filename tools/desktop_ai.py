@@ -22,6 +22,10 @@ import subprocess
 import sys
 import time
 
+# owner 18.11: this runs under pythonw (no console) inside a scheduled task; a console child started without CREATE_NO_WINDOW
+# makes Windows Terminal open a black window on the owner's screen for every call (one per powershell below)
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 APPS = {  # key -> (window title regex, Start-menu name regex used to launch it; AppIDs differ per PC so they are looked up)
     "claude": (r"^Claude$", r"^Claude$"),
     "chatgpt": (r"^ChatGPT$", r"^ChatGPT$"),
@@ -37,7 +41,8 @@ APPS = {  # key -> (window title regex, Start-menu name regex used to launch it;
 def app_id(key):
     """The Start-menu AppID of the app on this PC (not the Chrome web-app shortcut of the same name)."""
     ps = "Get-StartApps | % { $_.Name + '|' + $_.AppID }"
-    r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, encoding="utf-8", errors="replace")
+    r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       creationflags=NO_WINDOW)
     rx = re.compile(APPS[key][1], re.I)
     for ln in (r.stdout or "").splitlines():
         name, _, aid = ln.partition("|")
