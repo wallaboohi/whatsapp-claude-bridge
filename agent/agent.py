@@ -1359,6 +1359,8 @@ def provider_ready(name):
         return bool(opencode_bin())
     if p.get("kind") == "cli":
         return cli_ready(p)
+    if p.get("kind") == "desktop-app":
+        return desktop_app_ready(p)
     return bool(provider_key(p)) if p.get("key_file") else True
 
 
@@ -1375,6 +1377,9 @@ def provider_status(name):
         return {"ok": True, "detail": "התחברות זמינה לפי מצב הסוכן"}
     if p.get("kind") in ("cli", "opencode", "anthropic-key"):
         return {"ok": True, "detail": "מותקן/מוגדר; תגובה בפועל לא נבדקה"}
+    if p.get("kind") == "desktop-app":
+        return {"ok": True, "detail": ("האפליקציה פתוחה" if desktop_app_status(p).get("running") else "האפליקציה מותקנת")
+                + f" ב{p.get('pc') or p.get('host')}; תגובה בפועל לא נבדקה (שאלה מוקלדת במסך)"}
     if p.get("probe") == "ollama":
         hosts = provider_hosts(p)
         up = [h.get("label") or h.get("url") for h in hosts if reachable(h.get("url", ""), timeout=2)]
@@ -1443,6 +1448,9 @@ def provider_probe(name, timeout=90, big=False):
     kind = p.get("kind")
     if kind in ("claude", "auto"):
         res["he"] = "נבדק דרך מד השימוש והסולם, בלי שליחת הודעה"
+        return res
+    if kind == "desktop-app":  # owner 18.11: a probe question would be typed on the owner's screen: the window / install check only
+        res["he"] = st["detail"]
         return res
     if not st["ok"]:
         res["he"] = st["detail"]
@@ -1627,9 +1635,9 @@ def model_answer_matrix(timeout=120):
     jobs = []
     for name in [n for n in provider_order() if n != "auto"]:
         p = providers().get(name) or {}
-        if p.get("kind") in ("claude", "auto") or not provider_ready(name):
+        if p.get("kind") in ("claude", "auto", "desktop-app") or not provider_ready(name):  # desktop apps: no typing on the owner's screen
             continue
-        models = (openrouter_free_models() if p.get("free_list") == "openrouter" else p.get("models")) or ([p.get("model")] if p.get("model") else [])
+        models =(openrouter_free_models() if p.get("free_list") == "openrouter" else p.get("models")) or ([p.get("model")] if p.get("model") else [])
         jobs += [(name, p, m) for m in models if m]
     with cf.ThreadPoolExecutor(max_workers=6) as ex:
         done = list(ex.map(lambda j: (j, _probe_model(*j, timeout=timeout)), jobs))
@@ -2211,6 +2219,10 @@ def provider_env(name=None, model=None):
         if not cli_ready(p):
             raise ProviderDown(name, "unreachable", 30)
         return dict(os.environ), model or p.get("model") or None
+    if p.get("kind") == "desktop-app":  # owner 18.11: an AI desktop app brings its own model and sign-in
+        if not desktop_app_ready(p):
+            raise ProviderDown(name, "unreachable", 30)
+        return dict(os.environ), None
     if p.get("kind") == "opencode":  # owner 14.11: OpenCode runs its own models (free Zen ones, Ollama); its own engine
         if not opencode_bin():
             raise ProviderDown(name, "unreachable", 30)
@@ -2333,6 +2345,11 @@ def provider_check(name, prefer=None):
     if p["kind"] == "opencode":  # owner 16.11: "חסר מפתח: secrets/None" blocked the switch to a working OpenCode
         ok = bool(opencode_bin())
         return {"ok": ok, "detail": "מותקן" if ok else "OpenCode לא מותקן במחשב הזה", "models": list(p.get("models") or [])}
+    if p["kind"] == "desktop-app":  # owner 18.11: the app on its computer: window open / installed (never types a question)
+        d = desktop_app_status(p, fresh=True)
+        where = p.get("pc") or p.get("host") or ""
+        return {"ok": bool(d.get("ok")), "detail": (("האפליקציה פתוחה ב" if d.get("running") else "האפליקציה מותקנת ב") + where) if d.get("ok")
+                else f"{where}: {d.get('error') or 'לא זמינה'}", "models": []}
     if p["kind"] == "cli":  # agent CLIs bring their own sign-in: installed + login/key is the whole check
         ok = cli_ready(p)
         return {"ok": ok, "detail": "מותקן ומחובר" if ok else f"לא מותקן או לא מחובר: {(p.get('cli') or {}).get('bin')}", "models": list(p.get("models") or [])}
@@ -2495,7 +2512,7 @@ def effective_model(model):
     if name == "claude":
         return model
     p = providers().get(name) or {}
-    if p.get("kind") in ("cli", "opencode"):
+    if p.get("kind") in ("cli", "opencode", "desktop-app"):
         return pm or p.get("model") or None
     return pm or (getattr(_ctx, "auto_model_used", None) if used == name or used is None else None) or p.get("model") or model
 
@@ -2536,6 +2553,8 @@ def where_of(name, model=None):
     """('local' | 'remote', place): where the model really runs. Ollama: on one of the owner's computers (the host that serves it now:
     laptop / desktop); everything else: the provider's cloud. Owner 14.11: so the response time can be judged by where the thinking happens."""
     p = providers().get(name) or {}
+    if p.get("kind") == "desktop-app":  # owner 18.11: "local app on <PC>"
+        return "local", f"אפליקציה מקומית ב{p.get('pc') or p.get('host') or 'מחשב'}"
     if p.get("where") == "local" or p.get("hosts"):
         h = provider_host(p, model) or {}
         return "local", (h.get("label") or "").split("(")[0].strip() or "מקומי"
@@ -2560,7 +2579,7 @@ def ai_tag(model=None):
         name = getattr(_ctx, "provider_used", None) or auto_pick() or "claude"
     p = providers().get(name) or {}
     short = p.get("short") or (p.get("label") or name).split("·")[0].strip()
-    m = (getattr(_ctx, "auto_model_used", None) or p.get("model") or None) if p.get("kind") in ("cli", "opencode") else effective_model(model)  # a CLI brings its own model: never show the group's (Codex showed Gemini)
+    m = (getattr(_ctx, "auto_model_used", None) or p.get("model") or None) if p.get("kind") in ("cli", "opencode", "desktop-app") else effective_model(model)  # a CLI brings its own model: never show the group's (Codex showed Gemini)
     kind, place = where_of(name, m)
     eng = getattr(_ctx, "engine_used", "claude")
     extra = (f" · מנוע {(ENGINES.get(eng) or {}).get('short', eng)}" if eng not in ("claude", "cli", "opencode") else "") + (f" · 🔁 {getattr(_ctx, 'failover_why', '') or 'מכסת Claude נגמרה'}, ולכן עונה {short}" if getattr(_ctx, "failover_used", False) else "") \
@@ -3964,6 +3983,95 @@ def _opencode_event(ev, oc):
     return None
 
 
+# ---------- AI desktop apps as providers (owner 18.11: "<App> app" + which computer it runs on) ----------
+# providers.json kind "desktop-app": {"app": "<tools/desktop_ai.py key>", "host": "<hostname of the PC>", "ssh": "<alias>" | [aliases],
+# "pc": "<Hebrew PC name>", "python": "<optional interpreter for uv on that PC>", "timeout": <seconds the app may think>}.
+# The question is typed into the app window in the owner's desktop session (tools/desktop_ai.py ask --via-task) and its answer read back.
+DESKTOP_AI = os.path.join(ROOT, "tools", "desktop_ai.py")
+_desktop_cache = {}
+
+
+def desktop_app_local(p):
+    return (p.get("host") or "").strip().lower() == socket.gethostname().lower()
+
+
+def _desktop_ai_cmds(p, args):
+    """One command per way of reaching the PC (here, or each ssh alias in turn) that runs desktop_ai.py there in the user's session."""
+    py = ["--python", p["python"]] if p.get("python") else []
+    if desktop_app_local(p):
+        return [[shutil.which("uv") or "uv", "run", "-q", "--no-project", *py, "--with", "uiautomation", "python", "-X", "utf8",
+                 DESKTOP_AI, *args, "--via-task"]]
+    root = (p.get("root") or "C:/Users/walla/whatsapp-mcp").replace("\\", "/")
+    line = " ".join(["uv", "run", "-q", "--no-project"] + [f'"{x}"' if " " in x or "\\" in x else x for x in py]
+                    + ["--with", "uiautomation", "python", "-X", "utf8", f"{root}/tools/desktop_ai.py", *args, "--via-task"])
+    git_ssh = r"C:\Program Files\Git\usr\bin\ssh.exe"
+    ssh = git_ssh if os.path.exists(git_ssh) else "ssh"
+    aliases = p.get("ssh") if isinstance(p.get("ssh"), list) else [p.get("ssh")]
+    return [[ssh, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", a, line] for a in aliases if a]
+
+
+def desktop_ai_call(p, args, stdin_text=None, timeout=240):
+    """desktop_ai.py on the app's PC: its JSON line as a dict ({"ok": False, "error", "unreachable"} when the PC is not reached)."""
+    last = {"ok": False, "error": "אין דרך להגיע למחשב של האפליקציה (חסר ssh בהגדרה)", "unreachable": True}
+    for cmd in _desktop_ai_cmds(p, args):
+        try:
+            r = subprocess.run(cmd, input=stdin_text if stdin_text is not None else "", capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", timeout=timeout, creationflags=NO_WINDOW)
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": f"האפליקציה לא סיימה לענות תוך {timeout} שניות"}
+        except OSError as e:
+            last = {"ok": False, "error": str(e), "unreachable": True}
+            continue
+        lines = [x for x in (r.stdout or "").splitlines() if x.strip().startswith("{")]
+        if lines:
+            try:
+                return json.loads(lines[-1])
+            except ValueError:
+                pass
+        err = "\n".join(x for x in ((r.stderr or "") + "\n" + (r.stdout or "")).splitlines() if x.strip() and not x.startswith("**")).strip()
+        last = {"ok": False, "error": err[-300:] or f"exit {r.returncode}", "unreachable": r.returncode == 255}
+        if r.returncode != 255:  # ssh itself worked (255 = could not connect): another alias will not help
+            break
+    return last
+
+
+def desktop_app_status(p, fresh=False):
+    """{"ok", "running", "error"}: the app's window is open or the app is installed on its PC (never types). Cached 10 minutes."""
+    key = (p.get("host"), p.get("app"))
+    hit = _desktop_cache.get(key)
+    if hit and not fresh and time.time() - hit[0] < 600:
+        return hit[1]
+    d = desktop_ai_call(p, ["has", p.get("app") or ""], timeout=90)
+    _desktop_cache[key] = (time.time(), d)
+    return d
+
+
+def desktop_app_ready(p):
+    if desktop_app_local(p) and not os.path.exists(DESKTOP_AI):
+        return False
+    return bool(desktop_app_status(p).get("ok"))
+
+
+def _run_desktop_app(name, p, prompt, chat, on_stage, timeout):
+    """Owner 18.11: the owner's message is typed into an AI desktop app (Claude / ChatGPT / Copilot ... app) on one of his computers and
+    the app's answer comes back. No bridge tools there: only the message (and the Hebrew rule) is sent. ProviderDown when it fails."""
+    wait = int(min(timeout or 300, p.get("timeout") or 240))
+    text = (prompt or "").strip()[-8000:] + HEBREW_TAIL
+    if on_stage:
+        on_stage(f"🧠 {p.get('short') or name} חושב", "")
+    t0 = time.time()
+    d = desktop_ai_call(p, ["ask", p.get("app") or "", "-", "--timeout", str(wait)], stdin_text=text, timeout=wait + 150)
+    ans = (d.get("answer") or "").strip() if d.get("ok") else ""
+    if not ans:
+        _desktop_cache.pop((p.get("host"), p.get("app")), None)
+        raise ProviderDown(name, "unreachable", 30, raw=str(d.get("error") or "no answer")[-400:])
+    with adb() as db:
+        db.execute("INSERT INTO claude_runs (at, session, cost, input_tokens, output_tokens, seconds, ok, model, cum, chat) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                   (dt.datetime.now().isoformat(), None, 0, 0, 0, time.time() - t0, 1, name, 0, chat))
+    _note_answer(name, time.time() - t0)
+    return {"type": "result", "result": ans, "is_error": False, "session_id": None, "usage": {}, "total_cost_usd": 0}
+
+
 def cli_ready(p):
     """An agent CLI provider (Gemini CLI, Copilot CLI, Codex...) is installed, and has its key where it needs one."""
     c = p.get("cli") or {}
@@ -4089,6 +4197,9 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
     if _pc.get("kind") == "cli" and not guest and tools != "":  # owner 14.11: an agent CLI of this computer is the engine and the AI
         _ctx.engine_used = "cli"
         return _run_cli(_ctx.provider_used, _pc, prompt, pmodel or None, append, chat, on_stage, timeout)
+    if _pc.get("kind") == "desktop-app" and not guest and tools != "":  # owner 18.11: an AI desktop app on one of the owner's computers
+        _ctx.engine_used = "cli"
+        return _run_desktop_app(_ctx.provider_used, _pc, prompt, chat, on_stage, timeout)
     if eng == "qwen" and penv is None:  # Qwen Code cannot use the Claude subscription: it needs a provider with an OpenAI endpoint
         alt = failover_target()
         if not alt:
@@ -4575,7 +4686,7 @@ def status_ai_info(model, chat, use_run_state=False):
         pm = None
     p = providers().get(name) or {}
     actual_model = pm or p.get("model")
-    if p.get("kind") not in ("cli", "opencode"):
+    if p.get("kind") not in ("cli", "opencode", "desktop-app"):
         actual_model = actual_model or model
     kind, place = where_of(name, actual_model)
     short = AI_HE.get(name) or p.get("short") or name
@@ -6548,14 +6659,18 @@ def peer_port(peer):
     return int(m.group(1)) if m else 8781
 
 
-def tunnel_cmd(peer, ssh="ssh"):
-    """ssh -L <port>→the peer's dashboard, -R <port>→ours, so each machine reaches the other on 127.0.0.1:<port>."""
+def tunnel_cmd(peer, ssh="ssh", multi=False):
+    """ssh -L <port>→the peer's dashboard, -R <port>→ours, so each machine reaches the other on 127.0.0.1:<port>.
+    Owner 18.11 (4-PC chain): a PC with several tunnel peers opens -L only (each peer on its own port: desktop 8781,
+    laptop 8782, living room 8783, bedroom 8784); the reverse forward and the Ollama pair stay on the peer marked
+    "reverse": true (two tunnels forwarding the same port would both fail with ExitOnForwardFailure)."""
     port = peer_port(peer)
+    rev = bool(peer.get("reverse", not multi))
     return [ssh, "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=30",
             "-o", "ServerAliveCountMax=3", "-o", "ConnectTimeout=15",
-            "-L", f"{port}:127.0.0.1:8770", "-R", f"{port}:127.0.0.1:8770",
+            "-L", f"{port}:127.0.0.1:8770"] + (["-R", f"{port}:127.0.0.1:8770",
             # owner 13.11: each machine reaches the OTHER machine's Ollama on 127.0.0.1:11435 (the laptop's is the default host)
-            "-L", "11435:127.0.0.1:11434", "-R", "11435:127.0.0.1:11434", str(peer["tunnel"])]
+            "-L", "11435:127.0.0.1:11434", "-R", "11435:127.0.0.1:11434"] if rev else []) + [str(peer["tunnel"])]
 
 
 def _kill_old_tunnels():
@@ -6606,7 +6721,7 @@ def tunnel_keeper():
             if time.time() < next_try.get(name, 0):
                 continue
             try:
-                procs[name] = subprocess.Popen(tunnel_cmd(p, ssh), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                procs[name] = subprocess.Popen(tunnel_cmd(p, ssh, multi=len(peers) > 1), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                                stderr=subprocess.PIPE, creationflags=NO_WINDOW)
                 kv_set(f"tunnel:{name}", json.dumps({"state": "up", "since": dt.datetime.now().isoformat(timespec="seconds")}))
                 wait[name] = 5 if wait.get(name, 5) <= 5 else wait[name]
@@ -6745,6 +6860,9 @@ def windows_toast(title, text):
 
 def local_health_watch():
     while True:
+        if lease_standby():
+            time.sleep(60)
+            continue
         try:
             status = bridge("/status", timeout=10)
         except Exception:
@@ -6782,6 +6900,9 @@ def peer_watch_step(state, brief, now, cfg, name):
         st.pop("off_alerted", None)
     b = brief.get("bridge") or {}
     hp = (b.get("health") or {}).get("problem") or ""
+    if (brief.get("session_lease") or {}).get("standby"):  # owner 18.11: waits for the shared identity, not a fault
+        b = {"connected": True}
+        hp = ""
     if not b.get("connected") or b.get("error") or hp in HEALTH_SERIOUS:
         st.setdefault("br_since", now.isoformat(timespec="seconds"))
         if not st.get("br_alerted") and mins(st["br_since"]) >= br_min:
@@ -7494,7 +7615,12 @@ def failover_activate(name, fc, st, now=None):
     os.makedirs(FAILOVER_DIR, exist_ok=True)
     write_json(_fo_hold_path(name), {"for": name, "host": st["host"], "by": socket.gethostname(), "since": st["since"]})
     log("failover active:", name, fc["plugins"])
-    return (f"✅ האוטומציות ({_fo_plist(fc)}) עברו ל{fc['self_name']} ורצות כאן עד שהמחשב \"{name}\" יחזור. "
+    try:
+        sline = session_take(f"take-over for {name}")
+    except Exception:
+        log("session take failed", traceback.format_exc())
+        sline = "⚠️ העברת הזדהות הווצאפ לכאן נכשלה (פרטים ביומן)."
+    return ((sline + "\n" if sline else "") + f"✅ האוטומציות ({_fo_plist(fc)}) עברו ל{fc['self_name']} ורצות כאן עד שהמחשב \"{name}\" יחזור. "
             + (f"מה שכבר בוצע אצלו (נכון ל-{snap['at'][11:16]}) לא ירוץ שוב." if snap else "")
             + ("\nגם השיחות שלו נענות כאן, וההודעות שנשלחו בזמן שלא היה זמין ייענו עכשיו." if fc.get("conversations") else "")
             + "\nכשהוא יחזור אחזיר אליו אותן לבד.")
@@ -7536,6 +7662,8 @@ def failover_approve(content, chat, ts, me):
 def failover_handback(peer, name, fc, st):
     """Runs only in a process without the peer's plugins (after the release restart): our flags -> the peer's databases,
     then the hold file goes and the owner is told. False = retry on the next round."""
+    if not session_handback(peer, name):  # owner 18.11: the WhatsApp identity goes back first
+        return False
     pre = tuple(fc["kv_prefixes"]) + tuple(p + j for j in st.get("jobs") or [] for p in ("day:", "at:"))
     with adb() as db:
         kv = {k: v for k, v in db.execute("SELECT k, v FROM kv") if k.startswith(pre)}
@@ -7602,7 +7730,7 @@ def failover_handback(peer, name, fc, st):
 
 
 def failover_chain_blocker(fc, name):
-    """Owner 18.11: four PCs back each other up in a fixed order (desktop host -> laptop -> living room -> bedroom). Config
+    """Owner 18.11 11:33: four PCs back each other up in a fixed order: desktop (host) -> bedroom -> living room -> laptop. Config
     failover "defer_to": the backups before this one. Take over only when every backup before us is down (or its bridge is
     not connected), and never while another PC already holds the host's work (its /brief "failover_holds").
     Returns why we must not take over now, or ""."""
@@ -7619,9 +7747,385 @@ def failover_chain_blocker(fc, name):
             continue
         if name in (b.get("failover_holds") or []):
             return f"\"{pn}\" כבר מחזיק את העבודה של \"{name}\""
-        if pn in before and (b.get("bridge") or {}).get("connected"):
+        lease = b.get("session_lease") or {}
+        if pn in before and ((b.get("bridge") or {}).get("connected") or (lease.get("mode") and lease.get("copy_at"))):
             return f"\"{pn}\" לפניי בשרשרת הגיבוי וזמין"
     return ""
+
+
+# ---------- one WhatsApp identity that moves along the chain (owner 18.11.2026) ----------
+# "I don't want four linked devices. The desktop's WhatsApp sign-in moves from PC to PC: when a PC falls, the next one in
+# the chain gets the identity. WhatsApp doesn't know which computer it runs on, only which identity."
+# Config "session_share": {"enabled": true, "pull_minutes": 2}. The bridge waits at a local gate (whatsapp-bridge/lease.go):
+# store/lease_mode = gate on; store/lease_grant = this PC holds the identity (valid only if written after the last boot).
+# Host: grants itself at start-up unless a backup holds its work; then it waits for the hand-back (which brings the
+# session back) and grants itself. Backup: keeps a fresh copy of the identity from whoever holds it (sqlite backup over
+# ssh, every pull_minutes); on take-over installs it and grants itself; on hand-back revokes, waits for its bridge to stop,
+# and sends the session (and the messages it received) back to the host.
+
+LEASE_MODE = os.path.join(STORE, "lease_mode")
+LEASE_GRANT = os.path.join(STORE, "lease_grant")
+LEASE_STATUS = os.path.join(STORE, "lease_status")
+SESSION_COPY = os.path.join(STORE, "session_copy")
+
+
+def session_cfg():
+    sc = CFG.get("session_share") or {}
+    if not sc.get("enabled"):
+        return None
+    return {"pull_minutes": 2, "messages_minutes": 30, "wait_bridge_seconds": 60, **sc}
+
+
+def _boot_time():
+    try:
+        import ctypes
+        ms = ctypes.windll.kernel32.GetTickCount64
+        ms.restype = ctypes.c_ulonglong
+        return time.time() - ms() / 1000.0
+    except Exception:
+        return 0.0
+
+
+def lease_held():
+    """This PC holds the identity: lease mode on and a grant written after the last boot (the bridge's own rule)."""
+    try:
+        return os.path.exists(LEASE_MODE) and os.path.getmtime(LEASE_GRANT) > _boot_time() - 60
+    except OSError:
+        return False
+
+
+def lease_standby():
+    """Owner 18.11: this PC waits as a backup for the one WhatsApp identity: its bridge is at the gate on purpose."""
+    return bool(session_cfg()) and os.path.exists(LEASE_MODE) and not lease_held()
+
+
+def lease_enable():
+    os.makedirs(STORE, exist_ok=True)
+    if not os.path.exists(LEASE_MODE):
+        with open(LEASE_MODE, "w", encoding="utf-8") as f:
+            f.write("owner 18.11: one WhatsApp identity moves between the PCs; the bridge connects only with store/lease_grant\n")
+
+
+def lease_grant(why=""):
+    lease_enable()
+    with open(LEASE_GRANT, "w", encoding="utf-8") as f:
+        f.write(f"{socket.gethostname()} {dt.datetime.now().isoformat(timespec='seconds')} {why}\n")
+    log("session lease granted:", why)
+
+
+def _bridge_running():
+    try:
+        out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq whatsapp-bridge.exe", "/NH"], capture_output=True, text=True,
+                             timeout=30, creationflags=NO_WINDOW).stdout
+        return "whatsapp-bridge.exe" in out.lower()
+    except Exception:
+        return False
+
+
+def lease_revoke(why="", wait=None):
+    """Take the identity away from this PC's bridge: it disconnects and exits within seconds (lease.go). Returns True once
+    no bridge here has the session database open any more."""
+    try:
+        os.remove(LEASE_GRANT)
+    except OSError:
+        pass
+    log("session lease revoked:", why)
+    wait = int(wait if wait is not None else (session_cfg() or {}).get("wait_bridge_seconds", 60))
+    t0 = time.time()
+    while True:
+        try:
+            st = open(LEASE_STATUS, encoding="utf-8").read()
+        except OSError:
+            st = ""
+        if not _bridge_running() or st.startswith(("waiting", "released")):
+            time.sleep(2)  # the process may still be closing its database
+            return True
+        if time.time() - t0 >= wait:
+            return False
+        time.sleep(2)
+
+
+def _device_jid(path):
+    try:
+        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=10)
+        try:
+            return (db.execute("SELECT jid FROM whatsmeow_device LIMIT 1").fetchone() or [""])[0]
+        finally:
+            db.close()
+    except sqlite3.Error:
+        return ""
+
+
+def _sqlite_bytes(path):
+    """A consistent copy of a live SQLite file (backup API: reads the WAL too, never half-written)."""
+    tmp = os.path.join(tempfile.gettempdir(), f"lease-{os.getpid()}-{threading.get_ident()}.db")
+    src, dst = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=30), sqlite3.connect(tmp)
+    try:
+        src.backup(dst)
+    finally:
+        src.close()
+        dst.close()
+    with open(tmp, "rb") as f:
+        data = f.read()
+    os.remove(tmp)
+    return data
+
+
+def _put_db(path, blob, keep_own=False):
+    """Writes a SQLite file in place of path (its -wal/-shm removed first: a stale WAL would replay onto the new file).
+    keep_own: the PC's own former file is kept once as <path>.own-<stamp> (e.g. the laptop's former linked device)."""
+    d = os.path.dirname(path)
+    os.makedirs(d, exist_ok=True)
+    if keep_own and os.path.exists(path) and not any(f.startswith(os.path.basename(path) + ".own-") for f in os.listdir(d)):
+        try:
+            with open(path + ".own-" + time.strftime("%Y%m%d-%H%M%S"), "wb") as f:
+                f.write(_sqlite_bytes(path))
+        except Exception:
+            log("keeping own copy failed", traceback.format_exc())
+    tmp = path + ".lease-tmp"
+    with open(tmp, "wb") as f:
+        f.write(blob)
+    for ext in ("-wal", "-shm"):
+        try:
+            os.remove(path + ext)
+        except OSError:
+            pass
+    os.replace(tmp, path)
+
+
+SESSION_DUMP = r'''import base64, os, sqlite3, tempfile
+def copy(path):
+    if not os.path.exists(path):
+        return ""
+    tmp = os.path.join(tempfile.gettempdir(), "lease-dump.db")
+    src, dst = sqlite3.connect("file:" + path + "?mode=ro", uri=True, timeout=30), sqlite3.connect(tmp)
+    src.backup(dst)
+    src.close()
+    dst.close()
+    data = open(tmp, "rb").read()
+    os.remove(tmp)
+    return base64.b64encode(data).decode()
+for name in C["files"]:
+    print("@@F@@" + name + "@@" + copy(C["store"] + "/" + name))
+print("@@OK@@")
+'''
+
+
+def session_pull(peer, name, with_messages=False):
+    """Fresh copy of the identity (and, with_messages, the message history) from the PC that holds it now, into
+    store/session_copy/. Never touches this PC's live files. Returns the copied device jid or ""."""
+    files = ["whatsapp.db"] + (["messages.db"] if with_messages else [])
+    store = _remote_root(peer) + "/whatsapp-bridge/store"
+    try:
+        rc, out, err = _remote_python(peer, _remote_script(SESSION_DUMP, {"store": store, "files": files}), timeout=300)
+    except Exception as e:
+        rc, out, err = 1, "", str(e)
+    if rc or "@@OK@@" not in out:
+        log("session pull failed", name, rc, (err or out)[-300:])
+        return ""
+    import base64
+    os.makedirs(SESSION_COPY, exist_ok=True)
+    jid = ""
+    for ln in out.splitlines():
+        if not ln.startswith("@@F@@"):
+            continue
+        fname, b64 = ln[5:].split("@@", 1)
+        if not b64.strip():
+            continue
+        tmp = os.path.join(SESSION_COPY, fname + ".tmp")
+        with open(tmp, "wb") as f:
+            f.write(base64.b64decode(b64))
+        if fname == "whatsapp.db":
+            jid = _device_jid(tmp)
+            for ext in ("-wal", "-shm"):  # opening the copy read-only leaves these next to it
+                try:
+                    os.remove(tmp + ext)
+                except OSError:
+                    pass
+            if not jid:
+                os.remove(tmp)
+                log("session pull: no device in the copy from", name)
+                return ""
+        os.replace(tmp, os.path.join(SESSION_COPY, fname))
+    meta = session_copy_meta()
+    meta.update({"from": name, "jid": jid, "at": dt.datetime.now().isoformat(timespec="seconds")})
+    if with_messages:
+        meta["messages_at"] = meta["at"]
+    write_json(os.path.join(SESSION_COPY, "meta.json"), meta)
+    return jid
+
+
+def session_copy_meta():
+    try:
+        with open(os.path.join(SESSION_COPY, "meta.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def session_take(why):
+    """Take-over on a backup: the copied identity becomes this PC's session, then the bridge may connect.
+    Returns a line for the owner ("" when session sharing is off)."""
+    if not session_cfg():
+        return ""
+    src = os.path.join(SESSION_COPY, "whatsapp.db")
+    if lease_held():
+        return "📱 הזדהות הווצאפ כבר כאן."
+    if not os.path.exists(src):
+        return "⚠️ אין כאן עותק של הזדהות הווצאפ, ולכן הגשר כאן לא התחבר."
+    lease_revoke("before installing the shared identity")
+    with open(src, "rb") as f:
+        _put_db(os.path.join(STORE, "whatsapp.db"), f.read(), keep_own=True)
+    msgs = os.path.join(SESSION_COPY, "messages.db")
+    if os.path.exists(msgs):
+        with open(msgs, "rb") as f:
+            _put_db(os.path.join(STORE, "messages.db"), f.read(), keep_own=True)
+    kv_set("session_taken_at", dt.datetime.now().isoformat(timespec="seconds"))
+    lease_grant(why)
+    meta = session_copy_meta()
+    return f"📱 הזדהות הווצאפ של הגשר עברה לכאן (עותק מ-{str(meta.get('at', ''))[11:16]}), והגשר כאן מתחבר."
+
+
+def _session_handback_payload(since):
+    """The holder, its bridge already stopped: the session file and the messages it received since the take-over."""
+    import base64
+    data = {"session": base64.b64encode(_sqlite_bytes(os.path.join(STORE, "whatsapp.db"))).decode(), "messages": [], "chats": []}
+    try:
+        db = sqlite3.connect(f"file:{os.path.join(STORE, 'messages.db')}?mode=ro", uri=True, timeout=30)
+        db.row_factory = sqlite3.Row
+        cut = (since or "")[:19].replace("T", " ")
+        for r in db.execute("SELECT * FROM messages WHERE timestamp >= ?", (cut,)):
+            d = dict(r)
+            for k, v in d.items():
+                if isinstance(v, bytes):
+                    d[k] = {"b64": base64.b64encode(v).decode()}
+            data["messages"].append(d)
+        data["chats"] = [dict(r) for r in db.execute("SELECT * FROM chats WHERE last_message_time >= ?", (cut,))]
+        db.close()
+    except sqlite3.Error:
+        log("session hand-back: messages not read", traceback.format_exc())
+    return data
+
+
+SESSION_HANDBACK = r'''import base64, os, sqlite3, subprocess, time
+store = C["store"]
+st = ""
+try:
+    st = open(store + "/lease_status", encoding="utf-8").read()
+except OSError:
+    pass
+running = "whatsapp-bridge.exe" in subprocess.run(["tasklist", "/FI", "IMAGENAME eq whatsapp-bridge.exe", "/NH"], capture_output=True, text=True).stdout.lower()
+if running and not st.startswith(("waiting", "released")):
+    print("@@BUSY@@ bridge connected here: " + st)
+    raise SystemExit
+path = store + "/whatsapp.db"
+stamp = time.strftime("%Y%m%d-%H%M%S")
+if os.path.exists(path):
+    src, dst = sqlite3.connect("file:" + path + "?mode=ro", uri=True, timeout=30), sqlite3.connect(path + ".pre-handback-" + stamp)
+    src.backup(dst)
+    src.close()
+    dst.close()
+with open(path + ".lease-tmp", "wb") as f:
+    f.write(base64.b64decode(C["session"]))
+for ext in ("-wal", "-shm"):
+    try:
+        os.remove(path + ext)
+    except OSError:
+        pass
+os.replace(path + ".lease-tmp", path)
+n = 0
+if C.get("messages") or C.get("chats"):
+    db = sqlite3.connect(store + "/messages.db", timeout=60)
+    with db:
+        for c in C.get("chats") or []:
+            db.execute("INSERT INTO chats (jid, name, last_message_time) VALUES (?, ?, ?) ON CONFLICT(jid) DO UPDATE SET "
+                       "last_message_time = MAX(COALESCE(last_message_time, ''), excluded.last_message_time), name = COALESCE(name, excluded.name)",
+                       (c.get("jid"), c.get("name"), c.get("last_message_time")))
+        cols = [r[1] for r in db.execute("PRAGMA table_info(messages)")]
+        for m in C.get("messages") or []:
+            m = {k: (base64.b64decode(v["b64"]) if isinstance(v, dict) and "b64" in v else v) for k, v in m.items() if k in cols}
+            db.execute("INSERT OR IGNORE INTO chats (jid) VALUES (?)", (m.get("chat_jid"),))
+            n += db.execute("INSERT OR IGNORE INTO messages (" + ",".join(m) + ") VALUES (" + ",".join("?" * len(m)) + ")", list(m.values())).rowcount
+    db.close()
+print("@@MSG@@%d" % n)
+print("@@OK@@")
+'''
+
+
+def session_handback(peer, name):
+    """Before the plugins' hand-back: stop our bridge, send the identity (and the messages received here) back to the host.
+    True = done (or nothing to do); False = retry next round, the plugins' hand-back waits."""
+    if not session_cfg() or not kv_get("session_taken_at"):
+        return True
+    if not lease_revoke("handing the identity back to " + name):
+        log("session hand-back: our bridge did not stop yet")
+        return False
+    payload = _session_handback_payload(kv_get("session_taken_at"))
+    try:
+        rc, out, err = _remote_python(peer, _remote_script(SESSION_HANDBACK, {"store": _remote_root(peer) + "/whatsapp-bridge/store", **payload}), timeout=600)
+    except Exception as e:
+        rc, out, err = 1, "", str(e)
+    if rc or "@@OK@@" not in out:
+        log("session hand-back failed", name, rc, (err or out)[-300:])
+        return False
+    kv_set("session_taken_at", "")
+    log("session handed back to", name, next((ln for ln in out.splitlines() if ln.startswith("@@MSG@@")), ""))
+    return True
+
+
+def session_host_start(deferred):
+    """Host at start-up: lease mode on; grant now unless a backup holds our work (then deferred_plugins grants after the
+    hand-back brought the session back)."""
+    if not session_cfg() or failover_cfg():
+        return
+    lease_enable()
+    if not deferred:
+        lease_grant("host start")
+    else:
+        lease_revoke("a backup holds the identity; waiting for the hand-back", wait=20)
+
+
+def session_backup_tick(peer, name, peer_st):
+    """Backup, idle: keep a fresh copy of the identity from whoever holds it now (the host, or a backup before us that
+    holds the host's work). The bridge here stays at the gate."""
+    sc = session_cfg()
+    if not sc:
+        return
+    lease_enable()
+    if (failover_state(name).get("state") or "idle") != "idle":
+        return
+    if lease_held():  # an idle backup must never hold the identity (e.g. left from an old take-over)
+        lease_revoke("idle backup")
+    last = kv_get("session_pull_at") or ""
+    now = dt.datetime.now()
+    if last and now - dt.datetime.fromisoformat(last) < dt.timedelta(minutes=float(sc["pull_minutes"])):
+        return
+    kv_set("session_pull_at", now.isoformat(timespec="seconds"))
+    src_peer, src_name = (peer, name) if not (peer_st or {}).get("off_since") else (None, None)
+    if not src_peer:
+        for p in CFG.get("peers") or []:
+            b = peer_fetch(p, timeout=8)
+            if b and name in (b.get("failover_holds") or []) and peer_alias(p):
+                src_peer, src_name = p, p.get("name") or peer_alias(p)
+                break
+    if not src_peer:
+        return
+    lastm = session_copy_meta().get("messages_at") or ""
+    with_msgs = not lastm or now - dt.datetime.fromisoformat(lastm) >= dt.timedelta(minutes=float(sc["messages_minutes"]))
+    session_pull(src_peer, src_name, with_messages=with_msgs)
+
+
+def session_resume_ok(name):
+    """Start-up of a backup whose state says it holds the host's work: only if the host is still down and no other PC
+    holds it now (a PC that died while holding must not come back with the identity next to its successor)."""
+    for p in CFG.get("peers") or []:
+        pn = p.get("name") or peer_alias(p)
+        b = peer_fetch(p, timeout=8)
+        if not b or b.get("agent_alive", True) is False:
+            continue
+        if pn == name or name in (b.get("failover_holds") or []):
+            return False
+    return True
 
 
 def failover_tick(peer, name, peer_st):
@@ -7629,6 +8133,10 @@ def failover_tick(peer, name, peer_st):
     fc = failover_cfg()
     if not fc or fc["for"] != name:
         return
+    try:
+        session_backup_tick(peer, name, peer_st)  # owner 18.11: keep a fresh copy of the one WhatsApp identity
+    except Exception:
+        log("session backup tick failed", traceback.format_exc())
     if (failover_state(name).get("state") or "idle") == "idle" and (peer_st or {}).get("off_since") and             (fc.get("defer_to") or len(CFG.get("peers") or []) > 1):
         why = failover_chain_blocker(fc, name)
         if why:
@@ -7682,6 +8190,19 @@ def failover_resume():
     fc = failover_cfg()
     if not fc or (failover_state(fc["for"]).get("state")) != "active":
         return
+    if session_cfg() and not session_resume_ok(fc["for"]):
+        # owner 18.11: we died while holding; the host is back or the next PC in the chain holds it now -> stand by
+        failover_save(fc["for"], {"state": "idle"})
+        kv_set("session_taken_at", "")
+        lease_revoke("came back after another PC took over", wait=5)
+        try:
+            os.remove(_fo_hold_path(fc["for"]))
+        except OSError:
+            pass
+        log("failover: was holding", fc["for"], "but another PC holds it now - standing by")
+        return
+    if session_cfg() and kv_get("session_taken_at"):
+        lease_grant("still holding after restart")
     load_plugins(fc["plugins"])
     _failover_loaded.add(fc["for"])
     log("failover: still holding", fc["for"], "- plugins loaded again")
@@ -7757,6 +8278,8 @@ def deferred_plugins():
             time.sleep(30)
     finally:
         conversations_resume()
+        if session_cfg() and not failover_cfg():
+            lease_grant("hand-back done")  # owner 18.11: the identity came back with the hand-back
     start_plugins()
     _own_plugins[0] = True
 
@@ -7795,6 +8318,8 @@ def plugin_hold_watch():
             return
         kv_set("plugin_hold_restart_at", now.isoformat(timespec="seconds"))
         log("plugins held by", holds, "while running here: restarting")
+        if session_cfg():
+            lease_revoke(f"{holds[0]} holds the identity", wait=20)  # owner 18.11: never two connections on one identity
         _ctx.chat = PRIMARY
         try:
             reply(f"⚠️ המחשב \"{holds[0]}\" מריץ את האוטומציות במקומי. מפעיל מחדש כדי שלא ירוצו פעמיים; הן יחזרו לכאן כשהוא ימסור אותן.")
@@ -8491,6 +9016,10 @@ def watchdog():
     limit = dt.timedelta(minutes=CFG.get("disconnect_alert_minutes", 10))
     heal_after = dt.timedelta(minutes=CFG.get("bridge_heal_minutes", 3))
     while True:
+        if lease_standby():  # owner 18.11: a backup without the identity has no connected bridge on purpose
+            down_since, alerted, api_down = None, False, None
+            time.sleep(60)
+            continue
         try:
             st = bridge("/status", timeout=10)
             ok = bool(st.get("connected"))
@@ -9525,6 +10054,10 @@ if __name__ == "__main__":
             _defer = bool(plugin_holds())
         except Exception:
             log("plugin hold check failed", traceback.format_exc())
+    try:
+        session_host_start(_defer)  # owner 18.11: one WhatsApp identity; the host connects unless a backup holds it
+    except Exception:
+        log("session host start failed", traceback.format_exc())
     if _defer:  # owner 16.11: the backup is answering our conversations too; wait for the hand-back, then replay
         _conv_held[0] = True
         kv_set("conv_held_since", kv_get("heartbeat") or dt.datetime.now().isoformat(timespec="seconds"))

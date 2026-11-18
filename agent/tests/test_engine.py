@@ -113,7 +113,8 @@ def test_guests_and_restricted_runs_keep_claude_code(agent, monkeypatch, tmp_pat
             mod._run_claude("x", "haiku", None, 5, **kw)
         except Boom:
             pass
-    assert started and "claude" in started[0].lower() and "qwen" not in started[0].lower()
+    # other helpers (a probe) may start first; what matters: Claude Code ran, Qwen never did
+    assert any("claude" in c.lower() for c in started) and not any("qwen" in c.lower() for c in started)
     assert mod._ctx.engine_used == "claude"
 
 

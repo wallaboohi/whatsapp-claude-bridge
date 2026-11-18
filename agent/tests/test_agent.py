@@ -35,6 +35,9 @@ def agent(tmp_path, monkeypatch):
     mod.adb().close()
     monkeypatch.setattr(mod, "opencode_bin", lambda: None)  # tests never depend on whether OpenCode is installed on this PC
     monkeypatch.setattr(mod, "cli_ready", lambda p: False)  # nor on the agent CLIs (Gemini CLI, Copilot, Codex)
+    # nor on the AI desktop apps of the owner's computers (no ssh, nothing typed on a screen)
+    mod._real_desktop_ai_call = mod.desktop_ai_call
+    monkeypatch.setattr(mod, "desktop_ai_call", lambda p, args, stdin_text=None, timeout=240: {"ok": False, "error": "tests"})
     monkeypatch.setattr(mod, "reachable", lambda url, timeout=3: True)  # nor on a local Ollama / translation server listening (CI has none)
     return mod, db
 
@@ -835,7 +838,7 @@ def test_restart_notice_reaches_all_managed_groups(agent, monkeypatch):
     monkeypatch.setattr(mod, "machine_tag", lambda: "YB-PC-HW")
     monkeypatch.setattr(mod, "down_today_min", lambda: 0)
     monkeypatch.setattr(mod, "connected_today_min", lambda: 0)
-    monkeypatch.setattr(mod, "connected_ais_text", lambda: "Copilot")
+    monkeypatch.setattr(mod, "connected_ais_text", lambda limit=5: "Copilot")
     sent = []
     monkeypatch.setattr(mod, "send", lambda chat, text, **kwargs: sent.append((chat, text)) or True)
     mod.kv_set("restart_pending", '{"reason": "בדיקה"}')
@@ -950,7 +953,8 @@ def test_status_hourglass_flips(agent):
     st.finish()
     assert "\u23f3" in a and "\u231b" in b, "the hourglass alternates on every edit"
     host = mod.CFG.get("host_label") or mod.socket.gethostname()
-    assert host in a.split("·")[0] and host in st._final().split("·")[0], "the computer is named first"
+    # owner 15.11/17.11: header line, then the computer is the first detail line
+    assert host in a.split(chr(10))[1] and host in st._final().split(chr(10))[1], "the computer is named first"
     assert a.index("🧠") < a.index("📩 התקבלה הודעה") and "📩 התקבלה הודעה" in a
     assert "מגבלת" not in st._final() and "$" not in st._final(), "no usage/money line in the regular chat (owner 09.11 07:14)"
     mod._account_cache.update(at=mod.time.time() + 3600, v="me@example.com (Pro)")
@@ -971,9 +975,10 @@ def test_cli_status_shows_actual_provider_and_remote_location(agent):
     final = st._final()
     st.finish()
     mod._ctx.chat = None
-    assert "💬 מנסח תשובה" in text and "🧠 קופילוט" in text and "☁️ ענן" in text and "סונט" not in text
-    assert text.index("🖥️") < text.index("🧠 קופילוט") < text.index("💬 מנסח תשובה")
-    assert "קופילוט" in final and "☁️ ענן" in final and "סונט" not in final
+    # owner 17.11: one detail per line, the label in bold
+    assert "💬 מנסח תשובה" in text and "🧠 *ספק:* קופילוט" in text and "☁️ *מיקום:* ענן" in text and "סונט" not in text
+    assert text.index("🖥️") < text.index("🧠 *ספק:* קופילוט") < text.index("💬 מנסח תשובה")
+    assert "קופילוט" in final and "ענן" in final and "סונט" not in final
 
 
 def test_downtime_notice_lists_messages_sent_while_down(agent, monkeypatch):
@@ -1028,8 +1033,10 @@ def test_stage_icon():
     assert mod.stage_icon("מתחיל") == ""
 
 
-def test_follow_ups_missed_calls_and_unread_sends(agent):
+def test_follow_ups_missed_calls_and_unread_sends(agent, monkeypatch):
     mod, db = agent
+    # owner 09.11/18.11: names, never numbers - here each person's "name" is their number so the lines can be told apart
+    monkeypatch.setattr(mod, "person_name", lambda jid, names=None, chat_names=None: str(jid).split("@")[0])
     db.execute("CREATE TABLE calls (call_id TEXT, caller TEXT, event TEXT, reason TEXT, at TIMESTAMP)")
     db.execute("CREATE TABLE receipts (message_id TEXT, chat_jid TEXT, reader TEXT, type TEXT, at TIMESTAMP)")
     db.execute("CREATE TABLE send_log (id INTEGER PRIMARY KEY, recipient TEXT, message_id TEXT, ok BOOLEAN, detail TEXT, timestamp TIMESTAMP)")
@@ -1052,7 +1059,7 @@ def test_follow_ups_missed_calls_and_unread_sends(agent):
 def test_stage_icons_for_commands_and_git(agent):
     mod, _ = agent
     ev = lambda c: {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": c}}]}}
-    assert mod._stage_of(ev("dir")).startswith("\u2b1b")
+    assert mod._stage_of(ev("dir")).startswith("\U0001f4d6")  # owner 17.11: each command kind has its own icon (reading files)
     assert "GitHub" in mod._stage_of(ev("git push origin enhanced:main"))  # network = GitHub
     assert mod._stage_of(ev("git push hub HEAD:main")).startswith("\U0001f501")  # the other computer, not GitHub
     assert "\u05de\u05e7\u05d5\u05de\u05d9" in mod._stage_of(ev("git commit -m x"))  # local
@@ -2614,6 +2621,7 @@ def test_group_served_by_one_computer_only(agent, monkeypatch):
     open(mod.GROUPS_FILE, "w", encoding="utf-8").write(json.dumps(
         {mine: {"name": "a", "host": "YB-PC-HW"}, other: {"name": "b", "host": "lap-yakir"}, free: {"name": "c"}}))
     monkeypatch.setitem(mod.CFG, "host_label", "YB-PC-HW")
+    monkeypatch.setattr(mod.socket, "gethostname", lambda: "YB-PC-HW")  # the test must not depend on which PC runs it
     assert mod.serves_here(mine) and mod.serves_here(free) and not mod.serves_here(other)
     seen = []
     monkeypatch.setattr(mod, "enqueue_command", lambda *a, **k: seen.append(a[2] if len(a) > 2 else a))
@@ -2916,7 +2924,7 @@ def test_finished_status_lists_step_durations_and_total(agent, monkeypatch):
     st.ended = 1011.0
     text = st._final()
     assert "סיימתי · ⏱ 0:11" in text
-    assert "1. קריאת הקשר · 0:03" in text and "2. ניסוח תשובה · 0:08" in text
+    assert "קריאת הקשר ← ניסוח תשובה" in text  # owner 17.11: two process lines (icons, words), not a long list
     assert "סה״כ מקבלת ההודעה עד התשובה" in text and "0:11" in text
 
 
@@ -2952,3 +2960,184 @@ def test_failover_chain_defers_to_earlier_backup_and_holder(agent, monkeypatch):
     assert "חדר שינה" in agent.failover_chain_blocker(fc, "נייח")
     briefs["חדר שינה"] = {"agent_alive": True, "bridge": {"connected": True}, "failover_holds": []}
     assert agent.failover_chain_blocker(fc, "נייח") == ""
+
+
+def _fake_session(path, jid):
+    db = sqlite3.connect(path)
+    db.execute("CREATE TABLE whatsmeow_device (jid TEXT)")
+    db.execute("INSERT INTO whatsmeow_device VALUES (?)", (jid,))
+    db.commit()
+    db.close()
+
+
+def test_session_share_chain_order_and_standby(agent, monkeypatch):
+    """Owner 18.11 11:33: desktop -> bedroom -> living room -> laptop. A backup before us that waits at the identity gate
+    (lease mode, fresh copy) is available even though its bridge is not connected; its bridge is no fault."""
+    agent, _ = agent
+    briefs = {}
+    monkeypatch.setitem(agent.CFG, "peers", [{"name": "נייח"}, {"name": "חדר שינה"}, {"name": "סלון"}])
+    monkeypatch.setattr(agent, "peer_fetch", lambda peer, path="/brief", timeout=5: briefs.get(peer["name"]))
+    fc = {"for": "נייח", "defer_to": ["חדר שינה", "סלון"]}
+    standby = {"agent_alive": True, "bridge": {"connected": False}, "failover_holds": [],
+               "session_lease": {"mode": True, "standby": True, "copy_at": "2026-11-18T11:00:00"}}
+    briefs["חדר שינה"] = standby
+    assert "חדר שינה" in agent.failover_chain_blocker(fc, "נייח")
+    briefs["חדר שינה"] = None
+    briefs["סלון"] = standby
+    assert "סלון" in agent.failover_chain_blocker(fc, "נייח")
+    briefs["סלון"] = {**standby, "session_lease": {"mode": True, "copy_at": ""}}  # no copy of the identity: cannot hold it
+    assert agent.failover_chain_blocker(fc, "נייח") == ""
+    now = agent.dt.datetime(2026, 11, 18, 12, 0)
+    st, out = agent.peer_watch_step({"br_since": "2026-11-18T10:00:00"}, standby, now, {}, "חדר שינה")
+    assert not out and "br_since" not in st
+
+
+def test_session_take_and_handback_roundtrip(agent, monkeypatch, tmp_path):
+    """Owner 18.11: one WhatsApp identity. Take-over installs the copied session (own one kept once, stale WAL removed) and
+    grants the lease; the hand-back writes it to the host (backup kept) with the messages received meanwhile."""
+    agent, _ = agent
+    monkeypatch.setitem(agent.CFG, "session_share", {"enabled": True})
+    monkeypatch.setattr(agent, "_bridge_running", lambda: False)
+    store = agent.STORE
+    _fake_session(os.path.join(store, "whatsapp.db"), "972500000000:51@s.whatsapp.net")  # the backup's own former device
+    open(os.path.join(store, "whatsapp.db-wal"), "wb").write(b"stale")
+    os.makedirs(agent.SESSION_COPY, exist_ok=True)
+    _fake_session(os.path.join(agent.SESSION_COPY, "whatsapp.db"), "972500000000:50@s.whatsapp.net")
+    agent.write_json(os.path.join(agent.SESSION_COPY, "meta.json"), {"at": "2026-11-18T11:58:00", "jid": "x"})
+    assert agent.lease_standby() is False  # no lease mode yet
+    msg = agent.session_take("test")
+    assert "11:58" in msg and agent.lease_held() and not agent.lease_standby()
+    assert agent._device_jid(os.path.join(store, "whatsapp.db")).endswith(":50@s.whatsapp.net")
+    assert not os.path.exists(os.path.join(store, "whatsapp.db-wal"))
+    assert any(f.startswith("whatsapp.db.own-") for f in os.listdir(store))
+    assert "כבר כאן" in agent.session_take("again")
+    db = sqlite3.connect(os.path.join(store, "messages.db"))
+    db.execute("CREATE TABLE IF NOT EXISTS chats (jid TEXT PRIMARY KEY, name TEXT, last_message_time TIMESTAMP)")
+    db.execute("INSERT INTO messages (id, chat_jid, content, timestamp) VALUES ('m1', 'c@g.us', 'שלום', '2099-01-01 10:00:00')")
+    db.execute("INSERT INTO messages (id, chat_jid, content, timestamp) VALUES ('m0', 'c@g.us', 'ישן', '2000-01-01 10:00:00')")
+    db.execute("INSERT INTO chats VALUES ('c@g.us', 'קבוצה', '2099-01-01 10:00:00')")
+    db.commit()
+    db.close()
+    agent.kv_set("session_taken_at", "2026-11-18T12:00:00")
+    payload = agent._session_handback_payload(agent.kv_get("session_taken_at"))
+    assert [m["id"] for m in payload["messages"]] == ["m1"]
+    host = tmp_path / "host"
+    host.mkdir()
+    _fake_session(str(host / "whatsapp.db"), "972500000000:50@s.whatsapp.net")
+    hdb = sqlite3.connect(host / "messages.db")
+    hdb.execute("CREATE TABLE chats (jid TEXT PRIMARY KEY, name TEXT, last_message_time TIMESTAMP)")
+    hdb.execute("CREATE TABLE messages (id TEXT, chat_jid TEXT, sender TEXT, content TEXT, timestamp TIMESTAMP, is_from_me BOOLEAN, "
+                "media_type TEXT, filename TEXT, PRIMARY KEY (id, chat_jid))")
+    hdb.commit()
+    hdb.close()
+    (host / "lease_status").write_text("waiting 2026-11-18T12:01:00", encoding="utf-8")
+    import io, contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        exec(agent._remote_script(agent.SESSION_HANDBACK, {"store": str(host).replace("\\", "/"), **payload}), {})
+    assert "@@OK@@" in buf.getvalue() and "@@MSG@@1" in buf.getvalue()
+    assert any(f.startswith("whatsapp.db.pre-handback-") for f in os.listdir(host))
+    hdb = sqlite3.connect(host / "messages.db")
+    assert hdb.execute("SELECT content FROM messages WHERE id = 'm1'").fetchone()[0] == "שלום"
+    hdb.close()
+
+
+def test_session_resume_stands_by_when_successor_holds(agent, monkeypatch):
+    """Owner 18.11: a backup that died while holding comes back: the host is up or the next PC holds it now -> stand by,
+    no plugins, no identity."""
+    agent, _ = agent
+    monkeypatch.setitem(agent.CFG, "session_share", {"enabled": True})
+    monkeypatch.setitem(agent.CFG, "failover", {"for": "נייח", "plugins": ["x.py"]})
+    monkeypatch.setitem(agent.CFG, "peers", [{"name": "נייח"}, {"name": "סלון"}])
+    monkeypatch.setattr(agent, "_bridge_running", lambda: False)
+    briefs = {"נייח": None, "סלון": {"agent_alive": True, "failover_holds": ["נייח"]}}
+    monkeypatch.setattr(agent, "peer_fetch", lambda peer, path="/brief", timeout=5: briefs.get(peer["name"]))
+    loaded = []
+    monkeypatch.setattr(agent, "load_plugins", lambda p=None: loaded.append(p))
+    agent.failover_save("נייח", {"state": "active", "since": "2026-11-18T10:00:00"})
+    agent.lease_grant("old")
+    agent.failover_resume()
+    assert agent.failover_state("נייח").get("state") == "idle" and not loaded and not agent.lease_held()
+    briefs["סלון"] = {"agent_alive": True, "failover_holds": []}
+    agent.failover_save("נייח", {"state": "active", "since": "2026-11-18T10:00:00"})
+    agent.kv_set("session_taken_at", "2026-11-18T10:00:00")
+    agent.failover_resume()
+    assert loaded and agent.lease_held()
+
+
+DESKTOP_APP = {"kind": "desktop-app", "app": "chatgpt", "host": "OTHER-PC-XYZ", "ssh": ["no-such-alias", "SALON"], "pc": "סלון",
+               "label": "ChatGPT app · סלון", "short": "ChatGPT app · סלון"}
+
+
+def _desktop_setup(mod, monkeypatch, outputs):
+    """The real desktop_ai_call with subprocess.run mocked: each call pops (returncode, stdout) and records the command and stdin."""
+    calls = []
+
+    class R:
+        def __init__(self, rc, out):
+            self.returncode, self.stdout, self.stderr = rc, out, ""
+    monkeypatch.setattr(mod, "desktop_ai_call", mod._real_desktop_ai_call)
+    monkeypatch.setattr(mod.subprocess, "run", lambda cmd, **k: calls.append((cmd, k.get("input"))) or R(*outputs.pop(0)))
+    mod._desktop_cache.clear()
+    mod.CFG.setdefault("providers", {})["chatgpt_app_salon"] = dict(DESKTOP_APP)
+    return calls
+
+
+def test_desktop_app_provider_asks_the_app_on_its_computer_over_ssh(agent, monkeypatch):
+    """Owner 18.11: an AI desktop app ("ChatGPT app · סלון") answers through tools/desktop_ai.py on its own PC (ssh + the user's
+    session); a dead ssh alias (exit 255) falls to the next one; the question goes on stdin with the Hebrew rule."""
+    mod, _ = agent
+    calls = _desktop_setup(mod, monkeypatch, [(255, ""), (0, 'noise\n{"ok": true, "app": "chatgpt", "answer": "חמש"}\n')])
+    res = mod._run_desktop_app("chatgpt_app_salon", DESKTOP_APP, "כמה זה 2+3?", mod.PRIMARY, None, 120)
+    assert res["result"] == "חמש" and res["type"] == "result"
+    assert [c[0][-2] for c in calls] == ["no-such-alias", "SALON"]
+    line = calls[1][0][-1]
+    assert "tools/desktop_ai.py ask chatgpt - --timeout 120" in line and line.endswith("--via-task")
+    assert calls[1][1].startswith("כמה זה 2+3?") and calls[1][1].endswith(mod.HEBREW_TAIL)
+
+
+def test_desktop_app_on_this_computer_runs_locally_and_a_failure_is_provider_down(agent, monkeypatch):
+    mod, _ = agent
+    local = dict(DESKTOP_APP, host=mod.socket.gethostname(), app="claude")
+    calls = _desktop_setup(mod, monkeypatch, [(0, '{"ok": false, "app": "claude", "error": "לא זוהתה תשובה בזמן"}')])
+    with pytest.raises(mod.ProviderDown) as e:
+        mod._run_desktop_app("claude_app_here", local, "שלום", mod.PRIMARY, None, 60)
+    assert "לא זוהתה תשובה" in e.value.raw
+    cmd = calls[0][0]
+    assert mod.DESKTOP_AI in cmd and cmd[cmd.index(mod.DESKTOP_AI) + 1:cmd.index(mod.DESKTOP_AI) + 3] == ["ask", "claude"] and "--via-task" in cmd
+    assert "ssh" not in os.path.basename(cmd[0]).lower()
+
+
+def test_desktop_app_dispatch_location_and_checks_never_type(agent, monkeypatch):
+    """The bridge's run goes to the app when it is the provider; the location line says "local app on <PC>" with no Claude model; the
+    readiness / probe checks only ask whether the window is open or the app is installed (never a typed question)."""
+    mod, _ = agent
+    calls = _desktop_setup(mod, monkeypatch, [(0, '{"ok": true, "app": "chatgpt", "running": true, "installed": true}')])
+    name = "chatgpt_app_salon"
+    assert mod.provider_ready(name)
+    assert mod.where_of(name) == ("local", "אפליקציה מקומית בסלון")
+    pr = mod.provider_probe(name)
+    assert pr["answered"] is None and pr["available"]
+    assert all(" has chatgpt" in c[0][-1] for c in calls) and len(calls) == 1  # cached: one window check, no "ask"
+    seen = {}
+    monkeypatch.setattr(mod, "_run_desktop_app", lambda n, p, prompt, chat, on_stage, timeout: seen.update(n=n, prompt=prompt) or
+                        {"type": "result", "result": "ok", "is_error": False, "session_id": None, "usage": {}, "total_cost_usd": 0})
+    mod._ctx.force_provider = name
+    try:
+        r = mod._run_claude("שאלה", None, None, 60, chat=mod.PRIMARY)
+        assert r["result"] == "ok" and seen["n"] == name and seen["prompt"] == "שאלה"
+    finally:
+        mod._ctx.force_provider = None
+    mod.set_provider(name)
+    tag = mod.ai_tag("opus")
+    assert "ChatGPT app · סלון" in tag and "🏠 אפליקציה מקומית בסלון" in tag and "אופוס" not in tag  # no Claude model shown
+
+
+def test_tunnel_cmd_multi_peer_forwards_only_local(agent):
+    """Owner 18.11: with several tunnel peers each opens -L on its own port; only the "reverse" peer keeps -R and Ollama."""
+    mod, _ = agent
+    cmd = mod.tunnel_cmd({"name": "סלון", "url": "http://127.0.0.1:8783", "tunnel": "SALON"}, ssh="ssh", multi=True)
+    assert "-R" not in cmd and "8783:127.0.0.1:8770" in cmd and cmd[-1] == "SALON"
+    cmd = mod.tunnel_cmd({"name": "נייח", "url": "http://127.0.0.1:8781", "tunnel": "ybhw", "reverse": True}, ssh="ssh", multi=True)
+    assert cmd.count("-R") == 2
+    assert mod.tunnel_cmd({"name": "נייח", "url": "http://127.0.0.1:8781", "tunnel": "ybhw"}, ssh="ssh").count("-R") == 2

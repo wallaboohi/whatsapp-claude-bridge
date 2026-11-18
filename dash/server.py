@@ -537,7 +537,17 @@ def brief():
                 holds.append(r["k"][len("failover:"):])
         except (ValueError, AttributeError):
             pass
-    return {"machine": socket.gethostname(), "wa_account": acc, "failover_holds": holds, "tool_version": (open(os.path.join(ROOT, "VERSION")).read().strip() if os.path.exists(os.path.join(ROOT, "VERSION")) else "?"),
+    lease = {}  # owner 18.11: one WhatsApp identity moves along the chain (agent session_share); standby = waits at the gate
+    try:
+        sd = os.path.dirname(p["wa"])
+        lease["mode"] = os.path.exists(os.path.join(sd, "lease_mode"))
+        lease["status"] = open(os.path.join(sd, "lease_status"), encoding="utf-8").read().strip() if os.path.exists(os.path.join(sd, "lease_status")) else ""
+        lease["standby"] = lease["mode"] and not lease["status"].startswith("holding")
+        meta = os.path.join(sd, "session_copy", "meta.json")
+        lease["copy_at"] = (json.load(open(meta, encoding="utf-8")).get("at") or "") if os.path.exists(meta) else ""
+    except Exception:
+        pass
+    return {"machine": socket.gethostname(), "wa_account": acc, "failover_holds": holds, "session_lease": lease, "tool_version": (open(os.path.join(ROOT, "VERSION")).read().strip() if os.path.exists(os.path.join(ROOT, "VERSION")) else "?"),
             "dash_version": VERSION, "bridge": {k: b.get(k) for k in ("connected", "version", "paused", "error", "connected_since", "health")},
             "agent_alive": alive, "heartbeat": hb, "listen_paused": kv("listen_paused") or "", "groups": gl, "tunnels": tunnels,
             "services": services(), "backup_dir": backup_dir_abs(), "cost": cost_summary(),

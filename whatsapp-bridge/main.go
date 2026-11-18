@@ -34,6 +34,9 @@ func main() {
 		return
 	}
 
+	// owner 18.11: one WhatsApp identity for all PCs; connect only while this PC holds it (lease.go)
+	waitForLease(logger)
+
 	container, err := sqlstore.New(context.Background(), "sqlite3", "file:store/whatsapp.db?_foreign_keys=on&_journal_mode=WAL&_busy_timeout=10000", dbLog)
 	if err != nil {
 		logger.Errorf("Failed to connect to database: %v", err)
@@ -78,6 +81,7 @@ func main() {
 	ownerToken = loadOwnerToken()
 
 	registerEventHandlers(client, messageStore, logger)
+	watchLease(client, logger)
 	registerHealth(client)
 	registerTopics(client)
 

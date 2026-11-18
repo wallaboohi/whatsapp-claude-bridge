@@ -342,5 +342,30 @@
   ],
   "cost": "מנוי",
   "where": "remote"
+ },
+ "claude_app_ybhw": {
+  "label": "Claude app · נייח",
+  "short": "Claude app · נייח",
+  "kind": "desktop-app",
+  "app": "claude",
+  "host": "YB-PC-HW",
+  "ssh": [
+   "ybhw",
+   "YB-PC-HW"
+  ],
+  "pc": "נייח",
+  "python": "C:/Users/walla/AppData/Local/Programs/Python/Python312/python.exe",
+  "timeout": 240,
+  "aliases": [
+   "claude app",
+   "claude app ybhw",
+   "claude app נייח",
+   "קלוד אפליקציה",
+   "קלוד אפליקציה נייח",
+   "אפליקציית קלוד"
+  ],
+  "cost": "מנוי (האפליקציה)",
+  "where": "local",
+  "how": "אפליקציית Claude למחשב (Claude Desktop) בנייח: הגשר מקליד את ההודעה בחלון האפליקציה (tools/desktop_ai.py דרך ssh ומשימה בסשן המשתמש) וקורא את התשובה. בלי כלי הגשר: רק ההודעה. בדיקת זמינות = החלון פתוח / האפליקציה מותקנת, בלי להקליד. python: ה-uv בנייח לא מצליח להריץ את הפייתונים המנוהלים שלו (18.11), לכן פייתון 3.12 המותקן. יקיר 18.11: נבדק ועונה."
  }
 }
