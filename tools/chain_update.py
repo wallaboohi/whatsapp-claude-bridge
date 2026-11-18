@@ -48,9 +48,11 @@ if ($after -ne $before -and -not $env:DRY) {
 @{before=$before; after=$after; hub=$hub; pull="$pull"; go=[bool]$go; rebuild=$rb; restart=($after -ne $before)} | ConvertTo-Json -Compress
 """
 HB = r"""
-import sqlite3, os, subprocess
-db = sqlite3.connect('file:' + "C:/Users/walla/whatsapp-mcp/agent/agent.db" + '?mode=ro', uri=True)
-print((db.execute("SELECT v FROM kv WHERE k = 'heartbeat'").fetchone() or [''])[0])
+import os, subprocess
+req = os.path.exists("C:/Users/walla/whatsapp-mcp/agent/restart.request")
+ps = '''Get-CimInstance Win32_Process -Filter "name='python.exe'" | Where-Object { $_.CommandLine -match 'agent[.]py' } | ForEach-Object { $_.CreationDate.ToString('s') } | Sort-Object | Select-Object -First 1'''
+r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True)
+print(("pending " if req else "") + (r.stdout.strip() or "none"))
 """
 
 
@@ -101,9 +103,9 @@ def update_peer(pc, dry):
     end = time.time() + 6 * 60
     while time.time() < end:  # the agent restarts within ~1-2 min (it finishes its current answer first)
         time.sleep(20)
-        hb = heartbeat(host)
-        if hb and hb > hb0 and time.time() - start_wait > 45:
-            return {**res, "ok": True, "heartbeat": hb}
+        hb = heartbeat(host)  # "<agent start time>", or "pending ..." while restart.request still waits
+        if hb and not hb.startswith("pending") and hb != "none" and hb > hb0:
+            return {**res, "ok": True, "agent_started": hb}
     return {**res, "ok": False, "why": "agent did not write a fresh heartbeat within 6 minutes - chain stopped"}
 
 
