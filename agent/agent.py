@@ -8840,19 +8840,80 @@ def nightly_selftest():
             _ctx.chat = None
 
 
-def _contact_names():
-    """Owner 09.11/18.11: people are named, never shown as a number or LID. Phone -> contact name, and every LID is mapped
-    to its phone's name (whatsmeow_lid_map), so a LID chat/sender gets the same name."""
-    names = {}
+PEOPLE_SQL = """CREATE TABLE IF NOT EXISTS people (
+    id TEXT PRIMARY KEY,          -- phone digits, or the LID digits when no phone is known
+    phone TEXT, lid TEXT,
+    contact_name TEXT,            -- the name in the owner's phone contacts
+    push_name TEXT,               -- the name the person gives himself in WhatsApp
+    nickname TEXT,                -- the owner's own nickname for him (tools/people.py nick), never overwritten by a refresh
+    updated_at TEXT)"""
+_people_at = 0.0
+
+
+def people_refresh(force=False):
+    """Owner 18.11: one managed names DB (agent.db `people`) — for every phone and every LID: the contact name from the
+    owner's phone, the name the person shows in WhatsApp, and the owner's nickname. Rebuilt from whatsmeow_contacts +
+    whatsmeow_lid_map at most every 10 minutes; nicknames are kept."""
+    global _people_at
+    if not force and time.time() - _people_at < 600:
+        return
+    _people_at = time.time()
+    rows = {}
     try:
         with sqlite3.connect(f"file:{WA_DB}?mode=ro", uri=True, timeout=10) as w:
-            for jid, full, push in w.execute("SELECT their_jid, full_name, push_name FROM whatsmeow_contacts"):
-                if full or push:
-                    names[(jid or "").split("@")[0]] = full or push
+            for jid, full, first, push, biz in w.execute(
+                    "SELECT their_jid, full_name, first_name, push_name, business_name FROM whatsmeow_contacts"):
+                j = str(jid or "")
+                d = j.split("@")[0]
+                if not d:
+                    continue
+                r = rows.setdefault(d, {"phone": None, "lid": None, "contact": None, "push": None})
+                r["lid" if j.endswith("@lid") else "phone"] = d
+                r["contact"] = r["contact"] or full or first
+                r["push"] = r["push"] or push or biz
             for lid, pn in w.execute("SELECT lid, pn FROM whatsmeow_lid_map"):
-                n = names.get(str(pn or "").split("@")[0])
-                if n and lid:
-                    names.setdefault(str(lid).split("@")[0], n)
+                l, ph = str(lid or "").split("@")[0], str(pn or "").split("@")[0]
+                if not l or not ph:
+                    continue
+                r = rows.setdefault(ph, {"phone": ph, "lid": None, "contact": None, "push": None})
+                r["phone"], r["lid"] = ph, l
+                lr = rows.pop(l, None)  # a LID row folds into its phone row
+                if lr and lr is not r:
+                    r["contact"] = r["contact"] or lr["contact"]
+                    r["push"] = r["push"] or lr["push"]
+    except sqlite3.Error as e:
+        log("people refresh", e)
+        return
+    now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    try:
+        with adb() as db:
+            db.execute(PEOPLE_SQL)
+            db.executemany(
+                "INSERT INTO people (id, phone, lid, contact_name, push_name, updated_at) VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET phone=COALESCE(excluded.phone, phone), lid=COALESCE(excluded.lid, lid), "
+                "contact_name=COALESCE(excluded.contact_name, contact_name), push_name=COALESCE(excluded.push_name, push_name), "
+                "updated_at=excluded.updated_at",
+                [(k, r["phone"], r["lid"], r["contact"], r["push"], now) for k, r in rows.items()])
+    except sqlite3.Error as e:
+        log("people write", e)
+
+
+def _contact_names():
+    """Owner 09.11/18.11: people are named, never shown as a number or LID. From the `people` DB: nickname, else the
+    owner's contact name, else the name the person gives himself in WhatsApp — keyed by phone AND by LID."""
+    people_refresh()
+    names = {}
+    try:
+        with adb() as db:
+            db.execute(PEOPLE_SQL)
+            for pid, phone, lid, contact, push, nick in db.execute(
+                    "SELECT id, phone, lid, contact_name, push_name, nickname FROM people"):
+                n = nick or contact or push
+                if not n:
+                    continue
+                for k in (pid, phone, lid):
+                    if k:
+                        names.setdefault(str(k), n)
     except sqlite3.Error:
         pass
     return names
