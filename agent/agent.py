@@ -6859,6 +6859,8 @@ def peer_watch():
                         failover_tick(peer, name, _grace_state(peer, state, CFG))
                     except Exception:
                         log("failover error", traceback.format_exc())
+                    if CFG.get("peer_alerts") is False and failover_standby():
+                        msgs = []  # owner 18.11: a far backup in the chain (living room/bedroom) stays silent; the host/laptop report
                     for m in msgs:
                         if m.startswith("⚠️"):
                             push(m.split(" — ")[0].split(". ")[0].split(" (")[0], PRIMARY, "fault")
@@ -7599,11 +7601,42 @@ def failover_handback(peer, name, fc, st):
     return True
 
 
+def failover_chain_blocker(fc, name):
+    """Owner 18.11: four PCs back each other up in a fixed order (desktop host -> laptop -> living room -> bedroom). Config
+    failover "defer_to": the backups before this one. Take over only when every backup before us is down (or its bridge is
+    not connected), and never while another PC already holds the host's work (its /brief "failover_holds").
+    Returns why we must not take over now, or ""."""
+    before = [str(x) for x in fc.get("defer_to") or []]
+    for peer in CFG.get("peers") or []:
+        pn = peer.get("name") or peer_alias(peer) or ""
+        if not pn or pn == name:
+            continue
+        try:
+            b = peer_fetch(peer, timeout=8)
+        except Exception:
+            b = None
+        if not b or b.get("agent_alive", True) is False:
+            continue
+        if name in (b.get("failover_holds") or []):
+            return f"\"{pn}\" כבר מחזיק את העבודה של \"{name}\""
+        if pn in before and (b.get("bridge") or {}).get("connected"):
+            return f"\"{pn}\" לפניי בשרשרת הגיבוי וזמין"
+    return ""
+
+
 def failover_tick(peer, name, peer_st):
     """Called by peer_watch after every check of a peer."""
     fc = failover_cfg()
     if not fc or fc["for"] != name:
         return
+    if (failover_state(name).get("state") or "idle") == "idle" and (peer_st or {}).get("off_since") and             (fc.get("defer_to") or len(CFG.get("peers") or []) > 1):
+        why = failover_chain_blocker(fc, name)
+        if why:
+            if kv_get(f"fo_chain_wait:{name}") != why:
+                kv_set(f"fo_chain_wait:{name}", why)
+                log(f"failover: \"{name}\" is down but not taking over: {why}")
+            return
+        kv_set(f"fo_chain_wait:{name}", "")
     if (peer_st or {}).get("grace"):
         # Owner 17.11 16:17: while the peer restarts, we hold its work at once (no waiting), and hand back when it is up again.
         if not (fc.get("auto") and fc.get("cover_restarts", True)):

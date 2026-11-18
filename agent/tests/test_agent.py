@@ -2933,3 +2933,22 @@ def test_quick_answer_gets_finished_status_only_when_wa(agent, monkeypatch):
     loud.timer.cancel()
     loud.send_finished()
     assert len(sent) == 1 and "סיימתי" in sent[0]
+
+
+def test_failover_chain_defers_to_earlier_backup_and_holder(agent, monkeypatch):
+    """Owner 18.11: 4-PC chain. The living-room PC takes the desktop's work only when the laptop (before it) is down,
+    and never while another PC already holds it."""
+    agent, _ = agent
+    briefs = {}
+    monkeypatch.setitem(agent.CFG, "peers", [{"name": "נייח"}, {"name": "לפטופ"}, {"name": "חדר שינה"}])
+    monkeypatch.setattr(agent, "peer_fetch", lambda peer, path="/brief", timeout=5: briefs.get(peer["name"]))
+    fc = {"for": "נייח", "defer_to": ["לפטופ"]}
+    briefs["לפטופ"] = {"agent_alive": True, "bridge": {"connected": True}, "failover_holds": []}
+    assert "לפטופ" in agent.failover_chain_blocker(fc, "נייח")
+    briefs["לפטופ"] = {"agent_alive": True, "bridge": {"connected": False}, "failover_holds": []}
+    assert agent.failover_chain_blocker(fc, "נייח") == ""
+    briefs["לפטופ"] = None
+    briefs["חדר שינה"] = {"agent_alive": True, "bridge": {"connected": True}, "failover_holds": ["נייח"]}
+    assert "חדר שינה" in agent.failover_chain_blocker(fc, "נייח")
+    briefs["חדר שינה"] = {"agent_alive": True, "bridge": {"connected": True}, "failover_holds": []}
+    assert agent.failover_chain_blocker(fc, "נייח") == ""

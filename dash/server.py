@@ -530,7 +530,14 @@ def brief():
         acc = (rows(p["wa"], "SELECT jid FROM whatsmeow_device LIMIT 1") or [{"jid": ""}])[0]["jid"].split("@")[0].split(":")[0]
     except Exception:
         acc = ""
-    return {"machine": socket.gethostname(), "wa_account": acc, "tool_version": (open(os.path.join(ROOT, "VERSION")).read().strip() if os.path.exists(os.path.join(ROOT, "VERSION")) else "?"),
+    holds = []  # owner 18.11: the 4-PC backup chain asks every PC whose work it holds right now (failover_chain_blocker)
+    for r in rows(p["agent"], "SELECT k, v FROM kv WHERE k LIKE 'failover:%'"):
+        try:
+            if (json.loads(r["v"] or "{}") or {}).get("state") in ("active", "releasing"):
+                holds.append(r["k"][len("failover:"):])
+        except (ValueError, AttributeError):
+            pass
+    return {"machine": socket.gethostname(), "wa_account": acc, "failover_holds": holds, "tool_version": (open(os.path.join(ROOT, "VERSION")).read().strip() if os.path.exists(os.path.join(ROOT, "VERSION")) else "?"),
             "dash_version": VERSION, "bridge": {k: b.get(k) for k in ("connected", "version", "paused", "error", "connected_since", "health")},
             "agent_alive": alive, "heartbeat": hb, "listen_paused": kv("listen_paused") or "", "groups": gl, "tunnels": tunnels,
             "services": services(), "backup_dir": backup_dir_abs(), "cost": cost_summary(),
