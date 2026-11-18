@@ -1009,14 +1009,20 @@ def budget_for(chat):
 # own settings (ANTHROPIC_BASE_URL / token). Defaults below; config.json "providers" may override or add. Map: AI_HOSTING.md.
 PROVIDER_FILE = os.path.join(HERE, "provider.json")
 SECRETS_DIR = os.path.join(ROOT, "secrets")
-PROVIDERS_DEFAULT = json.load(open(os.path.join(HERE, "providers.json"), encoding="utf-8"))  # shared with the dashboard
+def _read_json(path):
+    """with-block: a handle left open blocks git from replacing the file on Windows (bedroom PC, 18.11: pull failed)."""
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+PROVIDERS_DEFAULT = _read_json(os.path.join(HERE, "providers.json"))  # shared with the dashboard
 PROVIDER_WORDS = {"קלוד": "claude", "claude": "claude", "מנוי": "claude", "אולמה": "ollama", "אולאמה": "ollama", "ollama": "ollama",
                   "אופנראוטר": "openrouter", "openrouter": "openrouter", "api": "anthropic_api", "anthropic_api": "anthropic_api"}
 
 
 def providers():
     try:  # re-read each time: a provider added from the dashboard works without restarting the agent
-        out = json.load(open(os.path.join(HERE, "providers.json"), encoding="utf-8"))
+        out = _read_json(os.path.join(HERE, "providers.json"))
     except (OSError, ValueError):
         out = json.loads(json.dumps(PROVIDERS_DEFAULT))
     for k, v in (CFG.get("providers") or {}).items():

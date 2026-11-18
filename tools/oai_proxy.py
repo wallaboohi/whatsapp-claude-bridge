@@ -34,11 +34,13 @@ STOP = {"stop": "end_turn", "length": "max_tokens", "tool_calls": "tool_use", "f
 
 def load_providers():
     try:
-        out = json.load(open(os.path.join(ROOT, "agent", "providers.json"), encoding="utf-8"))
+        with open(os.path.join(ROOT, "agent", "providers.json"), encoding="utf-8") as f:
+            out = json.load(f)
     except (OSError, ValueError):
         out = {}
     try:
-        cfg = json.load(open(os.path.join(ROOT, "agent", "config.json"), encoding="utf-8"))
+        with open(os.path.join(ROOT, "agent", "config.json"), encoding="utf-8") as f:
+            cfg = json.load(f)
         for k, v in (cfg.get("providers") or {}).items():
             out.setdefault(k, {}).update(v)
     except (OSError, ValueError):
