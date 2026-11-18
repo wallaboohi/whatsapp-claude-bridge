@@ -8140,6 +8140,10 @@ def session_bootstrap():
                     with open(src, "rb") as f:
                         _put_db(MSG_DB, f.read())
                     log("session bootstrap: message history copied from", p.get("name"))
+                    wsrc = os.path.join(SESSION_COPY, "whatsapp.db")
+                    if not os.path.exists(WA_DB) and os.path.exists(wsrc) and os.path.exists(LEASE_MODE) and not lease_held():
+                        with open(wsrc, "rb") as f:  # contact names for the agent; the bridge stays at the gate
+                            _put_db(WA_DB, f.read())
                     return
         log("session bootstrap: no peer gave a copy yet, retrying in a minute")
         time.sleep(60)
