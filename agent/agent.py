@@ -9145,15 +9145,13 @@ def chrome_running():
 
 
 def chrome_has_window():
-    """Owner 17.11 15:15: Chrome running with --no-startup-window (background only) left the Claude extension limited on the laptop;
-    the desktop keeps one minimized window open. True when some chrome process has a window (minimized counts)."""
+    """Owner 18.11: the main Chrome process always carries --no-startup-window when Windows auto-launches it, and a minimized
+    window has MainWindowHandle 0, so the old checks failed every 10 minutes (restart + a message each time). What matters is
+    that the Claude extension is alive: Chrome running with an extension process (renderer --extension-process)."""
     try:
-        # 17.11 16:15: MainWindowHandle is 0 for a minimized Chrome window (and from a background session), so the old check
-        # restarted Chrome every 10 minutes. Instead: the main browser process must not carry --no-startup-window.
         out = subprocess.run(["powershell", "-NoProfile", "-Command",
                               "(Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | Where-Object "
-                              "{$_.CommandLine -and $_.CommandLine -notmatch '--type=' -and $_.CommandLine -notmatch 'no-startup-window'}"
-                              " | Measure-Object).Count"],
+                              "{$_.CommandLine -match '--extension-process'} | Measure-Object).Count"],
                              capture_output=True, text=True, timeout=30, creationflags=NO_WINDOW).stdout.strip()
         return int(out or 0) > 0
     except Exception:
@@ -9182,14 +9180,18 @@ def chrome_keeper():
     time.sleep(120)
     while True:
         try:
-            if not chrome_running() or not chrome_has_window():
+            was_down = not chrome_running()
+            if was_down or not chrome_has_window():
                 msg = chrome_start()
-                log("chrome keeper:", msg)
-                _ctx.chat = PRIMARY
-                try:
-                    reply("🌐 כרום לא רץ במחשב, ולכן התוסף של Claude היה מנותק. " + msg)
-                finally:
-                    _ctx.chat = None
+                log("chrome keeper:", msg, "(was down)" if was_down else "(no extension process)")
+                # owner 18.11: tell only when Chrome really was down, and at most once an hour (no repeated notices)
+                if was_down and time.time() - getattr(chrome_keeper, "_last_told", 0) > 3600:
+                    chrome_keeper._last_told = time.time()
+                    _ctx.chat = PRIMARY
+                    try:
+                        reply("🌐 כרום לא רץ במחשב, ולכן התוסף של Claude היה מנותק. " + msg)
+                    finally:
+                        _ctx.chat = None
         except Exception as e:
             log("chrome keeper failed", e)
         time.sleep(600)
