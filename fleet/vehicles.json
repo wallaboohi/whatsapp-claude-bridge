@@ -1,0 +1,2235 @@
+{
+ "updated": "2026-11-09 23:20 (צילומי אפליקציית הרכבים)",
+ "source": "Google Sheet (קריאה חיה), לשונית רכבים",
+ "sources_note": "sources=['sheet'] — שורה בגיליון; 'whatsapp' — מהקובץ הקודם (צילומי אפליקציית רכבים). raw = כל התאים כפי שהם; dates = ISO; readings = ק\"מ/שעות מנוע; money = ₪.",
+ "columns": [
+  {
+   "col": "A",
+   "header": "פרויקט",
+   "key": "project",
+   "hidden": false
+  },
+  {
+   "col": "B",
+   "header": "רכב",
+   "key": "vehicle",
+   "hidden": false
+  },
+  {
+   "col": "C",
+   "header": "מספר רכב",
+   "key": "plate",
+   "hidden": false
+  },
+  {
+   "col": "D",
+   "header": "נהגים מורשים ",
+   "key": "authorized_drivers",
+   "hidden": false
+  },
+  {
+   "col": "E",
+   "header": "שייכות",
+   "key": "owner",
+   "hidden": false
+  },
+  {
+   "col": "F",
+   "header": "מספר כרטיס דלק",
+   "key": "fuel_card",
+   "hidden": false
+  },
+  {
+   "col": "G",
+   "header": "קילומטרג תחילת חודש",
+   "key": "km_month_start",
+   "hidden": true
+  },
+  {
+   "col": "H",
+   "header": " עלות תדלוק בדצמבר",
+   "key": "fuel_cost_december",
+   "hidden": false
+  },
+  {
+   "col": "I",
+   "header": "כבישי אגרה בנובמבר",
+   "key": "tolls_november",
+   "hidden": false
+  },
+  {
+   "col": "J",
+   "header": "קילומטר התחלתי",
+   "key": "km_initial",
+   "hidden": false
+  },
+  {
+   "col": "K",
+   "header": "קילומטרג עדכני",
+   "key": "km_current",
+   "hidden": false
+  },
+  {
+   "col": "L",
+   "header": "סך הכל ק\"מ",
+   "key": "km_total",
+   "hidden": true
+  },
+  {
+   "col": "M",
+   "header": "עלות חריגת ק\"מ",
+   "key": "km_overage_cost",
+   "hidden": true
+  },
+  {
+   "col": "N",
+   "header": "קילומטרג עדכני",
+   "key": "km_current_2",
+   "hidden": true
+  },
+  {
+   "col": "O",
+   "header": "טיפול הבא",
+   "key": "next_service",
+   "hidden": false
+  },
+  {
+   "col": "P",
+   "header": "בחריגה",
+   "key": "overage",
+   "hidden": false
+  },
+  {
+   "col": "Q",
+   "header": "טסט בתוקף עד",
+   "key": "test_valid_until",
+   "hidden": false
+  },
+  {
+   "col": "R",
+   "header": "מערכת מיגון",
+   "key": "protection_system",
+   "hidden": false
+  },
+  {
+   "col": "S",
+   "header": "מחיר מיגון",
+   "key": "protection_price",
+   "hidden": false
+  },
+  {
+   "col": "T",
+   "header": "צריך טסט",
+   "key": "needs_test",
+   "hidden": false
+  },
+  {
+   "col": "U",
+   "header": "עלות טסט",
+   "key": "test_cost",
+   "hidden": false
+  },
+  {
+   "col": "V",
+   "header": "עלות חודשית",
+   "key": "monthly_cost",
+   "hidden": false
+  },
+  {
+   "col": "W",
+   "header": "ביטוח בתוקף עד",
+   "key": "insurance_valid_until",
+   "hidden": false
+  },
+  {
+   "col": "X",
+   "header": "עלות ביטוח מקיף / צד ג",
+   "key": "insurance_comprehensive_cost",
+   "hidden": false
+  },
+  {
+   "col": "Y",
+   "header": "עלות ביטוח חובה",
+   "key": "insurance_mandatory_cost",
+   "hidden": false
+  },
+  {
+   "col": "Z",
+   "header": "סה\"כ עלות ביטוח",
+   "key": "insurance_total_cost",
+   "hidden": false
+  },
+  {
+   "col": "AA",
+   "header": "חברת ביטוח",
+   "key": "insurance_company",
+   "hidden": false
+  },
+  {
+   "col": "AB",
+   "header": "סה\"כ עלות דלק",
+   "key": "fuel_total_cost",
+   "hidden": true
+  },
+  {
+   "col": "AC",
+   "header": "סה\"כ עלות רכב",
+   "key": "vehicle_total_cost",
+   "hidden": false
+  }
+ ],
+ "missing_columns": [
+  "סטטוס רכב (מושבת/זמין)",
+  "במוסך",
+  "רישיון רכב (נפרד מטסט)",
+  "תאריך קריאת ק\"מ"
+ ],
+ "vehicles": [
+  {
+   "plate": "35176101",
+   "plate_display": "351-76-101",
+   "name": "עגלה גדולה",
+   "project": "ירוחם",
+   "owner": "4M",
+   "drivers": null,
+   "fuel_card": null,
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 2,
+   "sheet_hidden_row": false,
+   "raw": {
+    "project": "ירוחם",
+    "vehicle": "עגלה גדולה",
+    "plate": "35176101",
+    "owner": "4M",
+    "km_total": "0",
+    "km_overage_cost": "#REF!",
+    "test_valid_until": "30/09/2025",
+    "insurance_valid_until": "28/02/2025",
+    "insurance_comprehensive_cost": "884",
+    "insurance_mandatory_cost": "371",
+    "insurance_total_cost": "1255",
+    "insurance_company": "מקיף שלמה סיקסט, חובה הראל",
+    "vehicle_total_cost": " ₪ 1,255.00 "
+   },
+   "dates": {
+    "test_valid_until": "2025-09-30",
+    "insurance_valid_until": "2025-02-28"
+   },
+   "money": {
+    "insurance_comprehensive_cost": 884,
+    "insurance_mandatory_cost": 371,
+    "insurance_total_cost": 1255,
+    "vehicle_total_cost": 1255.0
+   },
+   "readings": {
+    "km_total": {
+     "value": 0,
+     "unit": "km"
+    }
+   },
+   "problems": [
+    "km_overage_cost: #REF!"
+   ],
+   "cell_colors": {
+    "project": "#f9cb9c"
+   }
+  },
+  {
+   "plate": "24771201",
+   "plate_display": "247-71-201",
+   "name": "סילוורדו פתוחה",
+   "project": "ירוחם",
+   "owner": "4M",
+   "drivers": "אבי מאיר",
+   "fuel_card": "5441-4718-4135",
+   "status": "זמין",
+   "sources": [
+    "sheet",
+    "whatsapp",
+    "app"
+   ],
+   "sheet_row": 3,
+   "sheet_hidden_row": false,
+   "raw": {
+    "project": "ירוחם",
+    "vehicle": "סילוורדו פתוחה",
+    "plate": "24771201",
+    "authorized_drivers": "אבי מאיר",
+    "owner": "4M",
+    "fuel_card": "5441-4718-4135",
+    "fuel_cost_december": " ₪ 4,843.00 ",
+    "km_current": "342,861",
+    "km_total": "342,861",
+    "km_overage_cost": "#REF!",
+    "next_service": "355,000",
+    "test_valid_until": "30/08/2025",
+    "protection_system": "איתוראן",
+    "insurance_valid_until": "31/08/2025",
+    "insurance_comprehensive_cost": "4447",
+    "insurance_mandatory_cost": "3741",
+    "insurance_total_cost": "8188",
+    "insurance_company": "הפניקס",
+    "vehicle_total_cost": " ₪ 13,031.00 "
+   },
+   "dates": {
+    "test_valid_until": "2025-08-30",
+    "insurance_valid_until": "2025-08-31",
+    "test_next_app": "2027-08-29"
+   },
+   "money": {
+    "fuel_cost_december": 4843.0,
+    "insurance_comprehensive_cost": 4447,
+    "insurance_mandatory_cost": 3741,
+    "insurance_total_cost": 8188,
+    "vehicle_total_cost": 13031.0
+   },
+   "readings": {
+    "km_current": {
+     "value": 342861,
+     "unit": "km"
+    },
+    "km_total": {
+     "value": 342861,
+     "unit": "km"
+    },
+    "next_service": {
+     "value": 355000,
+     "unit": "km"
+    }
+   },
+   "problems": [
+    "km_overage_cost: #REF!"
+   ],
+   "cell_colors": {
+    "project": "#f9cb9c",
+    "vehicle": "#f9cb9c",
+    "fuel_cost_december": "#ff0000"
+   },
+   "whatsapp": {
+    "group": "פור אם דיפנס",
+    "driver": "לירן קצובשוילי",
+    "plate": "24771201",
+    "plate_partial": false,
+    "model": "סילברדו לבנה",
+    "km_whatsapp": null,
+    "status": "זמין"
+   },
+   "status_source": "אפליקציית רכבים (צילום ווצאפ 09.11)",
+   "app": {
+    "model": "סילברדו לבנה",
+    "driver": "לירן קצובשוילי",
+    "km": 412127,
+    "next_test": "2027-08-29",
+    "km_left": 0,
+    "km_over": 0,
+    "company": "פור אם דיפנס",
+    "at": "2026-11-09 23:14"
+   }
+  },
+  {
+   "plate": "50704002",
+   "plate_display": "507-04-002",
+   "name": "קיה סיד",
+   "project": "ירוחם",
+   "owner": "4M",
+   "drivers": "חגבי דולב (נוהג תומר)",
+   "fuel_card": "510003094148",
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 4,
+   "sheet_hidden_row": false,
+   "raw": {
+    "project": "ירוחם",
+    "vehicle": "קיה סיד",
+    "plate": "50704002",
+    "authorized_drivers": "חגבי דולב (נוהג תומר)",
+    "owner": "4M",
+    "fuel_card": "510003094148",
+    "fuel_cost_december": " ₪ 2,408.00 ",
+    "km_current": "118,900",
+    "next_service": "120,000",
+    "test_valid_until": "07/06/2025",
+    "insurance_valid_until": "30/04/2025",
+    "insurance_comprehensive_cost": "5491",
+    "insurance_mandatory_cost": "1881",
+    "insurance_total_cost": "7372",
+    "insurance_company": "AIG",
+    "vehicle_total_cost": " ₪ 9,780.00 "
+   },
+   "dates": {
+    "test_valid_until": "2025-06-07",
+    "insurance_valid_until": "2025-04-30"
+   },
+   "money": {
+    "fuel_cost_december": 2408.0,
+    "insurance_comprehensive_cost": 5491,
+    "insurance_mandatory_cost": 1881,
+    "insurance_total_cost": 7372,
+    "vehicle_total_cost": 9780.0
+   },
+   "readings": {
+    "km_current": {
+     "value": 118900,
+     "unit": "km"
+    },
+    "next_service": {
+     "value": 120000,
+     "unit": "km"
+    }
+   },
+   "problems": [],
+   "cell_colors": {
+    "project": "#f9cb9c",
+    "vehicle": "#f9cb9c",
+    "fuel_card": "#ffff00",
+    "km_current": "#ffff00"
+   }
+  },
+  {
+   "plate": "119513",
+   "plate_display": "119513",
+   "name": "באגר HItachi 350",
+   "project": "ירוחם",
+   "owner": "4M",
+   "drivers": null,
+   "fuel_card": "510006037938",
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 5,
+   "sheet_hidden_row": false,
+   "raw": {
+    "project": "ירוחם",
+    "vehicle": "באגר HItachi 350",
+    "plate": "119513",
+    "owner": "4M",
+    "fuel_card": "510006037938",
+    "km_current": "13819 שעות מנוע",
+    "test_valid_until": "25/05/2025",
+    "insurance_valid_until": "31/03/2025",
+    "insurance_comprehensive_cost": "1364",
+    "insurance_mandatory_cost": "2113",
+    "insurance_total_cost": "3477",
+    "insurance_company": "הכשרה",
+    "vehicle_total_cost": " ₪ 3,477.00 "
+   },
+   "dates": {
+    "test_valid_until": "2025-05-25",
+    "insurance_valid_until": "2025-03-31"
+   },
+   "money": {
+    "insurance_comprehensive_cost": 1364,
+    "insurance_mandatory_cost": 2113,
+    "insurance_total_cost": 3477,
+    "vehicle_total_cost": 3477.0
+   },
+   "readings": {
+    "km_current": {
+     "value": 13819,
+     "unit": "hours"
+    }
+   },
+   "problems": [
+    "מספר רכב באורך 6 ספרות (119513) — כלי צמ\"ה/מספר זיהוי?"
+   ],
+   "cell_colors": {
+    "project": "#f9cb9c",
+    "protection_system": "#ffff00"
+   }
+  },
+  {
+   "plate": "38962502",
+   "plate_display": "389-62-502",
+   "name": "ברלינגו",
+   "project": "ירוחם",
+   "owner": "4M",
+   "drivers": "מנחם זרביב",
+   "fuel_card": "510002699343",
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 6,
+   "sheet_hidden_row": false,
+   "raw": {
+    "project": "ירוחם",
+    "vehicle": "ברלינגו",
+    "plate": "38962502",
+    "authorized_drivers": "מנחם זרביב",
+    "owner": "4M",
+    "fuel_card": "510002699343",
+    "fuel_cost_december": " ₪ 2,430.00 ",
+    "km_current": "105216",
+    "next_service": "110,000",
+    "test_valid_until": "22/04/2025",
+    "protection_system": "איתוראן לא פעיל",
+    "protection_price": "17",
+    "insurance_valid_until": "30/04/25",
+    "insurance_comprehensive_cost": "8919",
+    "insurance_mandatory_cost": "1457",
+    "insurance_total_cost": "10376",
+    "insurance_company": "AIG",
+    "vehicle_total_cost": " ₪ 12,823.00 "
+   },
+   "dates": {
+    "test_valid_until": "2025-04-22",
+    "insurance_valid_until": "2025-04-30"
+   },
+   "money": {
+    "fuel_cost_december": 2430.0,
+    "protection_price": 17,
+    "insurance_comprehensive_cost": 8919,
+    "insurance_mandatory_cost": 1457,
+    "insurance_total_cost": 10376,
+    "vehicle_total_cost": 12823.0
+   },
+   "readings": {
+    "km_current": {
+     "value": 105216,
+     "unit": "km"
+    },
+    "next_service": {
+     "value": 110000,
+     "unit": "km"
+    }
+   },
+   "problems": [],
+   "cell_colors": {
+    "project": "#f9cb9c",
+    "vehicle": "#f9cb9c"
+   }
+  },
+  {
+   "plate": "41115702",
+   "plate_display": "411-15-702",
+   "name": "ספורטאג'",
+   "project": "ירוחם",
+   "owner": "4M",
+   "drivers": "טוהמי דניאל",
+   "fuel_card": "50679402",
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 7,
+   "sheet_hidden_row": false,
+   "raw": {
+    "project": "ירוחם",
+    "vehicle": "ספורטאג'",
+    "plate": "41115702",
+    "authorized_drivers": "טוהמי דניאל",
+    "owner": "4M",
+    "fuel_card": "50679402",
+    "fuel_cost_december": " ₪ 3,670.00 ",
+    "km_current": "79,200",
+    "next_service": "83,000",
+    "test_valid_until": "06/04/2025",
+    "insurance_valid_until": "30/04/25",
+    "insurance_comprehensive_cost": "8234",
+    "insurance_mandatory_cost": "1481",
+    "insurance_total_cost": "9715",
+    "insurance_company": "AIG",
+    "vehicle_total_cost": " ₪ 13,385.00 "
+   },
+   "dates": {
+    "test_valid_until": "2025-04-06",
+    "insurance_valid_until": "2025-04-30"
+   },
+   "money": {
+    "fuel_cost_december": 3670.0,
+    "insurance_comprehensive_cost": 8234,
+    "insurance_mandatory_cost": 1481,
+    "insurance_total_cost": 9715,
+    "vehicle_total_cost": 13385.0
+   },
+   "readings": {
+    "km_current": {
+     "value": 79200,
+     "unit": "km"
+    },
+    "next_service": {
+     "value": 83000,
+     "unit": "km"
+    }
+   },
+   "problems": [],
+   "cell_colors": {
+    "project": "#f9cb9c",
+    "vehicle": "#f9cb9c",
+    "km_current": "#ffff00"
+   }
+  },
+  {
+   "plate": "9774674",
+   "plate_display": "97-746-74",
+   "name": "עגלה קטנה",
+   "project": "עין זיוון",
+   "owner": "4M",
+   "drivers": null,
+   "fuel_card": null,
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 8,
+   "sheet_hidden_row": false,
+   "raw": {
+    "project": "עין זיוון",
+    "vehicle": "עגלה קטנה",
+    "plate": "9774674",
+    "owner": "4M",
+    "km_overage_cost": "#REF!",
+    "test_valid_until": "02/10/2024",
+    "needs_test": "כן",
+    "test_cost": "75",
+    "insurance_valid_until": "28/02/2025",
+    "insurance_comprehensive_cost": "530",
+    "insurance_mandatory_cost": "371",
+    "insurance_total_cost": "901",
+    "insurance_company": "מקיף שלמה סיקסט, חובה הראל",
+    "vehicle_total_cost": " ₪ 976.00 "
+   },
+   "dates": {
+    "test_valid_until": "2024-10-02",
+    "insurance_valid_until": "2025-02-28"
+   },
+   "money": {
+    "test_cost": 75,
+    "insurance_comprehensive_cost": 530,
+    "insurance_mandatory_cost": 371,
+    "insurance_total_cost": 901,
+    "vehicle_total_cost": 976.0
+   },
+   "readings": {},
+   "problems": [
+    "km_overage_cost: #REF!"
+   ],
+   "cell_colors": {
+    "test_valid_until": "#ffff00"
+   }
+  },
+  {
+   "plate": "73638203",
+   "plate_display": "736-38-203",
+   "name": "מאזדה 2",
+   "project": "ירוחם",
+   "owner": "שלמה סיקסט",
+   "drivers": "מנחם זרביב (סרגיי מרטיוק נוהג בפועל)",
+   "fuel_card": "510006098641",
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 9,
+   "sheet_hidden_row": false,
+   "raw": {
+    "project": "ירוחם",
+    "vehicle": "מאזדה 2",
+    "plate": "73638203",
+    "authorized_drivers": "מנחם זרביב (סרגיי מרטיוק נוהג בפועל)",
+    "owner": "שלמה סיקסט",
+    "fuel_card": "510006098641",
+    "km_initial": "1661 ב03.05",
+    "km_current": "31532",
+    "next_service": "45,000",
+    "test_valid_until": "04/03/2025",
+    "monthly_cost": "3977",
+    "vehicle_total_cost": " ₪ 3,977.00 "
+   },
+   "dates": {
+    "test_valid_until": "2025-03-04"
+   },
+   "money": {
+    "monthly_cost": 3977,
+    "vehicle_total_cost": 3977.0
+   },
+   "readings": {
+    "km_initial": {
+     "value": 1661,
+     "unit": "km",
+     "date": null,
+     "date_problem": "תאריך בלי שנה: 03.05"
+    },
+    "km_current": {
+     "value": 31532,
+     "unit": "km"
+    },
+    "next_service": {
+     "value": 45000,
+     "unit": "km"
+    }
+   },
+   "problems": [
+    "km_initial: תאריך בלי שנה: 03.05 (1661 ב03.05)"
+   ],
+   "cell_colors": {
+    "project": "#f9cb9c",
+    "vehicle": "#f9cb9c"
+   }
+  },
+  {
+   "plate": "89784302",
+   "plate_display": "897-84-302",
+   "name": "מאזדה 2",
+   "project": "ירוחם",
+   "owner": "שלמה סיקסט",
+   "drivers": "טל אליעזר",
+   "fuel_card": "4830469",
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 10,
+   "sheet_hidden_row": false,
+   "raw": {
+    "project": "ירוחם",
+    "vehicle": "מאזדה 2",
+    "plate": "89784302",
+    "authorized_drivers": "טל אליעזר",
+    "owner": "שלמה סיקסט",
+    "fuel_card": "4830469",
+    "km_initial": "34934 12.12.24",
+    "km_current": "37,516",
+    "next_service": "40,000",
+    "test_valid_until": "18/04/2025"
+   },
+   "dates": {
+    "test_valid_until": "2025-04-18"
+   },
+   "money": {},
+   "readings": {
+    "km_initial": {
+     "value": 34934,
+     "unit": "km",
+     "date": "2024-12-12"
+    },
+    "km_current": {
+     "value": 37516,
+     "unit": "km"
+    },
+    "next_service": {
+     "value": 40000,
+     "unit": "km"
+    }
+   },
+   "problems": [
+    "שורה חלקית (17 מתוך 29 עמודות)"
+   ],
+   "cell_colors": {
+    "project": "#f9cb9c",
+    "vehicle": "#f9cb9c"
+   }
+  },
+  {
+   "plate": "53476802",
+   "plate_display": "534-76-802",
+   "name": "ניסן טנדר",
+   "project": "ירוחם",
+   "owner": "4M",
+   "drivers": "אסף שדה (כל נהג מגיל 24) בפועל נוהג מנדי",
+   "fuel_card": "דלקן",
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 11,
+   "sheet_hidden_row": false,
+   "raw": {
+    "project": "ירוחם",
+    "vehicle": "ניסן טנדר",
+    "plate": "53476802",
+    "authorized_drivers": "אסף שדה (כל נהג מגיל 24) בפועל נוהג מנדי",
+    "owner": "4M",
+    "fuel_card": "דלקן",
+    "km_current": "38,998",
+    "next_service": "45,000",
+    "test_valid_until": "07/04/25",
+    "protection_system": "פוינטר",
+    "protection_price": "76.5",
+    "insurance_valid_until": "30/09/2025",
+    "insurance_comprehensive_cost": "6461",
+    "insurance_mandatory_cost": "1928",
+    "insurance_total_cost": "8389",
+    "insurance_company": "ביטוח ישיר",
+    "vehicle_total_cost": " ₪ 8,465.50 "
+   },
+   "dates": {
+    "test_valid_until": "2025-04-07",
+    "insurance_valid_until": "2025-09-30"
+   },
+   "money": {
+    "protection_price": 76.5,
+    "insurance_comprehensive_cost": 6461,
+    "insurance_mandatory_cost": 1928,
+    "insurance_total_cost": 8389,
+    "vehicle_total_cost": 8465.5
+   },
+   "readings": {
+    "km_current": {
+     "value": 38998,
+     "unit": "km"
+    },
+    "next_service": {
+     "value": 45000,
+     "unit": "km"
+    }
+   },
+   "problems": [],
+   "cell_colors": {
+    "project": "#f9cb9c"
+   }
+  },
+  {
+   "plate": "11129402",
+   "plate_display": "111-29-402",
+   "name": "ברלינגו",
+   "project": "עין זיוון",
+   "owner": "4M",
+   "drivers": "יאיר גבאי (כל נהג מגיל 24)",
+   "fuel_card": "510003737944",
+   "status": "זמין",
+   "sources": [
+    "sheet",
+    "whatsapp",
+    "app"
+   ],
+   "sheet_row": 12,
+   "sheet_hidden_row": false,
+   "raw": {
+    "project": "עין זיוון",
+    "vehicle": "ברלינגו",
+    "plate": "11129402",
+    "authorized_drivers": "יאיר גבאי (כל נהג מגיל 24)",
+    "owner": "4M",
+    "fuel_card": "510003737944",
+    "km_current": "39,972",
+    "next_service": "45,000",
+    "test_valid_until": "31/08/25",
+    "protection_system": "איתוראן",
+    "insurance_valid_until": "31/08/2025",
+    "insurance_comprehensive_cost": "4375",
+    "insurance_mandatory_cost": "1939",
+    "insurance_total_cost": "6314",
+    "insurance_company": "ביטוח ישיר",
+    "vehicle_total_cost": " ₪ 6,314.00 "
+   },
+   "dates": {
+    "test_valid_until": "2025-08-31",
+    "insurance_valid_until": "2025-08-31",
+    "test_next_app": "2027-08-29"
+   },
+   "money": {
+    "insurance_comprehensive_cost": 4375,
+    "insurance_mandatory_cost": 1939,
+    "insurance_total_cost": 6314,
+    "vehicle_total_cost": 6314.0
+   },
+   "readings": {
+    "km_current": {
+     "value": 39972,
+     "unit": "km"
+    },
+    "next_service": {
+     "value": 45000,
+     "unit": "km"
+    }
+   },
+   "problems": [],
+   "whatsapp": {
+    "group": "פור אם דיפנס",
+    "driver": "ליאל צ'קול",
+    "plate": "11129402",
+    "plate_partial": false,
+    "model": "סיטרואן ברלינגו",
+    "km_whatsapp": null,
+    "status": "זמין"
+   },
+   "status_source": "אפליקציית רכבים (צילום ווצאפ 09.11)",
+   "app": {
+    "model": "סיטרואן ברלינגו",
+    "driver": "ליאל צ'קול",
+    "km": 139531,
+    "next_test": "2027-08-29",
+    "km_left": 0,
+    "km_over": 0,
+    "company": "פור אם דיפנס",
+    "at": "2026-11-09 23:14"
+   }
+  },
+  {
+   "plate": "2746432",
+   "plate_display": "27-464-32",
+   "name": "סילוורדו כסופה",
+   "project": "עין זיוון",
+   "owner": "4M",
+   "drivers": "רכב חילוץ עין זיוון",
+   "fuel_card": null,
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 13,
+   "sheet_hidden_row": false,
+   "raw": {
+    "project": "עין זיוון",
+    "vehicle": "סילוורדו כסופה",
+    "plate": "2746432",
+    "authorized_drivers": "רכב חילוץ עין זיוון",
+    "owner": "4M",
+    "fuel_cost_december": " ₪ 1,798.00 ",
+    "km_current": "397,866",
+    "km_total": "397,866",
+    "km_overage_cost": "#REF!",
+    "next_service": "410,000",
+    "test_valid_until": "02/08/2025",
+    "protection_system": "איתוראן",
+    "insurance_valid_until": "31/05/2025",
+    "insurance_comprehensive_cost": "2392",
+    "insurance_mandatory_cost": "4048",
+    "insurance_total_cost": "6440",
+    "insurance_company": "כלל חובה, סקוריטס ביטוח צד ג",
+    "vehicle_total_cost": " ₪ 8,238.00 "
+   },
+   "dates": {
+    "test_valid_until": "2025-08-02",
+    "insurance_valid_until": "2025-05-31"
+   },
+   "money": {
+    "fuel_cost_december": 1798.0,
+    "insurance_comprehensive_cost": 2392,
+    "insurance_mandatory_cost": 4048,
+    "insurance_total_cost": 6440,
+    "vehicle_total_cost": 8238.0
+   },
+   "readings": {
+    "km_current": {
+     "value": 397866,
+     "unit": "km"
+    },
+    "km_total": {
+     "value": 397866,
+     "unit": "km"
+    },
+    "next_service": {
+     "value": 410000,
+     "unit": "km"
+    }
+   },
+   "problems": [
+    "km_overage_cost: #REF!"
+   ]
+  },
+  {
+   "plate": "50700202",
+   "plate_display": "507-00-202",
+   "name": "ספורטאג'",
+   "project": "עין זיוון",
+   "owner": "4M",
+   "drivers": "קרמר יוחנן",
+   "fuel_card": null,
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 14,
+   "sheet_hidden_row": false,
+   "raw": {
+    "project": "עין זיוון",
+    "vehicle": "ספורטאג'",
+    "plate": "50700202",
+    "authorized_drivers": "קרמר יוחנן",
+    "owner": "4M",
+    "fuel_cost_december": " ₪ 2,544.00 ",
+    "km_current": "96,054",
+    "km_total": "96,054",
+    "km_overage_cost": "#REF!",
+    "next_service": "105,000",
+    "test_valid_until": "31/05/2025",
+    "protection_system": "איתוראן לא פעיל",
+    "protection_price": "57.66",
+    "insurance_valid_until": "30/04/2025",
+    "insurance_comprehensive_cost": "5606",
+    "insurance_mandatory_cost": "1221",
+    "insurance_total_cost": "6827",
+    "insurance_company": "AIG",
+    "vehicle_total_cost": " ₪ 9,428.66 "
+   },
+   "dates": {
+    "test_valid_until": "2025-05-31",
+    "insurance_valid_until": "2025-04-30"
+   },
+   "money": {
+    "fuel_cost_december": 2544.0,
+    "protection_price": 57.66,
+    "insurance_comprehensive_cost": 5606,
+    "insurance_mandatory_cost": 1221,
+    "insurance_total_cost": 6827,
+    "vehicle_total_cost": 9428.66
+   },
+   "readings": {
+    "km_current": {
+     "value": 96054,
+     "unit": "km"
+    },
+    "km_total": {
+     "value": 96054,
+     "unit": "km"
+    },
+    "next_service": {
+     "value": 105000,
+     "unit": "km"
+    }
+   },
+   "problems": [
+    "km_overage_cost: #REF!"
+   ]
+  },
+  {
+   "plate": "14986801",
+   "plate_display": "149-86-801",
+   "name": "קיה סיד",
+   "project": "עין זיוון",
+   "owner": "4M",
+   "drivers": "איתי גבריאל",
+   "fuel_card": "510000358033",
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 15,
+   "sheet_hidden_row": false,
+   "raw": {
+    "project": "עין זיוון",
+    "vehicle": "קיה סיד",
+    "plate": "14986801",
+    "authorized_drivers": "איתי גבריאל",
+    "owner": "4M",
+    "fuel_card": "510000358033",
+    "fuel_cost_december": " ₪ 1,023.00 ",
+    "km_current": "264,300",
+    "next_service": "280,000",
+    "test_valid_until": "15/04/2025",
+    "insurance_valid_until": "31/05/2025",
+    "insurance_comprehensive_cost": "5063",
+    "insurance_mandatory_cost": "1637",
+    "insurance_total_cost": "6700",
+    "insurance_company": "AIG",
+    "vehicle_total_cost": " ₪ 7,723.00 "
+   },
+   "dates": {
+    "test_valid_until": "2025-04-15",
+    "insurance_valid_until": "2025-05-31"
+   },
+   "money": {
+    "fuel_cost_december": 1023.0,
+    "insurance_comprehensive_cost": 5063,
+    "insurance_mandatory_cost": 1637,
+    "insurance_total_cost": 6700,
+    "vehicle_total_cost": 7723.0
+   },
+   "readings": {
+    "km_current": {
+     "value": 264300,
+     "unit": "km"
+    },
+    "next_service": {
+     "value": 280000,
+     "unit": "km"
+    }
+   },
+   "problems": []
+  },
+  {
+   "plate": "74101902",
+   "plate_display": "741-01-902",
+   "name": "קיה סיד",
+   "project": "עין זיוון",
+   "owner": "4M",
+   "drivers": "תומר חמזה בפועל נוהג בר נוי",
+   "fuel_card": null,
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 16,
+   "sheet_hidden_row": false,
+   "raw": {
+    "project": "עין זיוון",
+    "vehicle": "קיה סיד",
+    "plate": "74101902",
+    "authorized_drivers": "תומר חמזה בפועל נוהג בר נוי ",
+    "owner": "4M",
+    "fuel_cost_december": " ₪ 1,182.00 ",
+    "km_current": "100,852",
+    "next_service": "105,000",
+    "test_valid_until": "15/11/2025",
+    "needs_test": "כן",
+    "insurance_valid_until": "30/04/2025",
+    "insurance_comprehensive_cost": "6770",
+    "insurance_mandatory_cost": "1481",
+    "insurance_total_cost": "8251",
+    "insurance_company": "AIG",
+    "vehicle_total_cost": " ₪ 9,433.00 "
+   },
+   "dates": {
+    "test_valid_until": "2025-11-15",
+    "insurance_valid_until": "2025-04-30"
+   },
+   "money": {
+    "fuel_cost_december": 1182.0,
+    "insurance_comprehensive_cost": 6770,
+    "insurance_mandatory_cost": 1481,
+    "insurance_total_cost": 8251,
+    "vehicle_total_cost": 9433.0
+   },
+   "readings": {
+    "km_current": {
+     "value": 100852,
+     "unit": "km"
+    },
+    "next_service": {
+     "value": 105000,
+     "unit": "km"
+    }
+   },
+   "problems": []
+  },
+  {
+   "plate": "8747552",
+   "plate_display": "87-475-52",
+   "name": "סקודה סופרב",
+   "project": "עין זיוון",
+   "owner": "4M",
+   "drivers": "יאיר גבאי (כל נהג מגיל 24)",
+   "fuel_card": null,
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 17,
+   "sheet_hidden_row": false,
+   "raw": {
+    "project": "עין זיוון",
+    "vehicle": "סקודה סופרב",
+    "plate": "8747552",
+    "authorized_drivers": "יאיר גבאי (כל נהג מגיל 24)",
+    "owner": "4M",
+    "km_current": "261,945",
+    "next_service": "275,000",
+    "test_valid_until": "11/11/2025",
+    "insurance_valid_until": "31/07/2025",
+    "insurance_comprehensive_cost": "1442",
+    "insurance_mandatory_cost": "2758",
+    "insurance_total_cost": "4200",
+    "insurance_company": "ליברה",
+    "vehicle_total_cost": " ₪ 4,200.00 "
+   },
+   "dates": {
+    "test_valid_until": "2025-11-11",
+    "insurance_valid_until": "2025-07-31"
+   },
+   "money": {
+    "insurance_comprehensive_cost": 1442,
+    "insurance_mandatory_cost": 2758,
+    "insurance_total_cost": 4200,
+    "vehicle_total_cost": 4200.0
+   },
+   "readings": {
+    "km_current": {
+     "value": 261945,
+     "unit": "km"
+    },
+    "next_service": {
+     "value": 275000,
+     "unit": "km"
+    }
+   },
+   "problems": [],
+   "cell_colors": {
+    "vehicle": "#ffff00"
+   }
+  },
+  {
+   "plate": "67722403",
+   "plate_display": "677-22-403",
+   "name": "מאזדה 2",
+   "project": "עין זיוון",
+   "owner": "שלמה סיקסט",
+   "drivers": "יקיר חיים",
+   "fuel_card": null,
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 18,
+   "sheet_hidden_row": false,
+   "raw": {
+    "project": "עין זיוון",
+    "vehicle": "מאזדה 2",
+    "plate": "67722403",
+    "authorized_drivers": "יקיר חיים",
+    "owner": "שלמה סיקסט",
+    "km_initial": "25.10.24 16886",
+    "km_current": "29,820",
+    "next_service": "30,000",
+    "overage": "4,000",
+    "test_valid_until": "01/07/2025",
+    "monthly_cost": "3977",
+    "vehicle_total_cost": " ₪ 3,977.00 "
+   },
+   "dates": {
+    "test_valid_until": "2025-07-01"
+   },
+   "money": {
+    "monthly_cost": 3977,
+    "vehicle_total_cost": 3977.0
+   },
+   "readings": {
+    "km_initial": {
+     "value": 16886,
+     "unit": "km",
+     "date": "2024-10-25"
+    },
+    "km_current": {
+     "value": 29820,
+     "unit": "km"
+    },
+    "next_service": {
+     "value": 30000,
+     "unit": "km"
+    },
+    "overage": {
+     "value": 4000,
+     "unit": "km"
+    }
+   },
+   "problems": [],
+   "cell_colors": {
+    "km_current": "#ffff00",
+    "overage": "#ff0000"
+   }
+  },
+  {
+   "plate": "85048102",
+   "plate_display": "850-48-102",
+   "name": "מאזדה 2",
+   "project": "עין זיוון",
+   "owner": "שלמה סיקסט",
+   "drivers": "חיים עלמיהו",
+   "fuel_card": null,
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 19,
+   "sheet_hidden_row": false,
+   "raw": {
+    "project": "עין זיוון",
+    "vehicle": "מאזדה 2",
+    "plate": "85048102",
+    "authorized_drivers": "חיים עלמיהו",
+    "owner": "שלמה סיקסט",
+    "km_initial": "60961 ב04/12/2024",
+    "km_current": "64,682",
+    "next_service": "75,000",
+    "monthly_cost": "3977",
+    "vehicle_total_cost": " ₪ 3,977.00 "
+   },
+   "dates": {},
+   "money": {
+    "monthly_cost": 3977,
+    "vehicle_total_cost": 3977.0
+   },
+   "readings": {
+    "km_initial": {
+     "value": 60961,
+     "unit": "km",
+     "date": "2024-12-04"
+    },
+    "km_current": {
+     "value": 64682,
+     "unit": "km"
+    },
+    "next_service": {
+     "value": 75000,
+     "unit": "km"
+    }
+   },
+   "problems": []
+  },
+  {
+   "plate": "106678",
+   "plate_display": "106678",
+   "name": "באגר 470",
+   "project": "שעל",
+   "owner": "4M",
+   "drivers": null,
+   "fuel_card": null,
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 20,
+   "sheet_hidden_row": false,
+   "raw": {
+    "project": "שעל",
+    "vehicle": "באגר 470",
+    "plate": "106678",
+    "owner": "4M",
+    "test_valid_until": "02/07/2025",
+    "protection_system": "איתוראן בתקלה",
+    "vehicle_total_cost": " ₪ -   "
+   },
+   "dates": {
+    "test_valid_until": "2025-07-02"
+   },
+   "money": {
+    "vehicle_total_cost": null
+   },
+   "readings": {},
+   "problems": [
+    "מספר רכב באורך 6 ספרות (106678) — כלי צמ\"ה/מספר זיהוי?"
+   ],
+   "cell_colors": {
+    "project": "#00ff00"
+   }
+  },
+  {
+   "plate": "79396102",
+   "plate_display": "793-96-102",
+   "name": "מאזדה CX30",
+   "project": "הנהלה כללי",
+   "owner": "שלמה סיקסט",
+   "drivers": "שדה לוי אסף",
+   "fuel_card": "510003737845",
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 21,
+   "sheet_hidden_row": false,
+   "raw": {
+    "project": "הנהלה כללי",
+    "vehicle": "מאזדה CX30",
+    "plate": "79396102",
+    "authorized_drivers": "שדה לוי אסף",
+    "owner": "שלמה סיקסט",
+    "fuel_card": "510003737845"
+   },
+   "dates": {},
+   "money": {},
+   "readings": {},
+   "problems": [
+    "שורה חלקית (6 מתוך 29 עמודות)"
+   ]
+  },
+  {
+   "plate": "47597102",
+   "plate_display": "475-97-102",
+   "name": "סובארו פורסטר",
+   "project": "הנהלה כללי",
+   "owner": "4M",
+   "drivers": "ליאור ברגמן",
+   "fuel_card": "510003738041",
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 22,
+   "sheet_hidden_row": false,
+   "raw": {
+    "project": "הנהלה כללי",
+    "vehicle": "סובארו פורסטר",
+    "plate": "47597102",
+    "authorized_drivers": "ליאור ברגמן",
+    "owner": "4M",
+    "fuel_card": "510003738041",
+    "fuel_cost_december": " ₪ 1,916.00 ",
+    "km_current": "55,000",
+    "km_total": "55,000",
+    "km_overage_cost": "#REF!",
+    "next_service": "68000",
+    "test_valid_until": "17/03/2025",
+    "protection_system": "איתוראן לא פעיל",
+    "protection_price": "73.8",
+    "insurance_valid_until": "31/8/2025",
+    "insurance_comprehensive_cost": "3461",
+    "insurance_mandatory_cost": "1652",
+    "insurance_total_cost": "5113",
+    "insurance_company": "מגדל",
+    "vehicle_total_cost": " ₪ 7,102.80 "
+   },
+   "dates": {
+    "test_valid_until": "2025-03-17",
+    "insurance_valid_until": "2025-08-31"
+   },
+   "money": {
+    "fuel_cost_december": 1916.0,
+    "protection_price": 73.8,
+    "insurance_comprehensive_cost": 3461,
+    "insurance_mandatory_cost": 1652,
+    "insurance_total_cost": 5113,
+    "vehicle_total_cost": 7102.8
+   },
+   "readings": {
+    "km_current": {
+     "value": 55000,
+     "unit": "km"
+    },
+    "km_total": {
+     "value": 55000,
+     "unit": "km"
+    },
+    "next_service": {
+     "value": 68000,
+     "unit": "km"
+    }
+   },
+   "problems": [
+    "km_overage_cost: #REF!"
+   ]
+  },
+  {
+   "plate": "71501901",
+   "plate_display": "715-01-901",
+   "name": "ריינגר מנהלות",
+   "project": "ירוחם",
+   "owner": "4M",
+   "drivers": null,
+   "fuel_card": null,
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 23,
+   "sheet_hidden_row": false,
+   "raw": {
+    "project": "ירוחם",
+    "vehicle": "ריינגר מנהלות",
+    "plate": "71501901",
+    "owner": "4M",
+    "next_service": "1600 שעות מנוע",
+    "test_valid_until": "24/02/2025",
+    "vehicle_total_cost": " ₪ -   "
+   },
+   "dates": {
+    "test_valid_until": "2025-02-24"
+   },
+   "money": {
+    "vehicle_total_cost": null
+   },
+   "readings": {
+    "next_service": {
+     "value": 1600,
+     "unit": "hours"
+    }
+   },
+   "problems": [],
+   "cell_colors": {
+    "project": "#f9cb9c"
+   }
+  },
+  {
+   "plate": "85046402",
+   "plate_display": "850-46-402",
+   "name": "מאזדה 2",
+   "project": null,
+   "owner": "שלמה סיקסט",
+   "drivers": "חיים עלמיהו",
+   "fuel_card": null,
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 24,
+   "sheet_hidden_row": true,
+   "raw": {
+    "vehicle": "מאזדה 2",
+    "plate": "85046402",
+    "authorized_drivers": "חיים עלמיהו",
+    "owner": "שלמה סיקסט",
+    "km_initial": "73820 10.10.24",
+    "km_current": "81,139",
+    "next_service": "90,000",
+    "overage": "2,000",
+    "monthly_cost": "3977",
+    "vehicle_total_cost": " ₪ 3,977.00 "
+   },
+   "dates": {},
+   "money": {
+    "monthly_cost": 3977,
+    "vehicle_total_cost": 3977.0
+   },
+   "readings": {
+    "km_initial": {
+     "value": 73820,
+     "unit": "km",
+     "date": "2024-10-10"
+    },
+    "km_current": {
+     "value": 81139,
+     "unit": "km"
+    },
+    "next_service": {
+     "value": 90000,
+     "unit": "km"
+    },
+    "overage": {
+     "value": 2000,
+     "unit": "km"
+    }
+   },
+   "problems": [],
+   "cell_colors": {
+    "vehicle": "#ff0000",
+    "overage": "#ff0000"
+   }
+  },
+  {
+   "plate": "50575303",
+   "plate_display": "505-75-303",
+   "name": "קרן",
+   "project": null,
+   "owner": null,
+   "drivers": null,
+   "fuel_card": null,
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 25,
+   "sheet_hidden_row": false,
+   "raw": {
+    "vehicle": "קרן",
+    "plate": "50575303",
+    "authorized_drivers": "9598544147184341",
+    "fuel_cost_december": " ₪ 1,165.00 "
+   },
+   "dates": {},
+   "money": {
+    "fuel_cost_december": 1165.0
+   },
+   "readings": {},
+   "problems": [
+    "בעמודת 'נהגים מורשים' יש מספר (כרטיס דלק?) ולא שם",
+    "שורה חלקית (8 מתוך 29 עמודות)"
+   ]
+  },
+  {
+   "plate": "26675202",
+   "plate_display": "266-75-202",
+   "name": "ניר",
+   "project": "הנהלה כללי",
+   "owner": "4M",
+   "drivers": null,
+   "fuel_card": null,
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 26,
+   "sheet_hidden_row": false,
+   "raw": {
+    "project": "הנהלה כללי",
+    "vehicle": "ניר",
+    "plate": "26675202",
+    "owner": "4M",
+    "fuel_cost_december": " ₪ 3,197.00 "
+   },
+   "dates": {},
+   "money": {
+    "fuel_cost_december": 3197.0
+   },
+   "readings": {},
+   "problems": [
+    "שורה חלקית (8 מתוך 29 עמודות)"
+   ]
+  },
+  {
+   "plate": "72225002",
+   "plate_display": "722-25-002",
+   "name": "אישתו של ניר",
+   "project": null,
+   "owner": null,
+   "drivers": null,
+   "fuel_card": null,
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 27,
+   "sheet_hidden_row": false,
+   "raw": {
+    "vehicle": "אישתו של ניר",
+    "plate": "72225002"
+   },
+   "dates": {},
+   "money": {},
+   "readings": {},
+   "problems": [
+    "שורה חלקית (3 מתוך 29 עמודות)"
+   ]
+  },
+  {
+   "plate": "29613702",
+   "plate_display": "296-13-702",
+   "name": "שמוליק",
+   "project": null,
+   "owner": null,
+   "drivers": null,
+   "fuel_card": "29613702",
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 28,
+   "sheet_hidden_row": false,
+   "raw": {
+    "vehicle": "שמוליק",
+    "plate": "296-13-702",
+    "fuel_card": "29613702"
+   },
+   "dates": {},
+   "money": {},
+   "readings": {},
+   "problems": [
+    "מספר רכב עם תווים לא ספרתיים: 296-13-702",
+    "מספר כרטיס הדלק זהה למספר הרכב",
+    "שורה חלקית (6 מתוך 29 עמודות)"
+   ]
+  },
+  {
+   "plate": "45427401",
+   "plate_display": "454-27-401",
+   "name": "מיכאל שלם",
+   "project": null,
+   "owner": null,
+   "drivers": null,
+   "fuel_card": "510006383449",
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 29,
+   "sheet_hidden_row": false,
+   "raw": {
+    "vehicle": "מיכאל שלם",
+    "plate": "45427401",
+    "fuel_card": "510006383449"
+   },
+   "dates": {},
+   "money": {},
+   "readings": {},
+   "problems": [
+    "שורה חלקית (6 מתוך 29 עמודות)"
+   ]
+  },
+  {
+   "plate": "9905737",
+   "plate_display": "99-057-37",
+   "name": "אבי מספר כרטיס דלק",
+   "project": null,
+   "owner": null,
+   "drivers": null,
+   "fuel_card": "510006408039",
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 30,
+   "sheet_hidden_row": false,
+   "raw": {
+    "vehicle": "אבי מספר כרטיס דלק",
+    "plate": "9905737",
+    "fuel_card": "510006408039"
+   },
+   "dates": {},
+   "money": {},
+   "readings": {},
+   "problems": [
+    "שורה חלקית (6 מתוך 29 עמודות)"
+   ]
+  },
+  {
+   "plate": "54766802",
+   "plate_display": "547-66-802",
+   "name": "דביר",
+   "project": null,
+   "owner": null,
+   "drivers": null,
+   "fuel_card": "510006038043",
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 31,
+   "sheet_hidden_row": false,
+   "raw": {
+    "vehicle": "דביר",
+    "plate": "54766802",
+    "fuel_card": "510006038043"
+   },
+   "dates": {},
+   "money": {},
+   "readings": {},
+   "problems": [
+    "שורה חלקית (6 מתוך 29 עמודות)"
+   ]
+  },
+  {
+   "plate": "77839102",
+   "plate_display": "778-39-102",
+   "name": "דולב",
+   "project": null,
+   "owner": null,
+   "drivers": null,
+   "fuel_card": null,
+   "status": null,
+   "sources": [
+    "sheet"
+   ],
+   "sheet_row": 32,
+   "sheet_hidden_row": false,
+   "raw": {
+    "vehicle": "דולב",
+    "plate": "77839102",
+    "fuel_cost_december": " ₪ 3,190.00 "
+   },
+   "dates": {},
+   "money": {
+    "fuel_cost_december": 3190.0
+   },
+   "readings": {},
+   "problems": [
+    "שורה חלקית (8 מתוך 29 עמודות)"
+   ]
+  },
+  {
+   "plate": "60776404",
+   "plate_display": "607-76-404",
+   "name": null,
+   "project": null,
+   "owner": "אופרייט",
+   "drivers": "דולב חגבי",
+   "status": "זמין",
+   "status_source": "אפליקציית רכבים (צילום ווצאפ 09.11)",
+   "sources": [
+    "whatsapp"
+   ],
+   "whatsapp": {
+    "group": "אופרייט",
+    "driver": "דולב חגבי",
+    "plate": "60776404",
+    "plate_partial": false,
+    "model": null,
+    "status": "זמין"
+   },
+   "candidates": [],
+   "problems": [
+    "לא נמצא בגיליון"
+   ]
+  },
+  {
+   "plate": "81406804",
+   "plate_display": "814-06-804",
+   "name": null,
+   "project": null,
+   "owner": "אופרייט",
+   "drivers": "ציון צחיו ימרה",
+   "status": "זמין",
+   "status_source": "אפליקציית רכבים (צילום ווצאפ 09.11)",
+   "sources": [
+    "whatsapp"
+   ],
+   "whatsapp": {
+    "group": "אופרייט",
+    "driver": "ציון צחיו ימרה",
+    "plate": "81406804",
+    "plate_partial": false,
+    "model": null,
+    "status": "זמין"
+   },
+   "candidates": [],
+   "problems": [
+    "לא נמצא בגיליון"
+   ]
+  },
+  {
+   "plate": "52906304",
+   "plate_display": "529-06-304",
+   "name": "מוסו לבנה (שלך)",
+   "project": null,
+   "owner": "גשר הגולן",
+   "drivers": "יקיר בוחבוט",
+   "status": "זמין",
+   "status_source": "אפליקציית רכבים (צילום ווצאפ 09.11)",
+   "sources": [
+    "whatsapp",
+    "app"
+   ],
+   "whatsapp": {
+    "group": "גשר הגולן",
+    "driver": "יקיר בוחבוט",
+    "plate": "52906304",
+    "plate_partial": false,
+    "model": "מוסו לבנה (שלך)",
+    "km_whatsapp": 10124,
+    "status": "זמין"
+   },
+   "candidates": [],
+   "problems": [
+    "לא נמצא בגיליון"
+   ],
+   "app": {
+    "model": "טנדר KGM (מוסו)",
+    "driver": "יקיר בוחבוט",
+    "km": 10124,
+    "next_test": "2027-02-21",
+    "km_left": 1546,
+    "km_over": 0,
+    "company": "גשר הגולן",
+    "at": "2026-11-09 23:14"
+   },
+   "dates": {
+    "test_next_app": "2027-02-21"
+   }
+  },
+  {
+   "plate": "52982704",
+   "plate_display": "529-82-704",
+   "name": "מוסו לבנה (גשר גולן)",
+   "project": null,
+   "owner": "גשר הגולן",
+   "drivers": "ציון צחיו ימרה",
+   "status": "זמין",
+   "status_source": "אפליקציית רכבים (צילום ווצאפ 09.11)",
+   "sources": [
+    "whatsapp",
+    "app"
+   ],
+   "whatsapp": {
+    "group": "גשר הגולן",
+    "driver": "ציון צחיו ימרה",
+    "plate": "52982704",
+    "plate_partial": false,
+    "model": "מוסו לבנה (גשר גולן)",
+    "km_whatsapp": 8588,
+    "status": "זמין"
+   },
+   "candidates": [],
+   "problems": [
+    "לא נמצא בגיליון"
+   ],
+   "app": {
+    "model": "טנדר KGM 2 (מוסו)",
+    "driver": "ציון צחיו ימרה",
+    "km": 8588,
+    "next_test": "2027-02-21",
+    "km_left": 2461,
+    "km_over": 0,
+    "company": "גשר הגולן",
+    "at": "2026-11-09 23:14"
+   },
+   "dates": {
+    "test_next_app": "2027-02-21"
+   }
+  },
+  {
+   "plate": "41156404",
+   "plate_display": "411-56-404",
+   "name": "קיה פיקנטו",
+   "project": null,
+   "owner": "שלמה סיקסט",
+   "drivers": "מתיאס יצחק אדרי",
+   "status": "זמין",
+   "status_source": "אפליקציית רכבים (צילום ווצאפ 09.11)",
+   "sources": [
+    "whatsapp",
+    "app"
+   ],
+   "whatsapp": {
+    "group": "שלמה סיקסט",
+    "driver": "מתיאס יצחק אדרי",
+    "plate": "41156404",
+    "plate_partial": false,
+    "model": "קיה פיקנטו",
+    "km_whatsapp": 16677,
+    "status": "זמין"
+   },
+   "candidates": [],
+   "problems": [
+    "לא נמצא בגיליון"
+   ],
+   "app": {
+    "model": "קיה פיקנטו",
+    "driver": "מתיאס יצחק אדרי",
+    "km": 19677,
+    "next_test": "2027-10-28",
+    "km_left": 0,
+    "km_over": 252,
+    "company": "שלמה סיקסט",
+    "at": "2026-11-09 23:14"
+   },
+   "dates": {
+    "test_next_app": "2027-10-28"
+   }
+  },
+  {
+   "plate": "11800304",
+   "plate_display": "118-00-304",
+   "name": "דאצ'יה לוגן",
+   "project": null,
+   "owner": "שלמה סיקסט",
+   "drivers": "ברוך פחימה",
+   "status": "זמין",
+   "status_source": "אפליקציית רכבים (צילום ווצאפ 09.11)",
+   "sources": [
+    "whatsapp",
+    "app"
+   ],
+   "whatsapp": {
+    "group": "שלמה סיקסט",
+    "driver": "ברוך פחימה",
+    "plate": "118002…",
+    "plate_partial": false,
+    "model": null,
+    "status": "זמין"
+   },
+   "candidates": [],
+   "problems": [
+    "לא נמצא בגיליון"
+   ],
+   "app": {
+    "model": "דאצ'יה לוגן",
+    "driver": "ברוך פחימה",
+    "km": 51412,
+    "next_test": "2027-11-13",
+    "km_left": 0,
+    "km_over": 581,
+    "company": "שלמה סיקסט",
+    "at": "2026-11-09 23:14"
+   },
+   "dates": {
+    "test_next_app": "2027-11-13"
+   }
+  },
+  {
+   "plate": "64812403",
+   "plate_display": "648-12-403",
+   "name": "טנדר מוסו שלמה 2",
+   "project": null,
+   "owner": "שלמה סיקסט",
+   "drivers": "טל אליעזר",
+   "status": "זמין",
+   "status_source": "אפליקציית רכבים (צילום ווצאפ 09.11)",
+   "sources": [
+    "whatsapp",
+    "app"
+   ],
+   "whatsapp": {
+    "group": "שלמה סיקסט",
+    "driver": "טל אליעזר",
+    "plate": "64?…03",
+    "plate_partial": false,
+    "model": null,
+    "km_whatsapp": null,
+    "status": "זמין",
+    "note": "ייתכן 648-12-403 (מוסו שלמה סיקסט). טל אמר שלא שלו"
+   },
+   "candidates": [],
+   "problems": [
+    "לא נמצא בגיליון"
+   ],
+   "app": {
+    "model": "טנדר מוסו שלמה 2",
+    "driver": "טל אליעזר",
+    "km": 69215,
+    "next_test": "2027-01-27",
+    "km_left": 0,
+    "km_over": 664,
+    "company": "שלמה סיקסט",
+    "at": "2026-11-09 23:14"
+   },
+   "dates": {
+    "test_next_app": "2027-01-27"
+   }
+  },
+  {
+   "plate": "70558304",
+   "plate_display": "705-58-304",
+   "name": "סיאט איביזה",
+   "project": null,
+   "owner": "שלמה סיקסט",
+   "drivers": "נועם אביחי כרסנטי",
+   "status": "זמין",
+   "status_source": "אפליקציית רכבים (צילום ווצאפ 09.11)",
+   "sources": [
+    "whatsapp",
+    "app"
+   ],
+   "whatsapp": {
+    "group": "שלמה סיקסט",
+    "driver": "נועם אביחי כרסנטי",
+    "plate": "70?…04",
+    "plate_partial": false,
+    "model": null,
+    "status": "זמין"
+   },
+   "candidates": [],
+   "problems": [
+    "לא נמצא בגיליון"
+   ],
+   "app": {
+    "model": "סיאט איביזה",
+    "driver": "נועם אביחי כרסנטי",
+    "km": 4158,
+    "next_test": "2027-08-21",
+    "km_left": 399,
+    "km_over": 0,
+    "company": "שלמה סיקסט",
+    "at": "2026-11-09 23:14"
+   },
+   "dates": {
+    "test_next_app": "2027-08-21"
+   }
+  },
+  {
+   "plate": "34702903",
+   "plate_display": "347-02-903",
+   "name": "היילקס?",
+   "project": null,
+   "owner": "שלמה סיקסט",
+   "drivers": "צגאי טקה",
+   "status": "זמין",
+   "status_source": "אפליקציית רכבים (צילום ווצאפ 09.11)",
+   "sources": [
+    "whatsapp",
+    "app"
+   ],
+   "whatsapp": {
+    "group": "שלמה סיקסט",
+    "driver": "צגאי טקה",
+    "plate": "347029…",
+    "plate_partial": false,
+    "model": "היילקס?",
+    "status": "זמין",
+    "note": "יקיר כתב 21275404 להיילקס — לא תואם"
+   },
+   "candidates": [],
+   "problems": [
+    "לא נמצא בגיליון"
+   ],
+   "app": {
+    "model": "מאזדה 2",
+    "driver": "צגאי טקה",
+    "km": null,
+    "next_test": "2026-12-31",
+    "km_left": 5595,
+    "km_over": 0,
+    "company": "שלמה סיקסט",
+    "at": "2026-11-09 23:14"
+   },
+   "dates": {
+    "test_next_app": "2026-12-31"
+   }
+  },
+  {
+   "plate": "21275404",
+   "sources": [
+    "app"
+   ],
+   "status": "זמין",
+   "problems": [
+    "לא נמצא בגיליון"
+   ],
+   "plate_display": "212-75-404",
+   "app": {
+    "model": "טויוטה היילקס",
+    "driver": "צגאי טקה",
+    "km": 43034,
+    "next_test": "2027-03-22",
+    "km_left": 21040,
+    "km_over": 0,
+    "company": "שלמה סיקסט",
+    "at": "2026-11-09 23:14"
+   },
+   "name": "טויוטה היילקס",
+   "owner": "שלמה סיקסט",
+   "drivers": "צגאי טקה",
+   "dates": {
+    "test_next_app": "2027-03-22"
+   }
+  }
+ ],
+ "whatsapp_matches": [
+  {
+   "old_plate": "11129402",
+   "plate": "11129402",
+   "partial": false,
+   "sure": true,
+   "old_driver": "ליאל צ'קול",
+   "sheet_drivers": "יאיר גבאי (כל נהג מגיל 24)"
+  },
+  {
+   "old_plate": "24771201",
+   "plate": "24771201",
+   "partial": false,
+   "sure": true,
+   "old_driver": "לירן קצובשוילי",
+   "sheet_drivers": "אבי מאיר"
+  }
+ ],
+ "data_problems": [
+  {
+   "row": 2,
+   "plate": "35176101",
+   "name": "עגלה גדולה",
+   "problem": "km_overage_cost: #REF!"
+  },
+  {
+   "row": 3,
+   "plate": "24771201",
+   "name": "סילוורדו פתוחה",
+   "problem": "km_overage_cost: #REF!"
+  },
+  {
+   "row": 5,
+   "plate": "119513",
+   "name": "באגר HItachi 350",
+   "problem": "מספר רכב באורך 6 ספרות (119513) — כלי צמ\"ה/מספר זיהוי?"
+  },
+  {
+   "row": 8,
+   "plate": "9774674",
+   "name": "עגלה קטנה",
+   "problem": "km_overage_cost: #REF!"
+  },
+  {
+   "row": 9,
+   "plate": "73638203",
+   "name": "מאזדה 2",
+   "problem": "km_initial: תאריך בלי שנה: 03.05 (1661 ב03.05)"
+  },
+  {
+   "row": 10,
+   "plate": "89784302",
+   "name": "מאזדה 2",
+   "problem": "שורה חלקית (17 מתוך 29 עמודות)"
+  },
+  {
+   "row": 13,
+   "plate": "2746432",
+   "name": "סילוורדו כסופה",
+   "problem": "km_overage_cost: #REF!"
+  },
+  {
+   "row": 14,
+   "plate": "50700202",
+   "name": "ספורטאג'",
+   "problem": "km_overage_cost: #REF!"
+  },
+  {
+   "row": 20,
+   "plate": "106678",
+   "name": "באגר 470",
+   "problem": "מספר רכב באורך 6 ספרות (106678) — כלי צמ\"ה/מספר זיהוי?"
+  },
+  {
+   "row": 21,
+   "plate": "79396102",
+   "name": "מאזדה CX30",
+   "problem": "שורה חלקית (6 מתוך 29 עמודות)"
+  },
+  {
+   "row": 22,
+   "plate": "47597102",
+   "name": "סובארו פורסטר",
+   "problem": "km_overage_cost: #REF!"
+  },
+  {
+   "row": 25,
+   "plate": "50575303",
+   "name": "קרן",
+   "problem": "בעמודת 'נהגים מורשים' יש מספר (כרטיס דלק?) ולא שם"
+  },
+  {
+   "row": 25,
+   "plate": "50575303",
+   "name": "קרן",
+   "problem": "שורה חלקית (8 מתוך 29 עמודות)"
+  },
+  {
+   "row": 26,
+   "plate": "26675202",
+   "name": "ניר",
+   "problem": "שורה חלקית (8 מתוך 29 עמודות)"
+  },
+  {
+   "row": 27,
+   "plate": "72225002",
+   "name": "אישתו של ניר",
+   "problem": "שורה חלקית (3 מתוך 29 עמודות)"
+  },
+  {
+   "row": 28,
+   "plate": "29613702",
+   "name": "שמוליק",
+   "problem": "מספר רכב עם תווים לא ספרתיים: 296-13-702"
+  },
+  {
+   "row": 28,
+   "plate": "29613702",
+   "name": "שמוליק",
+   "problem": "מספר כרטיס הדלק זהה למספר הרכב"
+  },
+  {
+   "row": 28,
+   "plate": "29613702",
+   "name": "שמוליק",
+   "problem": "שורה חלקית (6 מתוך 29 עמודות)"
+  },
+  {
+   "row": 29,
+   "plate": "45427401",
+   "name": "מיכאל שלם",
+   "problem": "שורה חלקית (6 מתוך 29 עמודות)"
+  },
+  {
+   "row": 30,
+   "plate": "9905737",
+   "name": "אבי מספר כרטיס דלק",
+   "problem": "שורה חלקית (6 מתוך 29 עמודות)"
+  },
+  {
+   "row": 31,
+   "plate": "54766802",
+   "name": "דביר",
+   "problem": "שורה חלקית (6 מתוך 29 עמודות)"
+  },
+  {
+   "row": 32,
+   "plate": "77839102",
+   "name": "דולב",
+   "problem": "שורה חלקית (8 מתוך 29 עמודות)"
+  },
+  {
+   "row": 1,
+   "plate": null,
+   "name": null,
+   "problem": "כותרת כפולה 'קילומטרג עדכני' בעמודה N"
+  }
+ ],
+ "open": [
+  "לאמת מספרים חלקיים (ברוך, טל, נועם, צגאי) — צילום עם עמודת מספר הרכב מלאה",
+  "לאמת את ההיילקס (21275404) מול 347029… של צגאי",
+  "הרכב של שלמה סיקסט (648-12-403 לפי יקיר) — לא ברור מי נוהג",
+  "ק\"מ חסרים לברלינגו ולסילברדו (צילום קילומטר)",
+  "סרטוני מצב רכב — לא נבדקו"
+ ]
+}

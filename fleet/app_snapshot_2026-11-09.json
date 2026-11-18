@@ -1,0 +1,115 @@
+{
+ "source": "צילומי אפליקציית הרכבים 09.11.2026 23:14 (2 צילומים, אותן שורות) + צילום שלישי (תיאור, מבחן רישוי הבא)",
+ "rows": [
+  {
+   "company": "גשר הגולן",
+   "km": 10124,
+   "last_test": "2026-02-22",
+   "km_left": 1546,
+   "km_over": 0,
+   "plate": "52906304",
+   "row": 1,
+   "model": "KGM (מוסו)",
+   "next_test": "2027-02-21"
+  },
+  {
+   "company": "גשר הגולן",
+   "km": 8588,
+   "last_test": "2026-02-22",
+   "km_left": 2461,
+   "km_over": 0,
+   "plate": "52982704",
+   "row": 2,
+   "model": "KGM 2 (מוסו)",
+   "next_test": "2027-02-21"
+  },
+  {
+   "company": "פור אם דיפנס",
+   "km": 139531,
+   "last_test": "2026-09-06",
+   "km_left": 0,
+   "km_over": 0,
+   "plate": null,
+   "row": 3,
+   "model": "סיטרואן ב... (ברלינגו?)",
+   "next_test": "2027-08-29"
+  },
+  {
+   "company": "פור אם דיפנס",
+   "km": 412127,
+   "last_test": "2025-08-29",
+   "km_left": 0,
+   "km_over": 0,
+   "plate": null,
+   "row": 4,
+   "model": "סילברדו",
+   "next_test": "2027-08-29"
+  },
+  {
+   "company": "שלמה סיקסט",
+   "km": 19677,
+   "last_test": "2025-10-29",
+   "km_left": 0,
+   "km_over": 252,
+   "plate": null,
+   "row": 5,
+   "model": "קיה פיקנטו",
+   "next_test": "2027-10-28"
+  },
+  {
+   "company": "שלמה סיקסט",
+   "km": 51412,
+   "last_test": "2026-10-25",
+   "km_left": 0,
+   "km_over": 581,
+   "plate": null,
+   "row": 6,
+   "model": "דאצ׳יה לוגן",
+   "next_test": "2027-11-13"
+  },
+  {
+   "company": "שלמה סיקסט",
+   "km": 69215,
+   "last_test": "2026-01-22",
+   "km_left": 0,
+   "km_over": 664,
+   "plate": null,
+   "row": 7,
+   "model": "טנדר מוסו",
+   "next_test": "2027-01-27"
+  },
+  {
+   "company": "שלמה סיקסט",
+   "km": 4158,
+   "last_test": "2026-08-22",
+   "km_left": 399,
+   "km_over": 0,
+   "plate": null,
+   "row": 8,
+   "model": "סיאט",
+   "next_test": "2027-08-21"
+  },
+  {
+   "company": "שלמה סיקסט",
+   "km": null,
+   "last_test": "2026-01-01",
+   "km_left": 5595,
+   "km_over": 0,
+   "plate": null,
+   "row": 9,
+   "model": "מאזדה",
+   "next_test": "2026-12-31"
+  },
+  {
+   "company": "שלמה סיקסט",
+   "km": 43034,
+   "last_test": "2026-03-09",
+   "km_left": 21040,
+   "km_over": 0,
+   "plate": null,
+   "row": 10,
+   "model": "טויוטה היילקס",
+   "next_test": "2027-03-22"
+  }
+ ]
+}

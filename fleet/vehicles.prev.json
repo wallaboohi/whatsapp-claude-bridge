@@ -1,0 +1,24 @@
+{
+  "updated": "2026-11-09 13:05",
+  "source": "צילום מאפליקציית רכבים (יקיר, 09.11 12:06): חברה/קבוצה, שם נהג, מספר רכב, סטטוס. שאר הצילומים בלי מספר רכב/שם — לא משויכים",
+  "vehicles": [
+    {"group": "אופרייט", "driver": "דולב חגבי", "plate": "60776404", "plate_partial": false, "model": null, "status": "זמין"},
+    {"group": "אופרייט", "driver": "ציון צחיו ימרה", "plate": "81406804", "plate_partial": false, "model": null, "status": "זמין"},
+    {"group": "גשר הגולן", "driver": "יקיר בוחבוט", "plate": "52906304", "plate_partial": false, "model": "מוסו לבנה (שלך)", "km_whatsapp": 10124, "status": "זמין"},
+    {"group": "גשר הגולן", "driver": "ציון צחיו ימרה", "plate": "52982704", "plate_partial": false, "model": "מוסו לבנה (גשר גולן)", "km_whatsapp": 8588, "status": "זמין"},
+    {"group": "פור אם דיפנס", "driver": "ליאל צ'קול", "plate": "11129402", "plate_partial": false, "model": "סיטרואן ברלינגו", "km_whatsapp": null, "status": "זמין"},
+    {"group": "פור אם דיפנס", "driver": "לירן קצובשוילי", "plate": "24771201", "plate_partial": false, "model": "סילברדו לבנה", "km_whatsapp": null, "status": "זמין"},
+    {"group": "שלמה סיקסט", "driver": "מתיאס יצחק אדרי", "plate": "41156404", "plate_partial": false, "model": "קיה פיקנטו", "km_whatsapp": 16677, "status": "זמין"},
+    {"group": "שלמה סיקסט", "driver": "ברוך פחימה", "plate": "118002…", "plate_partial": true, "model": null, "status": "זמין"},
+    {"group": "שלמה סיקסט", "driver": "טל אליעזר", "plate": "64?…03", "plate_partial": true, "model": null, "km_whatsapp": null, "status": "זמין", "note": "ייתכן 648-12-403 (מוסו שלמה סיקסט). טל אמר שלא שלו"},
+    {"group": "שלמה סיקסט", "driver": "נועם אביחי כרסנטי", "plate": "70?…04", "plate_partial": true, "model": null, "status": "זמין"},
+    {"group": "שלמה סיקסט", "driver": "צגאי טקה", "plate": "347029…", "plate_partial": true, "model": "היילקס?", "status": "זמין", "note": "יקיר כתב 21275404 להיילקס — לא תואם"}
+  ],
+  "open": [
+    "לאמת מספרים חלקיים (ברוך, טל, נועם, צגאי) — צילום עם עמודת מספר הרכב מלאה",
+    "לאמת את ההיילקס (21275404) מול 347029… של צגאי",
+    "הרכב של שלמה סיקסט (648-12-403 לפי יקיר) — לא ברור מי נוהג",
+    "ק\"מ חסרים לברלינגו ולסילברדו (צילום קילומטר)",
+    "סרטוני מצב רכב — לא נבדקו"
+  ]
+}
