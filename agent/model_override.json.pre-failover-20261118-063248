@@ -1,0 +1,14 @@
+{
+  "model": "auto",
+  "until": "",
+  "groups": {
+    "120363412177199876@g.us": {
+      "model": "auto",
+      "until": ""
+    },
+    "120363431750792742@g.us": {
+      "model": "opus",
+      "until": ""
+    }
+  }
+}
