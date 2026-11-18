@@ -4073,9 +4073,43 @@ def _run_desktop_app(name, p, prompt, chat, on_stage, timeout):
     return {"type": "result", "result": ans, "is_error": False, "session_id": None, "usage": {}, "total_cost_usd": 0}
 
 
+_remote_cli_cache = {}
+
+
+def _remote_cli_cmds(c, line):
+    """One ssh command per alias of the CLI's computer (config "cli": {"ssh": "<alias>" | [aliases]}), running line in HOME there."""
+    git_ssh = r"C:\Program Files\Git\usr\bin\ssh.exe"
+    ssh = git_ssh if os.path.exists(git_ssh) else "ssh"
+    aliases = c.get("ssh") if isinstance(c.get("ssh"), list) else [c.get("ssh")]
+    return [[ssh, "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", a, "cd /d %USERPROFILE% && " + line] for a in aliases if a]
+
+
+def remote_cli_ready(c):
+    """Owner 18.11 12:28: an agent CLI on another computer, signed in there (like claude_work): installed there, reached over ssh.
+    Cached 10 minutes; never sends a prompt."""
+    key = (str(c.get("ssh")), c.get("bin"))
+    hit = _remote_cli_cache.get(key)
+    if hit and time.time() - hit[1] < 600:
+        return hit[0]
+    ok = False
+    for cmd in _remote_cli_cmds(c, f'where {c.get("bin")}'):
+        try:
+            r = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                               timeout=25, creationflags=NO_WINDOW)
+            ok = r.returncode == 0 and bool((r.stdout or "").strip())
+        except (OSError, subprocess.TimeoutExpired):
+            ok = False
+        if ok:
+            break
+    _remote_cli_cache[key] = (ok, time.time())
+    return ok
+
+
 def cli_ready(p):
     """An agent CLI provider (Gemini CLI, Copilot CLI, Codex...) is installed, and has its key where it needs one."""
     c = p.get("cli") or {}
+    if c.get("ssh"):  # runs on another computer, signed in there: nothing to sign in to here
+        return remote_cli_ready(c)
     if not shutil.which(c.get("bin") or ""):
         return False
     need = c.get("key_env") or {}
@@ -4109,22 +4143,25 @@ def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
     CLI, Codex. It runs in HOME with its own tools; the prompt goes on stdin or as an argument; the answer is read as JSON, a file or text.
     Returns a Claude-shaped result; ProviderDown on a limit / sign-in / connection error so the next AI answers."""
     c = p.get("cli") or {}
-    exe = shutil.which(c.get("bin") or "")
-    if not exe:
+    remote = bool(c.get("ssh"))  # owner 18.11 12:28: the CLI of another computer, with that computer's sign-in (like claude_work)
+    exe = c.get("bin") if remote else shutil.which(c.get("bin") or "")
+    if not exe or (remote and not remote_cli_ready(c)):
         raise ProviderDown(name, "unreachable", 30)
     append = ((append or "") + "\n\n" + HEBREW_RULE).strip()  # owner 14.11: the CLIs never got the Hebrew rule (they leave before it is added)
     pack = "" if getattr(_ctx, "probe", False) else conversation_pack(chat or PRIMARY) + "\n\n---\nההודעה הנוכחית (ענה עליה):\n"
     full = ((append + "\n\n") if append else "") + pack + prompt + HEBREW_TAIL
-    cmd = npm_direct(exe) + list(c.get("args") or [])
+    cmd = ([exe] if remote else npm_direct(exe)) + list(c.get("args") or [])
     m = model or p.get("model")
     if m and c.get("model_flag"):
         cmd += [c["model_flag"], m]
     out_file = None
-    if (c.get("out") or "").startswith("file:"):
+    if (c.get("out") or "").startswith("file:") and not remote:  # remote: the answer comes on stdout (a file there is out of reach)
         out_file = os.path.join(tempfile.gettempdir(), f"cli_{name}_{int(time.time() * 1000)}.txt")
         cmd += [c["out"][5:], out_file]
     stdin_text = None
     how = c.get("prompt") or "stdin"
+    if remote and how.startswith("arg:"):
+        raise RuntimeError(f"{name}: a remote CLI takes the prompt on stdin only (no Hebrew through the remote shell)")
     if how.startswith("arg:"):
         cmd += [how[4:], full[:28000]]  # Windows command line limit
     else:
@@ -4142,11 +4179,28 @@ def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
     if on_stage:
         on_stage(f"🧠 {AI_HE.get(name) or p.get('short') or name} חושב", "")
     t0 = time.time()
-    try:
-        r = subprocess.run(cmd, cwd=HOME, input=stdin_text, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                           timeout=timeout or None, env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(f"{name} did not finish in time")
+    if remote:  # the remote shell is cmd.exe: printable ASCII arguments only; the Hebrew rides on stdin
+        if any(not re.fullmatch(r"[\x20-\x7e]+", x) or '"' in x for x in cmd):
+            raise RuntimeError(f"{name}: an argument a remote shell cannot carry safely")
+        line = " ".join(x if re.fullmatch(r"[\w.:/=@+-]+", x) else f'"{x}"' for x in cmd)
+        r = None
+        for rc in _remote_cli_cmds(c, line):
+            try:
+                r = subprocess.run(rc, input=stdin_text, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                   timeout=timeout or None, creationflags=NO_WINDOW)
+            except subprocess.TimeoutExpired:
+                raise RuntimeError(f"{name} did not finish in time")
+            if r.returncode != 255:  # 255 = ssh did not reach that alias: try the next one
+                break
+        if r is None or r.returncode == 255:
+            _remote_cli_cache.pop((str(c.get("ssh")), c.get("bin")), None)
+            raise ProviderDown(name, "unreachable", 10, raw=((r.stderr if r else "") or "ssh failed")[-300:])
+    else:
+        try:
+            r = subprocess.run(cmd, cwd=HOME, input=stdin_text, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                               timeout=timeout or None, env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"{name} did not finish in time")
     text, err = "", (r.stderr or "") + ("\n" + r.stdout if r.returncode else "")
     o = c.get("out") or "text"
     if o.startswith("json:"):
