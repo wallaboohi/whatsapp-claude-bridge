@@ -230,9 +230,20 @@ def bridge(path, body=None, timeout=180, tok=None):
             return {"success": False, "message": f"HTTP {e.code}"}
 
 
+def rtl(text):
+    """Owner 18.11 22:58, whole bridge: every line of the bridge's own (Hebrew) message starts on the right in WhatsApp. A line whose
+    first letter is Latin or that starts with a command (/3 Gemini) was laid out left-to-right; a right-to-left mark at the start of
+    lines 2.. fixes that. The first line ('🤖 ...') is left as is: the bridge and the queries recognise their messages by it."""
+    if not text or not CFG.get("rtl_lines", True) or not str(text).startswith(CFG["reply_prefix"].strip()) or hebrew_share(text) < 0.3:
+        return text
+    lines = text.split("\n")
+    return "\n".join([lines[0]] + [l if not l.strip() or "\u200f" in l[:3] or l.startswith("```") else "\u200f" + l for l in lines[1:]])
+
+
 def send(recipient, text, media=None, quoted=None, read_aloud_of=None, card_chat=None):
     """Send through the bridge (send policy + pacing apply there). Never retried: a retry could double-send.
     read_aloud_of = the message the owner reacted 🛞 on: the bridge lets that one voice note skip the draft."""
+    text = rtl(text)
     body = {"recipient": recipient, "message": text}
     if media:
         try:  # remember our own voice note: its echo comes back as an "owner voice message" under another id (owner 13.11)
@@ -2497,7 +2508,39 @@ def fuzzy_ai_word(word):
     return table[close[0]] if close else None
 
 
+def _chat_model(chat):
+    return get_override(chat) or kv_get(K("last_model", chat)) or CFG.get("claude_model") or "sonnet"
+
+
+def rename_for_command(chat, label=None):
+    """Owner 18.11 22:58: the group name changes the moment /ספק or /מודל arrives, not after the provider's check answers.
+    label = the word for the new choice; None = the name by the real current state (after the switch, or back after a refusal)."""
+    if not chat or not str(chat).endswith("@g.us"):
+        return None
+    if label:
+        kv_set(K("name_pending", chat), str(time.time()))
+    th = threading.Thread(target=sync_group_name, args=(chat, _chat_model(chat), label, True), daemon=True)
+    th.start()
+    return th
+
+
 def switch_provider(name, model=None, chat=None):
+    """Set the computer provider, or one conversation's provider, if it answers now. The group's name shows the new choice at once
+    and goes back if the switch is refused (owner 18.11 22:58)."""
+    if not chat or not str(chat).endswith("@g.us") or name not in providers():
+        return _switch_provider(name, model, chat)
+    word = (providers()[name].get("short") or name) if name != "claude" else model_he(model if model in MODELS else _chat_model(chat))
+    th = rename_for_command(chat, word)
+    try:
+        return _switch_provider(name, model, chat)
+    finally:
+        if th:
+            th.join(30)
+        kv_set(K("name_pending", chat), "")
+        rename_for_command(chat)
+
+
+def _switch_provider(name, model=None, chat=None):
     """Set the computer provider, or one conversation's provider, if it answers now."""
     ps = providers()
     c = provider_check(name, model)
@@ -2980,7 +3023,7 @@ def _model_lines(ms, num, cap=8):
     out = []
     for i, m in enumerate(ms[:cap], 1):
         d = model_desc(m)
-        out.append(f"{RLM}*/{num} {i}* · {_model_name_he(m)}" + (f" — {d}" if d else ""))
+        out.append(f"{RLM}*/{num} {i}* ← {_model_name_he(m)}" + (f" — {d}" if d else ""))
     if len(ms) > cap:
         out.append(f"{RLM}ועוד {len(ms) - cap}: */{num} {cap + 1}* ומעלה")
     return out
@@ -2991,8 +3034,10 @@ def _provider_head(k, label, active=False, icon="☁️", status="", note=""):
     he = AI_HE.get(k) or label or k
     en = (label or "").split("·")[0].strip()
     en = "" if not en or en == he or k == "auto" else f" · {en}"
-    words = " ".join(provider_switch_words(k)) if k in providers() else f"/{provider_number(k)}"
-    return f"{RLM}{'👉 ' if active else ''}{icon} *{he}*{en} · {words}{status}{note}"
+    alias = [w for w in provider_switch_words(k) if w != f"/{provider_number(k)}"] if k in providers() else []
+    # owner 18.11 22:58: the provider's command first and bold, a clear separator, then its name; other words at the end
+    return (f"{RLM}{'👉 ' if active else ''}*/{provider_number(k)}* ← {icon} *{he}*{en}{status}{note}"
+            + (f" · ({' '.join(alias[:2])})" if alias else ""))
 
 
 def _model_words_line(ms, cap=6):
@@ -3210,18 +3255,49 @@ def owner_command_known(text):
     return (text or "").lstrip("!").lstrip().startswith("/")
 
 
+class Hourglass:
+    """Owner 18.11 22:58, whole bridge: while a message waits for the next step, the reaction on it flips ⏳ ↔ ⌛ every 3 s
+    (config hourglass_seconds), so the eyes see the bridge is alive. stop() waits for a reaction in flight, so the next
+    reaction (🧠, ✅) is never overwritten by a late hourglass. first="" = start after one interval (👀 stays seen first)."""
+    def __init__(self, chat, mid, first="⏳", every=None):
+        self.chat, self.mid, self.every = chat, mid, float(every or CFG.get("hourglass_seconds", 3))
+        self._stop, self._lock = threading.Event(), threading.Lock()
+        if mid and chat and not pc_only():
+            threading.Thread(target=self._loop, args=(first,), daemon=True).start()
+
+    def _loop(self, first):
+        i, delay = (0, 0) if first else (0, self.every)
+        while not self._stop.wait(delay):
+            with self._lock:
+                if self._stop.is_set():
+                    return
+                try:
+                    bridge("/react", {"chat_jid": self.chat, "message_id": self.mid, "sender": "", "emoji": "⏳⌛"[i % 2]}, timeout=10)
+                except Exception as e:
+                    log("hourglass react failed", str(e)[:100])
+            i, delay = i + 1, self.every
+
+    def stop(self):
+        self._stop.set()
+        with self._lock:  # a reaction in flight lands before the caller's next one
+            pass
+
+
 def run_local_command(fn, mid, label=""):
-    """Owner 18.11 22:12, rule for the whole bridge: a local command answers fast and never looks stuck — ⏳ on the
-    message at once, a 'working on it' line if it takes over 4 s, then the answer and ✅."""
-    react(mid, "⏳")
+    """Owner 18.11 22:12 + 22:58, rule for the whole bridge: a local command never looks stuck — 👀 on the message at once,
+    then ⏳ ↔ ⌛ every 3 s while it runs, a 'working on it' line after 1 s (config local_cmd_notice_seconds), then the answer and ✅."""
+    react(mid, "👀")
     chat = getattr(_ctx, "chat", None)
-    slow = threading.Timer(4, lambda: send(chat, f"🤖 _⏳ מבצע את הפקודה {label[:40]}… לא תקוע, התשובה בדרך_") if chat else None)
+    glass = Hourglass(chat, mid, first="")
+    slow = threading.Timer(float(CFG.get("local_cmd_notice_seconds", 1)),
+                           lambda: send(chat, f"🤖 _⏳ מבצע את הפקודה {label[:40]}… לא תקוע, התשובה בדרך_") if chat else None)
     slow.daemon = True
     slow.start()
     try:
         return fn()
     finally:
         slow.cancel()
+        glass.stop()
 
 
 def send_group_notice(chat, text):
@@ -4458,12 +4534,16 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
         threading.Thread(target=watch_stop, daemon=True).start()
     res = {}
     oc = {"text": [], "sid": "", "err": "", "tin": 0, "tout": 0} if eng == "opencode" else None
+    began = False
     try:
         for line in proc.stdout:
             try:
                 ev = json.loads(line)
             except ValueError:
                 continue
+            if on_stage and not began:  # owner 18.11 22:58: the AI answered the bridge: 🧠 replaces the hourglass
+                began = True
+                on_stage("🧠 הבינה חושבת", "")
             if oc is not None:  # OpenCode's events -> the Claude Code shape the rest of the run reads
                 ev = _opencode_event(ev, oc)
                 if not ev:
@@ -5358,7 +5438,7 @@ def group_label(model, chat=None):
     return model_he(model)
 
 
-def sync_group_name(chat, model):
+def sync_group_name(chat, model, label=None, force=False):
     """Owner request 08.11: every connected WhatsApp group shows the model that talks in it ("גשר אופוס ווצאפ").
     Called when a run starts (auto = the model actually working) and every minute (a model chosen in WhatsApp or the
     dashboard). Renames only when the name would change, at most once per 20 s per group. Config group_name_model."""
@@ -5368,6 +5448,9 @@ def sync_group_name(chat, model):
         return
     if not serves_here(chat):
         return  # owner 16.11: only the computer that answers a group names it (the backup laptop renamed the desktop's groups)
+    pend = kv_get(K("name_pending", chat))
+    if not force and pend and time.time() - float(pend) < 120:
+        return  # a /ספק switch is being checked: its name is already up, the minute sync must not flip it back meanwhile
     with _rename_lock:
         try:
             tpl = group_name_template(chat)
@@ -5383,11 +5466,11 @@ def sync_group_name(chat, model):
                     tpl = new
                     kv_set(K("name_tpl", chat), tpl)
                     kv_set(K("name_set_at", chat), "0")
-            want = tpl.replace("{model}", group_label(model, chat))[:100]
+            want = tpl.replace("{model}", label or group_label(model, chat))[:100]
             if kv_get(K("name_set", chat)) == want and (not live or live == want):
                 return  # owner 16.11: a name someone else wrote over ours (the other computer) is put back
             last = kv_get(K("name_set_at", chat))
-            if last and time.time() - float(last) < 20:
+            if last and time.time() - float(last) < 20 and not force:
                 return
             res = bridge("/set_group", {"jid": chat, "name": want}, timeout=30)
             kv_set(K("name_set_at", chat), str(time.time()))
@@ -5437,9 +5520,36 @@ def other_models_text(chat, name):
 
 
 def models_guide(chat=None):
-    _cur_p = active_provider(chat)[0]
-    if _cur_p not in ("claude", "auto") and _cur_p in providers():
-        return other_models_text(chat, _cur_p)
+    """Owner 18.11 22:58: /מודל = the models of THIS conversation's provider only, one line each, its command first (/מודל N)."""
+    _cur_p, _cm = active_provider(chat)
+    p = providers().get(_cur_p) or {}
+    label = AI_HE.get(_cur_p) or p.get("short") or p.get("label") or _cur_p
+    if _cur_p == "auto":
+        return "🔀 *ספק אוטומטי*: הגשר בוחר לבד ספק ומודל לפי מורכבות ההודעה, אין כאן בחירת מודל.\nבחירת ספק: /ספק"
+    if _cur_p in ("claude", "claude_work") or not p:
+        cur = get_override(chat) or "auto"
+        keys = [k for k in MODELS if k != "auto"]
+        lines = [f"🎚️ *המודלים של {label}* · עכשיו: {MODELS.get(cur, {}).get('he', cur)}", ""]
+        for i, k in enumerate(keys, 1):
+            d = model_desc(k)
+            lines.append(f"{'👉 ' if k == cur else ''}*/מודל {i}* ← {_model_name_he(k)}" + (f" — {d}" if d else ""))
+        lines += [f"{'👉 ' if cur == 'auto' else ''}*/מודל אוטו* ← אוטומטי — לפי מורכבות ההודעה", "",
+                  "לשעה אחת: /מודל 3 שעה · החלפת ספק: /ספק"]
+        return "\n".join(lines)
+    c = provider_check(_cur_p)
+    ms = [str(x) for x in (c.get("models") or p.get("models") or []) if x]
+    now = _cm or p.get("model")
+    lines = [f"🎚️ *המודלים של {label}*" + (f" · עכשיו: {_model_name_he(now)}" if now else ""), ""]
+    if not ms:
+        lines.append(f"ל-{label} אין בחירת מודל: הוא מביא מודל משלו.")
+    for i, m in enumerate(ms[:15], 1):
+        d = model_desc(m)
+        lines.append(f"{'👉 ' if m == now else ''}*/מודל {i}* ← {_model_name_he(m)}" + (f" — {d}" if d else ""))
+    lines += ["", "החלפת ספק: /ספק"]
+    return "\n".join(lines)
+
+
+def _models_guide_old(chat=None):
     cur = get_override(chat) or "auto"
     lines = [f"*המודל כרגע: {MODELS[cur]['he']}*", ""]
     for k, m in MODELS.items():
@@ -5528,6 +5638,8 @@ class StatusMsg:
         self.ai_short, self.ai_model, self.ai_location = status_ai_info(model, self.chat)
         self.react_to = react_to if wa and CFG.get("status_reactions", True) else None
         self._reacted, self._react_t = "", 0.0
+        # owner 18.11 22:58: 👀 (the bridge saw it) -> ⏳ ↔ ⌛ every 3 s (on its way) -> 🧠 (the AI works) -> the stage icons
+        self.glass = Hourglass(self.chat, self.react_to, first="") if self.react_to else None
         self.steps, self.tick, self.ended = [], 0, None
         self.hold, self.loop_done = False, threading.Event()  # owner 17.11 15:15: hold = the answer will be merged into this message
         self._save(False)
@@ -5554,6 +5666,10 @@ class StatusMsg:
     def _react_stage(self, st):
         """The stage's icon as a reaction on the owner's message: progress visible right on it (at most every 4 s)."""
         icon = stage_icon(st)
+        if self.glass:  # the first stage = the AI started: the hourglass stops and 🧠 shows at once
+            self.glass.stop()
+            self.glass = None
+            icon, self._react_t = "🧠", 0.0
         if not self.react_to or not icon or icon == self._reacted or time.time() - self._react_t < 4:
             return
         self._reacted, self._react_t = icon, time.time()
@@ -5650,14 +5766,14 @@ class StatusMsg:
             full = self._full(answer)
             if len(full) < 20000:
                 try:
-                    r = bridge("/edit_message", {"jid": self.chat, "id": self.mid, "text": full}, timeout=20)
+                    r = bridge("/edit_message", {"jid": self.chat, "id": self.mid, "text": rtl(full)}, timeout=20)
                     if r.get("success") is not False and not r.get("error"):
                         return True
                     log("status merge refused", r)
                 except Exception as e:
                     log("status merge failed", e)
         try:
-            bridge("/edit_message", {"jid": self.chat, "id": self.mid, "text": self._final()}, timeout=20)
+            bridge("/edit_message", {"jid": self.chat, "id": self.mid, "text": rtl(self._final())}, timeout=20)
         except Exception as e:
             log("status final edit failed", e)
         return False
@@ -5665,7 +5781,7 @@ class StatusMsg:
     def _start(self):
         if self.done.is_set():
             return
-        text = self._text()
+        text = rtl(self._text())
         send(self.chat, text)
         for _ in range(8):
             try:
@@ -5685,7 +5801,7 @@ class StatusMsg:
         # owner 17.11 16:24: every 10 s (config status_edit_seconds, never below 10); every 30 s after the first 30 edits
         while self.mid and not self.done.wait(max(10.0, float(CFG.get("status_edit_seconds", 10))) * (3 if edits >= 30 else 1)):
             self.tick += 1
-            new = self._text()
+            new = rtl(self._text())
             if new != last:
                 try:
                     bridge("/edit_message", {"jid": self.chat, "id": self.mid, "text": new}, timeout=20)
@@ -5696,11 +5812,14 @@ class StatusMsg:
         self.loop_done.set()
         if self.done.is_set() and self.mid and not self.hold:  # leave the final state (owner request 07.11): no delete
             try:
-                bridge("/edit_message", {"jid": self.chat, "id": self.mid, "text": self._final()}, timeout=20)
+                bridge("/edit_message", {"jid": self.chat, "id": self.mid, "text": rtl(self._final())}, timeout=20)
             except Exception as e:
                 log("status final edit failed", e)
 
     def finish(self):
+        if self.glass:
+            self.glass.stop()
+            self.glass = None
         if self.ended is None:
             self.ended = time.time()
         self._save(True)
@@ -5989,6 +6108,17 @@ def owner_command(text, chat=None):
                 f" מתוך {CFG.get('session_max_runs', 60)} (אז מתחלף עם סיכום) · התחיל: {(kv_get(K('session_started', chat)) or '-')[:16]}")
     if not arg:
         return models_guide(chat)
+    if re.fullmatch(r"\d{1,2}(\s+(שעה|hour))?", arg):  # owner 18.11 22:58: /מודל 2 = model 2 of this conversation's provider
+        cur = active_provider(chat)[0]
+        n = int(arg.split()[0])
+        if cur == "auto":
+            return "בספק אוטומטי הגשר בוחר לבד ספק ומודל. לבחירת מודל קבע קודם ספק: /ספק"
+        if cur not in ("claude", "claude_work"):
+            return switch_provider(cur, str(n), chat=cur_chat())
+        keys = [k for k in MODELS if k != "auto"]
+        if not 1 <= n <= len(keys):
+            return f"מספר המודל חייב להיות 1 עד {len(keys)}.\n\n" + models_guide(chat)
+        arg = keys[n - 1] + (" hour" if len(arg.split()) > 1 else "")
     parts = arg.replace("שעה", "hour").split()
     name = {"אוטו": "auto", "אופוס": "opus", "סונט": "sonnet", "הייקו": "haiku", "חייקו": "haiku", "פייבל": "fable"}.get(parts[0], parts[0])  # חייקו: how the owner types it
     if name not in MODELS:
@@ -5998,7 +6128,7 @@ def owner_command(text, chat=None):
         return model_not_in_provider(name, chat)
     set_override(name, hours, chat)
     target = chat or PRIMARY
-    threading.Thread(target=sync_group_name, args=(target, get_override(target) or kv_get(K("last_model", target)) or name),
+    threading.Thread(target=sync_group_name, args=(target, get_override(target) or kv_get(K("last_model", target)) or name, None, True),
                      daemon=True).start()
     return f"✅ המודל הוחלף ל-*{MODELS[name]['he']}*{' לשעה' if hours else ''} ({MODELS[name]['cost']}). חזרה לאוטו: /מודל אוטו"
 
