@@ -6725,7 +6725,9 @@ def tunnel_cmd(peer, ssh="ssh", multi=False):
             "-o", "ServerAliveCountMax=3", "-o", "ConnectTimeout=15",
             "-L", f"{port}:127.0.0.1:8770"] + (["-R", f"{port}:127.0.0.1:8770",
             # owner 13.11: each machine reaches the OTHER machine's Ollama on 127.0.0.1:11435 (the laptop's is the default host)
-            "-L", "11435:127.0.0.1:11434", "-R", "11435:127.0.0.1:11434"] if rev else []) + [str(peer["tunnel"])]
+            "-L", "11435:127.0.0.1:11434", "-R", "11435:127.0.0.1:11434"] if rev else []) + (
+            # owner 18.11 13:06: every PC's Ollama is a local provider for the host - "ollama_port" = that PC's server here
+            ["-L", f"{int(peer['ollama_port'])}:127.0.0.1:11434"] if peer.get("ollama_port") and not rev else []) + [str(peer["tunnel"])]
 
 
 def _kill_old_tunnels():

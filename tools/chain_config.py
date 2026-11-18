@@ -21,8 +21,8 @@ CFG = os.path.join(ROOT, "agent", "config.json")
 # name, ssh alias, dashboard port (each PC reaches a peer's dashboard on 127.0.0.1:<port of that peer>)
 PCS = [
     {"host": "yb-pc-hw", "name": "נייח", "ssh": "ybhw", "port": 8781},
-    {"host": "perroom", "name": "חדר שינה", "ssh": "PERROOM", "port": 8784},
-    {"host": "salon-pc", "name": "סלון", "ssh": "SALON", "port": 8783},
+    {"host": "perroom", "name": "חדר שינה", "ssh": "PERROOM", "port": 8784, "ollama_port": 11437},
+    {"host": "salon-pc", "name": "סלון", "ssh": "SALON", "port": 8783, "ollama_port": 11436},
     {"host": "lap-yakir", "name": "לפטופ", "ssh": "4-MINE", "port": 8782},
 ]
 SESSION = {"חדר שינה": 2, "סלון": 3, "לפטופ": 5}  # minutes between fresh copies of the identity (first backup most often)
@@ -43,6 +43,8 @@ def chain_fields(me):
             e["url"] = "http://127.0.0.1:8781"
         else:
             e["tunnel"] = p["ssh"]
+            if p.get("ollama_port"):
+                e["ollama_port"] = p["ollama_port"]  # that PC's Ollama reachable here on 127.0.0.1:<port> (owner 18.11 13:06)
         if pc["name"] == "לפטופ" and p["name"] == "נייח":
             e["reverse"] = True  # keeps -R 8781 (the desktop reaches the laptop) and the Ollama pair
         peers.append(e)

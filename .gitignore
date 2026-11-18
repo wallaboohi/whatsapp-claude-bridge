@@ -63,3 +63,7 @@ agent/tmp_*
 /date(*
 /messages.db
 .recycle/
+
+# owner 18.11: generated provider checklist (account labels) - copied to all 4 PCs by tools/provider_check_all.py
+agent/home/PROVIDERS-STATUS.*
+agent/provider_registry.*
