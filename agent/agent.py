@@ -1511,13 +1511,29 @@ def provider_probe(name, timeout=90, big=False):
     return res
 
 
-def probe_report(live=True):
-    """The report of /בדוק מענה: for every provider its availability and (live) a real answer, or the fault translated to Hebrew."""
+def probe_report(live=True, progress=None):
+    """The report of /בדוק מענה: for every provider its availability and (live) a real answer, or the fault translated to Hebrew.
+    progress(text): owner 18.11 22:12 — a first line at once (what is checked) and every 30 s who answered / who is still awaited."""
     names = [n for n in provider_order() if n != "auto"]
     if live:
         import concurrent.futures as cf
+        if progress:
+            progress(f"🔎 *בודק מענה מכל {len(names)} הבינות במקביל* (עד דקה וחצי לכל אחת)\n" + " · ".join(prov_short(n) for n in names))
+        done = {}
         with cf.ThreadPoolExecutor(max_workers=6) as ex:
-            results = list(ex.map(provider_probe, names))
+            futs = {ex.submit(provider_probe, n): n for n in names}
+            pending = set(futs)
+            while pending:
+                fin, pending = cf.wait(pending, timeout=30)
+                for f in fin:
+                    try:
+                        done[futs[f]] = f.result()
+                    except Exception as e:
+                        done[futs[f]] = {"available": False, "answered": False, "he": f"תקלה בבדיקה: {e}"[:200], "seconds": 0}
+                if pending and progress:
+                    ok = sum(1 for r in done.values() if r.get("answered") is True)
+                    progress(f"⏳ *עדיין בודק* · ענו {ok} מתוך {len(done)} שהסתיימו\n🕒 *מחכה ל:* " + " · ".join(prov_short(futs[f]) for f in pending))
+        results = [done[n] for n in names]
     else:
         results = []
         for n in names:
@@ -3187,6 +3203,25 @@ def reply(text, quoted=None):
         return
     body = italic(text.strip()) if CFG.get("reply_italic", True) else text.strip()
     send(chat, CFG["reply_prefix"] + body, quoted=quoted)
+
+
+def owner_command_known(text):
+    """A slash command (possibly answered locally); plain text goes straight on to the AI."""
+    return (text or "").lstrip("!").lstrip().startswith("/")
+
+
+def run_local_command(fn, mid, label=""):
+    """Owner 18.11 22:12, rule for the whole bridge: a local command answers fast and never looks stuck — ⏳ on the
+    message at once, a 'working on it' line if it takes over 4 s, then the answer and ✅."""
+    react(mid, "⏳")
+    chat = getattr(_ctx, "chat", None)
+    slow = threading.Timer(4, lambda: send(chat, f"🤖 _⏳ מבצע את הפקודה {label[:40]}… לא תקוע, התשובה בדרך_") if chat else None)
+    slow.daemon = True
+    slow.start()
+    try:
+        return fn()
+    finally:
+        slow.cancel()
 
 
 def send_group_notice(chat, text):
@@ -5111,7 +5146,9 @@ def instant_command(msg_id, text, chat):
     try:
         out = login_code_reply(t)
         if out is None:
-            out = owner_command(t, chat)
+            if not owner_command_known(t):
+                return False
+            out = run_local_command(lambda: owner_command(t, chat), msg_id, t.split()[0] if t.split() else "")
         if out is None:
             return False
         reply(out, quoted=msg_id)
@@ -5811,7 +5848,7 @@ def owner_command(text, chat=None):
     if re.match(r"^/\s*(בדוק\s+זמינות|זמינות)\s*$", text.strip()):
         return engine_status_report(live=False)
     if re.match(r"^/\s*(בדוק\s+מענה|בדיקת\s+בינות|מענה)\s*$", text.strip()):  # owner 16.11: availability + a real answer from every AI
-        return probe_report(live=True)
+        return probe_report(live=True, progress=(lambda m: reply(m)) if getattr(_ctx, "chat", None) else None)
     if re.match(r"^/\s*(רמות|מורכבות|routing)\s*$", text.strip()):  # owner 17.11 07:33: what the automatic model does in every provider
         return routing_report()
     if re.match(r"^/\s*(יומן|יומן בינות|journal)\s*$", text.strip()):  # owner 16.11 21:55: the record of every AI
@@ -6228,8 +6265,8 @@ def run_command(row):
             reply(owner_command(f"/מודל {mm.group(2)}{mm.group(3)}", chat) or "", quoted=mid if src == "wa" else None)
             text = mm.group(4).strip()
         local = login_code_reply(text)
-        if local is None:
-            local = owner_command(text, chat)
+        if local is None and owner_command_known(text):
+            local = run_local_command(lambda: owner_command(text, chat), mid if src == "wa" else None, text.split()[0] if text.split() else "")
         if local is not None:
             reply(local, quoted=mid if src == "wa" else None)
             react(mid, "✅")
