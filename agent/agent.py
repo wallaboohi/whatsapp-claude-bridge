@@ -2513,31 +2513,31 @@ def _chat_model(chat):
 
 
 def rename_for_command(chat, label=None):
-    """Owner 18.11 22:58: the group name changes the moment /ספק or /מודל arrives, not after the provider's check answers.
-    label = the word for the new choice; None = the name by the real current state (after the switch, or back after a refusal)."""
+    """The group name by the real current state, right after a switch that succeeded (owner 18.11 23:16: never in advance)."""
     if not chat or not str(chat).endswith("@g.us"):
         return None
-    if label:
-        kv_set(K("name_pending", chat), str(time.time()))
     th = threading.Thread(target=sync_group_name, args=(chat, _chat_model(chat), label, True), daemon=True)
     th.start()
     return th
 
 
 def switch_provider(name, model=None, chat=None):
-    """Set the computer provider, or one conversation's provider, if it answers now. The group's name shows the new choice at once
-    and goes back if the switch is refused (owner 18.11 22:58)."""
-    if not chat or not str(chat).endswith("@g.us") or name not in providers():
-        return _switch_provider(name, model, chat)
-    word = (providers()[name].get("short") or name) if name != "claude" else model_he(model if model in MODELS else _chat_model(chat))
-    th = rename_for_command(chat, word)
-    try:
-        return _switch_provider(name, model, chat)
-    finally:
-        if th:
-            th.join(30)
-        kv_set(K("name_pending", chat), "")
-        rename_for_command(chat)
+    """Set the computer provider, or one conversation's provider, if it answers now.
+    Owner 18.11 23:16: the group name is NOT changed in advance and never put back. It changes only after the switch
+    succeeded; a refused switch says "המעבר נכשל כי: <reason>" and keeps the last provider/model and the name as they are."""
+    before = active_provider(chat)
+    _ctx.switch_ok = False
+    res = _switch_provider(name, model, chat)
+    if getattr(_ctx, "switch_ok", False):
+        if chat and str(chat).endswith("@g.us"):
+            rename_for_command(chat)
+        return res
+    if name not in providers():
+        return res
+    first, _, rest = str(res).partition("\n\n")
+    why = re.sub(r"\s*לא הוחלף\.?", "", first).strip().lstrip("⚪⛔ ").strip()
+    keep = prov_short(before[0]) + (f" · {before[1]}" if before[1] else "")
+    return f"❌ *המעבר נכשל כי:* {why}\n↩️ נשארתי על: *{keep}* · שם הקבוצה לא שונה" + (f"\n\n{rest}" if rest else "")
 
 
 def _switch_provider(name, model=None, chat=None):
@@ -2572,6 +2572,7 @@ def _switch_provider(name, model=None, chat=None):
     warn = f"\n⚠️ בהודעה האמיתית האחרונה שלו היה כשל ({bad} מתוך {tot})." if bad else ""
     answered = warn + f"\n✅ ענה עכשיו בבדיקה תוך {pr['seconds']:g} שניות, אין צורך לשאול \"זמין?\"." if pr["answered"] else ""
     set_provider(name, model, chat=chat)
+    _ctx.switch_ok = True  # owner 18.11 23:16: only now may the group name change
     _, cm = active_provider(chat)
     scope = "בקבוצה הזו" if chat else "הגשר"
     note_owner_correction(chat, name, model)
