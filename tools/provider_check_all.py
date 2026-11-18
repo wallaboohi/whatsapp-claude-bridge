@@ -75,7 +75,7 @@ def t_gemini():
         return None
     env = dict(os.environ)
     kf = os.path.join(ROOT, "secrets", "gemini.key")
-    if not os.path.exists(os.path.join(HOME, ".gemini", "oauth_creds.json")) and os.path.exists(kf):
+    if os.path.exists(kf):  # like the bridge (05daef0): Google sign-in for the CLI is no longer accepted
         env["GEMINI_API_KEY"] = open(kf, encoding="utf-8").read().strip()
     return _run(c + ["-y", "--skip-trust", "-m", "gemini-flash-lite-latest", "-p", PROMPT], env=env)
 
@@ -124,7 +124,7 @@ def t_ollama():
     small = next((n for n in tags if n.startswith("bridge-qwen3-4b")), None) or next((n for n in tags if "embed" not in n), tags[0])
     t = time.time()
     try:
-        body = json.dumps({"model": small, "prompt": PROMPT, "stream": False, "options": {"num_predict": 8}}).encode()
+        body = json.dumps({"model": small, "prompt": PROMPT, "stream": False, "think": False, "options": {"num_predict": 20}}).encode()
         req = urllib.request.Request("http://127.0.0.1:11434/api/generate", body, {"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=240) as r:
             ans = json.load(r).get("response", "")
