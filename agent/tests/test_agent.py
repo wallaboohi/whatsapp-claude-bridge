@@ -2282,7 +2282,7 @@ def test_every_switch_line_carries_command_and_models(agent):
     rows = "\n".join(mod.ai_status_lines())
     assert "/3 *Gemini*" in rows and "/ג'מיני" in rows
     mod.failover_note("מכסת השימוש נגמרה", "claude", "groq")
-    assert "מעברים בין בינות: 1" in mod.failover_line_he() and "Claude → Groq" in mod.failover_line_he()
+    assert "מעברים בין בינות: 1" in mod.failover_line_he() and f"Claude {mod.claude_account_type()} → Groq" in mod.failover_line_he()
 
 
 def test_classify_down_texts(agent):

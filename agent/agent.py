@@ -822,7 +822,21 @@ def restart_notice_text(chat, reason=""):
     return "\n".join(lines)
 
 
-AI_HE = {"claude": "קלוד", "claude_work": "קלוד עבודה", "codex": "קודקס", "copilot": "קופילוט", "gemini": "גמיני", "gemini_cli": "גמיני CLI", "ollama": "אולמה מקומי",
+def claude_account_type():
+    """Owner 18.11 08:33: 'קלוד פרטי' or 'קלוד עבודה' - which Claude account THIS machine is signed in to, so the owner knows
+    whom he really works on (the desktop runs the private account, the laptop the 4M Team one). Offline: ~/.claude.json
+    oauthAccount.organizationType (claude_team / claude_enterprise = work). config.json "claude_account_type" overrides."""
+    v = (CFG.get("claude_account_type") or "").strip() if isinstance(CFG, dict) else ""
+    if v:
+        return v
+    try:
+        a = json.load(open(os.path.expanduser("~/.claude.json"), encoding="utf-8")).get("oauthAccount") or {}
+        return "עבודה" if (a.get("organizationType") or "") in ("claude_team", "claude_enterprise") else "פרטי"
+    except (OSError, ValueError, AttributeError):
+        return "פרטי"
+
+
+AI_HE = {"claude": "קלוד " + claude_account_type(), "claude_work": "קלוד עבודה", "codex": "קודקס", "copilot": "קופילוט", "gemini": "גמיני", "gemini_cli": "גמיני CLI", "ollama": "אולמה מקומי",
          "groq": "גרוק", "cloudflare": "קלאודפלייר", "nvidia": "אנבידיה", "openrouter_free": "אופןראוטר", "opencode": "אופנקוד"}
 
 
@@ -1006,6 +1020,10 @@ def providers():
         out = json.loads(json.dumps(PROVIDERS_DEFAULT))
     for k, v in (CFG.get("providers") or {}).items():
         out.setdefault(k, {}).update(v)
+    if isinstance(out.get("claude"), dict):  # owner 18.11: the registry names which account this machine's Claude is
+        t = claude_account_type()
+        out["claude"]["short"] = "Claude " + t
+        out["claude"]["label"] = f"Claude {t} · המנוי"
     return out
 
 
