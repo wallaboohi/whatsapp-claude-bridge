@@ -18,10 +18,12 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PEER = "4-MINE"
+import socket
+# owner 18.11: run from either computer — on the laptop the peer is the desktop (it scp'd to itself before)
+PEER = os.environ.get("PEER_SYNC_HOST") or ("ybhw" if socket.gethostname().lower() in ("lap-yakir", "4-mine") else "4-MINE")
 HOME = os.path.expanduser("~").replace("\\", "/")  # the peer uses the same profile layout
 PEER_ROOT = f"{HOME}/whatsapp-mcp"
-MERGE = ["agent/home/bridge_rules.md", "agent/home/dictionary.md", "agent/home/learned.md"]
+MERGE = ["agent/home/bridge_rules.md", "agent/home/dictionary.md", "agent/home/learned.md", "TODO.md"]
 JSON_MERGE = ["agent/config.json", "agent/groups.json"]  # only keys the other side lacks; values never replaced
 SECRET_WORDS = ("key", "token", "secret", "password", "pass")
 # owner 16.11: settings of ONE computer (its role, name, plugins, peers) — copying them made the desktop a backup of itself
