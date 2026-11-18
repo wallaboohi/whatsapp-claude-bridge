@@ -5483,7 +5483,7 @@ def search_messages(q, limit=15):
     for ts, cj, sender, me, content, mark in hits[:limit]:
         user = str(sender or "").split("@")[0]
         who = OWNER if me else (names.get(user) or ("" if user == cj.split("@")[0] else "איש קשר לא מזוהה"))
-        where = chats.get(cj) or names.get(cj.split("@")[0]) or "שיחה לא מזוהה"
+        where = person_name(cj, names, chats)
         when = ts[8:10] + "." + ts[5:7] + " " + ts[11:16] if len(ts) >= 16 else ts
         text = " ".join(str(content).split())
         i = text.lower().find(q.lower())
@@ -7116,6 +7116,15 @@ def failover_cfg():
             "kv_prefixes": ["segd:"], "plugin_dbs": [], "mirror": [], "group": PRIMARY, "conversations": True, **fc}
 
 
+def failover_standby():
+    """Owner 16.11/18.11: a backup PC (config "failover") that does not hold the host's work right now is silent: no morning
+    summary or other owner-facing daily reports from it, the host sends them."""
+    fc = failover_cfg()
+    if not fc:
+        return False
+    return failover_state(fc["for"]).get("state") not in ("active", "releasing")
+
+
 def failover_serves(host):
     """Owner 16.11: the desktop is the host, the laptop only its backup. While the backup holds the peer's work (active, or
     releasing until the hand-back is done) it also answers the conversations whose groups.json host is that peer."""
@@ -8675,7 +8684,7 @@ def push_watch_waiting(now=None):
         kv_set(key, "1")
         if first:
             continue
-        who = names.get(cj.split("@")[0]) or cj.split("@")[0]
+        who = person_name(cj, names)
         push(f"⌛ {who} מחכה לתשובה ממך כבר {int(hours)} שעות", PRIMARY, "waiting")
     important = [str(x).strip() for x in CFG.get("push_important") or [] if str(x).strip()]
     for call_id, caller, at in calls:
@@ -8832,14 +8841,35 @@ def nightly_selftest():
 
 
 def _contact_names():
+    """Owner 09.11/18.11: people are named, never shown as a number or LID. Phone -> contact name, and every LID is mapped
+    to its phone's name (whatsmeow_lid_map), so a LID chat/sender gets the same name."""
     names = {}
     try:
         with sqlite3.connect(f"file:{WA_DB}?mode=ro", uri=True, timeout=10) as w:
             for jid, full, push in w.execute("SELECT their_jid, full_name, push_name FROM whatsmeow_contacts"):
-                names[(jid or "").split("@")[0]] = full or push or ""
+                if full or push:
+                    names[(jid or "").split("@")[0]] = full or push
+            for lid, pn in w.execute("SELECT lid, pn FROM whatsmeow_lid_map"):
+                n = names.get(str(pn or "").split("@")[0])
+                if n and lid:
+                    names.setdefault(str(lid).split("@")[0], n)
     except sqlite3.Error:
         pass
     return names
+
+
+UNKNOWN_CONTACT = "איש קשר לא מזוהה"
+
+
+def person_name(jid, names=None, chat_names=None):
+    """A display name for a chat or sender: a real chat/group name, else the contact (phone or LID), else "unknown contact".
+    A chat "name" that is only digits (the bridge stores the number when it knows no name) is not a name."""
+    j = str(jid or "")
+    n = (chat_names or {}).get(j) or ""
+    if n and not re.fullmatch(r"[+\d\s-]+", n):
+        return n
+    n = (names if names is not None else _contact_names()).get(j.split("@")[0])
+    return n or UNKNOWN_CONTACT
 
 
 def note_reaction(chat_jid, message_id, emoji):
@@ -8904,20 +8934,20 @@ def summary_extract(since, now=None, max_lines=250, per_chat=15):
             if not mtype or mtype == "sticker":
                 continue
             text = f"[{mtype}]"
-        who = OWNER if me else (names.get(str(sender).split("@")[0]) or str(sender).split("@")[0])
+        who = OWNER if me else person_name(sender, names)
         by_chat.setdefault(cj, []).append(f"{str(ts)[11:16]} {who}: {text[:200]}")
     lines = []
     for cj, msgs in sorted(by_chat.items(), key=lambda kv: -len(kv[1])):
         if len(lines) >= max_lines:
             break
-        lines.append(f"## {chat_names.get(cj) or names.get(cj.split('@')[0]) or cj.split('@')[0]}")
+        lines.append(f"## {person_name(cj, names, chat_names)}")
         lines += msgs[-per_chat:][: max_lines - len(lines)]
     last = {}
     for cj, ts, content, me, mtype, mid in recent:
         if cj in skip or (content or "").startswith(prefix):
             continue
         last[cj] = (ts, (content or "").strip() or (f"[{mtype}]" if mtype else ""), me, mid)
-    waiting = [(chat_names.get(cj) or names.get(cj.split("@")[0]) or cj.split("@")[0], str(ts)[11:16], text[:80])
+    waiting = [(person_name(cj, names, chat_names), str(ts)[11:16], text[:80])
                for cj, (ts, text, me, mid) in last.items() if not me and text and not answered_by_reaction(cj, mid, ts)]
     return lines, waiting
 
@@ -8927,7 +8957,7 @@ def follow_ups(since, now=None):
     Returns lines ready for WhatsApp; empty when there is nothing (or the bridge has no such tables yet)."""
     now = now or dt.datetime.now()
     names = _contact_names()
-    who = lambda j: names.get(str(j).split("@")[0]) or str(j).split("@")[0]
+    who = lambda j: person_name(j, names)
     s = since.strftime("%Y-%m-%d %H:%M:%S")
     out = []
     try:
@@ -8966,6 +8996,9 @@ def morning_summary():
     """One short Claude run (light model, no session) summarizing the night's WhatsApp activity + who waits for an answer."""
     if not CFG.get("morning_summary", True):
         return
+    if failover_standby():  # owner 18.11: a backup PC that holds nothing sends no morning summary (the host does)
+        log("morning summary: standby backup, the host sends it")
+        return
     now = dt.datetime.now().astimezone()
     since = (now - dt.timedelta(days=1)).replace(hour=20, minute=0, second=0, microsecond=0)
     lines, waiting = summary_extract(since, now)
@@ -8986,6 +9019,18 @@ def morning_summary():
     if not out and not lines and not waiting:
         return  # a quiet night: nothing to say
     head = "☀️ *סיכום בוקר*" if LANG == "he" else "☀️ *Morning summary*"
+    if not out and lines:  # owner 18.11: no "couldn't summarize" — without an AI, list the active chats by name
+        log("morning summary: no AI answer, plain digest")
+        heads, cur, digest = [], None, []
+        for ln in lines:
+            if ln.startswith("## "):
+                cur = [ln[3:], 0, ""]
+                heads.append(cur)
+            elif cur:
+                cur[1] += 1
+                cur[2] = ln
+        digest = [f"• *{n}* ({c} הודעות) · אחרונה: {last[:90]}" for n, c, last in heads[:12]]
+        out = "*פעילות מאז אמש 20:00:*\n" + "\n".join(digest) + ("\n\n*מחכים לתשובה ממך:*\n" + wait_txt if wait_txt else "")
     body = out or ((("לא הצלחתי לסכם הבוקר." if LANG == "he" else "Couldn't summarize this morning.") if lines else "")
                    + (("\n*מחכים לתשובה ממך:*\n" if LANG == "he" else "\n*Waiting for your reply:*\n") + wait_txt if wait_txt else ""))
     fo = failover_line_he()  # owner 16.11: how many provider switches and between which AIs
@@ -9028,7 +9073,7 @@ def health_report(days=7):
     out.append(f"📤 *שליחות:* {total} · *נכשלו:* {failed}" + (" ⚠️" if failed else ""))
     names = _contact_names()
     for rcp, detail, ts in fails:
-        who = chats.get(rcp) or names.get(str(rcp).split("@")[0]) or "איש קשר לא מזוהה"
+        who = person_name(rcp, names, chats)
         out.append(f"   • {str(ts)[8:10]}.{str(ts)[5:7]} {who}: {str(detail or '')[:60]}")
     with adb() as db:
         rows = db.execute("SELECT chat, SUM(cost), COUNT(*) FROM claude_runs WHERE at >= ? GROUP BY chat ORDER BY 2 DESC",
