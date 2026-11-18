@@ -67,3 +67,9 @@ agent/tmp_*
 # owner 18.11: generated provider checklist (account labels) - copied to all 4 PCs by tools/provider_check_all.py
 agent/home/PROVIDERS-STATUS.*
 agent/provider_registry.*
+
+# watchdog (owner 19.11): per-PC state, notices, roll-back marker, log
+agent/watchdog.json
+agent/watchdog_notice.json*
+agent/watchdog.log
+agent/rollback.hold

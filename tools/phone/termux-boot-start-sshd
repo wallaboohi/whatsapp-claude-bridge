@@ -1,0 +1,4 @@
+#!/data/data/com.termux/files/usr/bin/sh
+termux-wake-lock
+sshd
+nohup sh ~/bin/bridge-phone.sh > /dev/null 2>&1 &

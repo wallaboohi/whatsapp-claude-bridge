@@ -407,6 +407,8 @@ def _rebuild_bridge():
     # owner 15.11 23:23: unsaved bridge edits are saved (commit) and merged with hub, hub changes are pulled, then it builds;
     # what happened goes to REBUILD_NOTES for the daily summary. A failed merge/test stops the build (nothing is overwritten).
     REBUILD_NOTES.clear()
+    if os.path.exists(ROLLBACK_HOLD):
+        return "הבנייה נעצרה: הקוד הוחזר לגרסה קודמת (agent/rollback.hold)"
     _, dirty = _git("status", "--porcelain", "--untracked-files=no")
     if dirty.strip():
         _git("add", "-u")
@@ -576,6 +578,10 @@ def day_sync():
     save the day's code (tracked files, only if the tests pass), pull + push the shared hub, and when the code changed rebuild
     the bridge and restart the agent so tomorrow starts on the newest version. New files are saved too, except secret-like ones."""
     if not CFG.get("day_sync", True):
+        return
+    if os.path.exists(ROLLBACK_HOLD):  # owner 18.11 23:58: the watchdog rolled the code back; nothing is saved or pushed until fixed
+        broadcast_system_notice("🛟 השמירה היומית דולגה: הקוד במחשב הזה הוחזר לגרסה קודמת אחרי שהסוכן לא עלה (agent/rollback.hold). "
+                                "צריך לתקן את הגרסה החדשה ואז למחוק את הקובץ.")
         return
     rc, remotes = _git("remote")
     if rc != 0 or "hub" not in remotes.split():
@@ -1285,7 +1291,7 @@ def _note_answer(name, seconds):
         quota_note(name or "claude")
         if getattr(_ctx, "auto_model_used", None):
             kv_set("auto_pick:" + str(cur_chat() or PRIMARY), json.dumps({"provider": name, "model": _ctx.auto_model_used, "at": dt.datetime.now().isoformat(timespec="seconds")}))
-        ai_state_set(name or "claude", True, seconds=seconds, model=getattr(_ctx, "auto_model_used", None) or getattr(_ctx, "force_model", None) or (providers().get(name or "claude") or {}).get("model") or "")
+        ai_state_set(name or "claude", True, seconds=seconds, model=getattr(_ctx, "auto_model_used", None) or getattr(_ctx, "force_model", None) or getattr(_ctx, "claude_model_sent", None) or (providers().get(name or "claude") or {}).get("model") or "")
     except Exception as e:
         log("note answer failed", e)
 
@@ -4415,6 +4421,8 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
     qwen_env = None
     live = (eng == "claude" and not guest and tools is None and not fork and on_stage is not None and stoppable is not False
             and CFG.get("push_mid_run", True))  # owner 17.11: messages that arrive mid-run are pushed into it, not queued behind it
+    remote_model = None
+    _ctx.claude_model_sent = model if eng == "claude" else None
     if eng == "claude":
         rp = providers().get(getattr(_ctx, "provider_used", None)) or {}
         if rp.get("kind") == "claude-remote" and not guest and tools is None:  # owner 17.11: the same run, on the other computer's Claude account
@@ -4425,6 +4433,7 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
             if append:  # no quoting of long Hebrew text through the remote shell: the rules ride in the prompt
                 prompt = append + "\n\n---\n" + prompt
                 append = None
+            _ctx.claude_model_sent = remote_model = model  # owner 19.11: the run journal recorded "sonnet" for every work-account run (model was cleared here)
             model = None
         else:
             if rp.get("kind") == "claude-remote":  # owner 18.11 21:59: a restricted/guest run of the work account runs HERE, on the personal
@@ -4628,7 +4637,7 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
         cost = run_cost(cum, prev[0] if prev else None)
         db.execute("INSERT INTO claude_runs (at, session, cost, input_tokens, output_tokens, seconds, ok, model, cum, chat) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                    (dt.datetime.now().isoformat(), res.get("session_id"), cost, usage.get("input_tokens", 0),
-                    usage.get("output_tokens", 0), time.time() - t0, 0 if res.get("is_error") else 1, model or CFG.get("claude_model") or "", cum,
+                    usage.get("output_tokens", 0), time.time() - t0, 0 if res.get("is_error") else 1, remote_model or model or CFG.get("claude_model") or "", cum,
                     chat))
     _note_answer(_ctx.provider_used, time.time() - t0)
     return res
@@ -5891,7 +5900,7 @@ def commands_index():
             "*🔎 בדיקות:* /זמינות (זמינות) · /בדוק מענה (תשובה אמיתית מכולן) · /יומן (ציונים לפי ימים) · /רמות (איזה מודל אוטו בוחר) · /מצב <בינה>",
             "*⚙️ שליטה:* /ספק כאן איפוס · /ספק מחשב <שם> · /מנוע · /הפעל מחדש · /סשן חדש · /תקרה (שימוש) · /בריאות · /מחכים",
             "*🖥️ מחשבים וחשבונות:* /חשבונות · /גיבוי (מעבר בין הנייח לנייד) · /גרסה · /🛞 (הקראה)",
-            "*📑 אחר:* /חפש <מלל> · /כלל בסיס <כלל> · /כרום · /תוכן (זה)"]
+            "*📑 אחר:* /חפש <מלל> · /כלל בסיס <כלל> · /כרום · /טלפון (מדליק Tailscale בטלפון) · /תוכן (זה)"]
     return "\n".join(out)
 
 
@@ -6000,6 +6009,8 @@ def owner_command(text, chat=None):
         return usage_report(chat or PRIMARY)
     if re.match(r"^/\s*(כרום|chrome)\s*$", text.strip()):   # owner 10.11: bring the Chrome extension back remotely
         return chrome_start()
+    if re.match(r"^/\s*(טלפון|פלאפון|phone)\s*$", text.strip()):   # owner 18.11 23:58: Tailscale of the phone on, from WhatsApp (ntfy)
+        return phone_up_text()
     m = re.match(r"^\s*/?(כן|אשר|אישור|בטל|לא)\s*$", text.strip())
     if m:  # owner 14.11: the answer to "this will take N minutes, continue?"
         sr = slow_reply(chat or PRIMARY, m.group(1))
@@ -10153,6 +10164,22 @@ def chrome_has_window():
         return True  # unknown: do not open another window
 
 
+def phone_up_text():
+    """Owner 18.11 23:58: /טלפון turns the phone's Tailscale on over ntfy (tools/phone_net.py) and says what happened."""
+    try:
+        sys.path.insert(0, os.path.join(ROOT, "tools"))
+        import phone_net
+        if not phone_net.topic():
+            return "⚠️ אין במחשב הזה את נושא ה-ntfy של הטלפון (secrets/phone_ntfy.topic)."
+        r = phone_net.up(60)
+    except Exception as e:
+        return f"⚠️ לא הצלחתי להדליק את Tailscale בטלפון: {e}"
+    if r.get("state") == "ok":
+        return "📱✅ Tailscale בטלפון " + ("כבר היה דלוק, והטלפון עונה." if r.get("action") == "already_up" else "הודלק דרך ntfy, והטלפון עונה.")
+    return ("📱⚠️ שלחתי בקשה דרך ntfy, " + ("המאזין בטלפון ענה אבל Tailscale לא עלה." if r.get("ack")
+            else "ואין תשובה מהמאזין בטלפון (כבוי, בלי אינטרנט, או ש-Termux נסגר)."))
+
+
 def chrome_start():
     """Starts Chrome in the background (no window; the Claude extension connects inside it). Returns a short status."""
     exe = CFG.get("chrome_exe") or CHROME_EXE
@@ -10244,6 +10271,40 @@ def sms_sync_loop():
         except Exception as e:
             log("sms sync failed", e)
         time.sleep(300)
+
+
+def phone_db_loop():
+    """Owner 18.11 23:58: the phone catalog (contacts, call log, calendar, call recordings -> agent/phone.db; tools/phone_db.py,
+    read-only over adb) every 30 minutes, on the PC that holds the work (a backup in standby does not touch the phone).
+    Config "phone_db": {"enabled": true, "minutes": 30}."""
+    pc = CFG.get("phone_db") or {}
+    if not pc.get("enabled", True) or not os.path.exists(os.path.join(ROOT, "tools", "phone_db.py")):
+        return
+    time.sleep(180)
+    while True:
+        if not failover_standby():
+            for args, tmo in ((["sync"], 600), (["recordings", "--transcribe", "3"], 3600)):
+                try:
+                    subprocess.run([sys.executable, "-I", "-X", "utf8", os.path.join(ROOT, "tools", "phone_db.py"), *args],
+                                   capture_output=True, timeout=tmo, creationflags=NO_WINDOW, cwd=ROOT)
+                except Exception as e:
+                    log("phone_db", args[0], "failed", e)
+        time.sleep(60 * int(pc.get("minutes", 30)))
+
+
+WATCHDOG_NOTICE = os.path.join(HERE, "watchdog_notice.json")
+ROLLBACK_HOLD = os.path.join(HERE, "rollback.hold")
+
+
+def report_watchdog_notice():
+    """Owner 18.11 23:58: tools/watchdog.py rolled the bridge or the code back after 20 minutes down: tell the owner once."""
+    try:
+        items = json.load(open(WATCHDOG_NOTICE, encoding="utf-8"))
+        os.replace(WATCHDOG_NOTICE, WATCHDOG_NOTICE + ".seen")
+    except (OSError, ValueError):
+        return
+    if items:
+        broadcast_system_notice("\n".join(f"{i.get('text', '')} ({str(i.get('at', ''))[11:16]})" for i in items))
 
 
 def _adb_tell(text):
@@ -10397,6 +10458,7 @@ if __name__ == "__main__":
         os.remove(RESTART_FILE)
     threading.Thread(target=report_restart, daemon=True).start()
     threading.Thread(target=report_auto_update, daemon=True).start()
+    threading.Thread(target=lambda: (wait_bridge(300), report_watchdog_notice()), daemon=True).start()  # owner 18.11 23:58
     try:
         cut = mark_interrupted()  # synchronous, before the dispatcher can mark anything 'running'
         if cut:
@@ -10413,7 +10475,7 @@ if __name__ == "__main__":
         failover_resume()  # backup machine still holding another machine's plugins
     except Exception:
         log("failover resume failed", traceback.format_exc())
-    for target in [worker, slow_worker, command_worker, scheduler, event_listener, watchdog, tunnel_keeper, peer_watch, local_health_watch, push_loop, keep_awake, chrome_keeper, adb_keeper, sms_sync_loop] + list(_threads):
+    for target in [worker, slow_worker, command_worker, scheduler, event_listener, watchdog, tunnel_keeper, peer_watch, local_health_watch, push_loop, keep_awake, chrome_keeper, adb_keeper, sms_sync_loop, phone_db_loop] + list(_threads):
         threading.Thread(target=target, daemon=True).start()
     if _defer:
         threading.Thread(target=deferred_plugins, daemon=True).start()

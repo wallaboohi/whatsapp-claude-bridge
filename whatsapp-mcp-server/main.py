@@ -308,6 +308,49 @@ def sms_show(sms_id: int) -> Dict[str, Any]:
     return _sms("show", str(int(sms_id)))
 
 
+def _phone(*args: str) -> Any:
+    """Owner 19.11: phone-data catalog (local copy, agent/phone.db) through tools/phone_db.py - read-only commands only."""
+    import json, os, subprocess, sys
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    r = subprocess.run([sys.executable, "-I", "-X", "utf8", os.path.join(root, "tools", "phone_db.py"), *args],
+                       capture_output=True, text=True, encoding="utf-8", timeout=120)
+    if r.returncode != 0:
+        return {"error": (r.stderr or r.stdout)[-300:]}
+    return json.loads(r.stdout)
+
+
+@mcp.tool()
+def phone_who(query: str) -> Dict[str, Any]:
+    """Everything known about a person: phone-contact name, WhatsApp name/push name, owner's nickname, last calls,
+    WhatsApp chat activity. query = name, phone, LID or '#id' (from phone_index). Tell the owner names, not numbers."""
+    return _phone("who", query)
+
+
+@mcp.tool()
+def phone_calls(limit: int = 30, who: Optional[str] = None) -> Dict[str, Any]:
+    """The phone's call log (newest first): time, in/out/missed, duration, caller name. Optional who = name/phone/'#id'."""
+    return _phone("calls", str(limit), *(["--who", who] if who else []))
+
+
+@mcp.tool()
+def phone_events(date_from: Optional[str] = None, date_to: Optional[str] = None) -> Dict[str, Any]:
+    """Calendar events from the phone (YYYY-MM-DD; default: today to +30 days), recurring events expanded."""
+    return _phone("events", *(["--from", date_from] if date_from else []), *(["--to", date_to] if date_to else []))
+
+
+@mcp.tool()
+def phone_search(query: str, limit: int = 20) -> Dict[str, Any]:
+    """Full-text search in the phone catalog: people (all their names), contacts' emails/company, calendar events,
+    call-recording transcripts."""
+    return _phone("search", query, "--limit", str(limit))
+
+
+@mcp.tool()
+def phone_index(limit: int = 50) -> Dict[str, Any]:
+    """Table of contents of people: one row per person (calls, WhatsApp messages, last contact), newest contact first."""
+    return _phone("index", str(limit))
+
+
 @mcp.tool()
 def list_transcripts(query: Optional[str] = None, chat_jid: Optional[str] = None, limit: int = 20) -> List[Dict[str, Any]]:
     """Transcripts of voice notes (made locally by the agent). Optional text filter and chat filter."""
@@ -421,6 +464,7 @@ def phone_tools_index() -> Dict[str, List[str]]:
     return {
         "whatsapp": ["list_chats", "list_messages", "search_all", "get_message_context", "send_message (draft)", "send_file", "get_group_info", "react_to_message", "download_media"],
         "sms": ["sms_index", "sms_search", "sms_show", "sms_send.py (draft+approval)"],
-        "phone": ["phone_status", "phone_screenshot", "phone_notifications", "phone_call_log", "phone_apps", "tools/phone_sync.py (files)"],
+        "phone": ["phone_status", "phone_screenshot", "phone_notifications", "phone_call_log", "phone_apps", "tools/phone_sync.py (files)",
+                  "phone_who", "phone_calls (names)", "phone_events", "phone_search", "phone_index", "tools/phone_db.py (catalog)"],
         "data": ["list_transcripts", "list_polls", "list_drafts"],
     }

@@ -2086,7 +2086,7 @@ def test_provider_layer(agent, monkeypatch):
     mod.kv_set("limit_until", (mod.dt.datetime.now() + mod.dt.timedelta(hours=5)).isoformat(timespec="seconds"))
     assert mod.limit_until()
     monkeypatch.setattr(mod, "provider_check", lambda n, *a: {"ok": n != "groq", "detail": "x", "models": ["bridge-qwen3-4b", "qwen3:4b-instruct"]})
-    assert "לא הוחלף" in mod.owner_command("/ספק groq", mod.PRIMARY)
+    assert "המעבר נכשל כי" in mod.owner_command("/ספק groq", mod.PRIMARY)  # owner 18.11 23:16 wording
     assert "לא נמצא" in mod.owner_command("/ספק ollama nosuch", mod.PRIMARY)
     assert "✅" in mod.owner_command("/ספק מחשב אולמה qwen3:4b-instruct", mod.PRIMARY)
     assert mod.active_provider() == ("ollama", "qwen3:4b-instruct") and mod.limit_until() is None, "no subscription limit on Ollama"
@@ -2667,7 +2667,7 @@ def test_switch_reports_which_models_failed_and_which_answers(agent, monkeypatch
                                                               "tried": [("a", "הספק מגביל קצב כרגע")]})
     got = []
     monkeypatch.setattr(mod, "set_provider", lambda n, m, chat=None: got.append(m))
-    monkeypatch.setattr(mod, "active_provider", lambda chat=None: ("gemini", got[-1]))
+    monkeypatch.setattr(mod, "active_provider", lambda chat=None: ("gemini", got[-1] if got else None))
     monkeypatch.setattr(mod, "provider_probe", lambda n, timeout=90, big=False: {"answered": True, "seconds": 2.0, "he": ""})
     out = mod.switch_provider("gemini")
     assert got == ["b"] and "❌ a: הספק מגביל קצב כרגע" in out and "✅ b: עונה עכשיו" in out
@@ -2684,7 +2684,7 @@ def test_switch_to_an_ai_that_does_not_answer_is_refused_with_the_reason(agent, 
     monkeypatch.setattr(mod, "provider_probe", lambda n, timeout=90, big=False: {"answered": False, "seconds": 3, "he": "מגבלת קצב (קוד 429)"})
     monkeypatch.setattr(mod, "ai_status_lines", lambda skip=(): ["☁️ /1 Claude"])
     out = mod.switch_provider("groq")
-    assert not got and "לא הוחלף" in out and "קוד 429" in out and "/1 Claude" in out
+    assert not got and "המעבר נכשל כי" in out and "קוד 429" in out and "/1 Claude" in out
 
 
 def test_one_slow_peer_answer_is_not_an_outage(agent, monkeypatch):
@@ -2791,7 +2791,7 @@ def test_model_words_work_as_direct_commands_and_short_model_names_and_big_probe
     monkeypatch.setattr(mod, "provider_check", lambda n, *a: {"ok": True, "detail": "", "models": ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]})
     sets = []
     monkeypatch.setattr(mod, "set_provider", lambda n, m, chat=None: sets.append(m))
-    monkeypatch.setattr(mod, "active_provider", lambda chat=None: ("groq", sets[-1]))
+    monkeypatch.setattr(mod, "active_provider", lambda chat=None: ("groq", sets[-1] if sets else None))
     monkeypatch.setattr(mod, "provider_probe", lambda n, timeout=90, big=False: {"answered": True, "seconds": 1, "he": ""})
     mod.switch_provider("groq", "gpt-oss-20b")
     assert sets == ["openai/gpt-oss-20b"]
@@ -2844,7 +2844,7 @@ def test_every_model_in_the_list_says_what_it_is_for(agent):
     assert "מהיר וזול" in mod.model_desc("haiku") and "קוד" in mod.model_desc("@cf/qwen/qwen2.5-coder-32b-instruct")
     assert mod.model_desc("some-unknown-model-x") == ""
     t = mod.providers_text()
-    assert "*/1 1* · הייקו — " in t.replace("\u200f", "") and "*/1 2* · סונט — " in t.replace("\u200f", "")
+    assert "*/1 1* ← הייקו — " in t.replace("\u200f", "") and "*/1 2* ← סונט — " in t.replace("\u200f", "")
 
 
 def test_a_restarting_agent_is_not_an_outage_while_its_computer_answers(agent, monkeypatch):

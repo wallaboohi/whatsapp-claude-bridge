@@ -119,4 +119,4 @@ def test_model_menu_on_another_ai_shows_its_own_models_not_claudes(agent, monkey
     mod, _ = agent
     monkeypatch.setattr(mod, "active_provider", lambda chat=None: ("groq", "openai/gpt-oss-120b"))
     out = mod.models_guide(mod.PRIMARY)
-    assert "Groq" in out and "לא חלים עליה" in out and "Haiku" not in out and "/ ומספר" in out
+    assert "גרוק" in out and "*/מודל 1*" in out and "Haiku" not in out and "הייקו" not in out  # owner 18.11 22:58: its own models, numbered

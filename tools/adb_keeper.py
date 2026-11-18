@@ -85,6 +85,14 @@ def heal():
         if st == "unauthorized":
             return {"state": "unauthorized", "device": DEVICE}
     if not _open(PORT, 3) and not any(_open(p, 3) for p in (80, 443)) and not _ping():
+        try:  # owner 19.11: Tailscale off on the phone -> turn it on over ntfy (tools/phone_net.py), then try again
+            import phone_net
+            if phone_net.topic() and phone_net.up(60).get("state") == "ok":
+                if _connect(DEVICE) == "device":
+                    return {"state": "ok", "device": DEVICE, "action": "tailscale_on"}
+        except Exception:
+            pass
+    if not _open(PORT, 3) and not any(_open(p, 3) for p in (80, 443)) and not _ping():
         return {"state": "unreachable", "device": DEVICE}
     ports = _scan()
     unauthorized = False
