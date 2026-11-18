@@ -5265,7 +5265,8 @@ def name_prefix():
 
 def _name_words(name):
     pre = name_prefix()
-    shorts = {str((p or {}).get("short") or "").strip().lower() for k, p in providers().items() if k != "claude"} - {""}  # Ollama, Groq, Gemini ... are model words too
+    shorts = {" ".join(str((p or {}).get("short") or "").replace("·", " ").split()).lower() for k, p in providers().items() if k != "claude"} - {""}  # Ollama, Groq, Gemini ... are model words too
+    # the "·" goes from the shorts too: "Claude app · נייח" never matched the name, and the name grew every minute (18.11)
     name = name.replace("·", " ")
     for s in sorted((s for s in shorts if " " in s), key=len, reverse=True):  # a two-word short ("OpenRouter חינמי", 14.11) is removed whole, else the name grew every minute
         name = re.sub(r"(?<!\S)" + r"\s+".join(map(re.escape, s.split())) + r"(?!\S)", " ", name, flags=re.I)
@@ -5322,7 +5323,9 @@ def sync_group_name(chat, model):
             if not tpl:
                 return
             live = live_names().get(chat) or ""
-            if live and name_core(live) != name_core(tpl):  # the owner renamed the group in WhatsApp: learn the new name
+            # the owner renamed the group in WhatsApp: learn the new name. The name we wrote ourselves is never "the owner's"
+            # (18.11: our own name learned back as a template doubled the provider words every minute)
+            if live and live != kv_get(K("name_set", chat)) and name_core(live) != name_core(tpl):
                 new = template_after_first_word(live)
                 if new:
                     log("group renamed by owner:", chat, repr(live), "template", repr(tpl), "->", repr(new))
@@ -8073,8 +8076,11 @@ def session_take(why):
         _put_db(os.path.join(STORE, "whatsapp.db"), f.read(), keep_own=True)
     msgs = os.path.join(SESSION_COPY, "messages.db")
     if os.path.exists(msgs):
-        with open(msgs, "rb") as f:
-            _put_db(os.path.join(STORE, "messages.db"), f.read(), keep_own=True)
+        try:  # history only: the waiting bridge here holds messages.db open (WinError 32), and that aborted the whole
+            with open(msgs, "rb") as f:  # take-over on the salon PC 18.11 18:07 — the bridge never connected
+                _put_db(os.path.join(STORE, "messages.db"), f.read(), keep_own=True)
+        except Exception:
+            log("session take: message history not copied (the identity is):", traceback.format_exc())
     kv_set("session_taken_at", dt.datetime.now().isoformat(timespec="seconds"))
     lease_grant(why)
     meta = session_copy_meta()
