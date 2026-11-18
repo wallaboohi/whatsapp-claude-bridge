@@ -412,7 +412,7 @@
     "-o",
     "json",
     "-p",
-    "ענה על הבקשה שבקלט."
+    "Answer the request given in the input, in Hebrew."
    ],
    "model_flag": "-m",
    "prompt": "stdin",
