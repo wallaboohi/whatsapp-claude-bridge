@@ -813,7 +813,7 @@ def restart_notice_text(chat, reason=""):
         except Exception:
             model = CFG.get("claude_model")
     lines = [f"🤖 ✅ *עליתי מחדש*", f"🕐 *שעה:* {dt.datetime.now():%H:%M}",
-             f"🖥️ *מחשב:* {CFG.get('host_label') or socket.gethostname()}",
+             f"🖥️ *מחשב:* {pc_he(CFG.get('host_label') or socket.gethostname())}",
              f"🧠 *ספק:* {short}"]
     if model:
         try:
@@ -2758,7 +2758,7 @@ def accounts_text():
     p = providers().get(name) or {}
     kind, _ = where_of(name, pm or p.get("model"))
     lines = ["*🔑 חשבונות ובינות בכל מחשב*", "",
-             f"🖥️ *{CFG.get('host_label') or socket.gethostname()}* (זה): 🔑 {claude_account() or 'לא ידוע'} · 🧠 {'🏠' if kind == 'local' else '☁️'} {p.get('short') or name} · {model_he(pm or p.get('model') or '')}"]
+             f"🖥️ *{pc_he(CFG.get('host_label') or socket.gethostname())}* (זה): 🔑 {claude_account() or 'לא ידוע'} · 🧠 {'🏠' if kind == 'local' else '☁️'} {p.get('short') or name} · {model_he(pm or p.get('model') or '')}"]
     for pr in CFG.get("peers") or []:
         nm = pr.get("name") or peer_alias(pr) or "?"
         b = peer_fetch(pr, timeout=10)
@@ -2768,7 +2768,7 @@ def accounts_text():
         ai = b.get("ai") or {}
         c = ai.get("claude") or {}
         acct = (c["email"] + (f" ({c.get('plan')}" + (f", {c.get('org')}" if c.get("org") else "") + ")" if c.get("plan") else "")) if c.get("email") else "לא ידוע (המחשב עוד לא עודכן)"
-        lines.append(f"💻 *{b.get('host_label') or b.get('machine') or nm}*: 🔑 {acct} · 🧠 {'🏠' if ai.get('where') == 'local' else '☁️'} {ai.get('short', '—')} · {ai.get('model', '')}")
+        lines.append(f"💻 *{pc_he(b.get('host_label') or b.get('machine') or nm)}*: 🔑 {acct} · 🧠 {'🏠' if ai.get('where') == 'local' else '☁️'} {ai.get('short', '—')} · {ai.get('model', '')}")
     lines += ["", "להחלפה: במפת המערכת בלוח (🗺️), בכל מחשב: 'החלף ספק' ו'החלף חשבון Claude'."]
     return "\n".join(lines)
 
@@ -4749,9 +4749,18 @@ def cap_lifted(chat, text=""):
     return (text or "").lstrip().startswith("!") or (kv_get(K("override_until", chat)) or "") > dt.datetime.now().isoformat(timespec="seconds")
 
 
+def pc_he(name):
+    """Owner 18.11: computers are always shown by their Hebrew names (display only; routing keeps the host name)."""
+    key = re.sub(r"[^a-z0-9]", "", str(name or "").lower())
+    names = {"ybpchw": "מחשב יקיר נייח", "ybhw": "מחשב יקיר נייח", "perroom": "מחשב חדר נייח",
+             "salonpc": "מחשב סלון נייח", "salon": "מחשב סלון נייח",
+             "lapyakir": "מחשב עבודה נייד", "4mine": "מחשב עבודה נייד"}
+    return names.get(key, name)
+
+
 def machine_tag():
     """Owner 09.11: which computer is working, at the start of every status message (config host_label, else host name)."""
-    return "🖥️ " + (CFG.get("host_label") or socket.gethostname())
+    return "🖥️ " + pc_he(CFG.get("host_label") or socket.gethostname())
 
 
 def status_ai_info(model, chat, use_run_state=False):

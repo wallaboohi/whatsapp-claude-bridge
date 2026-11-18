@@ -952,7 +952,9 @@ def test_status_hourglass_flips(agent):
     b = st._text()
     st.finish()
     assert "\u23f3" in a and "\u231b" in b, "the hourglass alternates on every edit"
-    host = mod.CFG.get("host_label") or mod.socket.gethostname()
+    host = mod.pc_he(mod.CFG.get("host_label") or mod.socket.gethostname())  # owner 18.11: Hebrew PC names
+    assert mod.pc_he("YB-PC-HW") == "מחשב יקיר נייח" and mod.pc_he("PERROOM") == "מחשב חדר נייח"
+    assert mod.pc_he("salon-pc") == "מחשב סלון נייח" and mod.pc_he("lap-yakir") == "מחשב עבודה נייד"
     # owner 15.11/17.11: header line, then the computer is the first detail line
     assert host in a.split(chr(10))[1] and host in st._final().split(chr(10))[1], "the computer is named first"
     assert a.index("🧠") < a.index("📩 התקבלה הודעה") and "📩 התקבלה הודעה" in a
