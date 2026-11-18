@@ -1572,6 +1572,17 @@ def test_failover_resume_after_restart_and_holds(agent, tmp_path, monkeypatch):
     assert mod.plugin_holds() == [], "a hold for another machine"
     (hold / "hold-y.json").write_text(json.dumps({"for": "לפטופ", "host": me}), encoding="utf-8")
     assert mod.plugin_holds() == ["לפטופ"]
+    # owner 18.11: the holder's agent died after taking over (heartbeat old) -> its hold is stale and ignored
+    import sqlite3
+    pdb = sqlite3.connect(peer_root / "agent" / "agent.db")
+    pdb.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)")
+    pdb.execute("INSERT OR REPLACE INTO kv VALUES ('heartbeat', ?)", ((mod.dt.datetime.now() - mod.dt.timedelta(hours=5)).isoformat(),))
+    pdb.commit()
+    assert mod.plugin_holds() == [], "a dead holder holds nothing"
+    pdb.execute("INSERT OR REPLACE INTO kv VALUES ('heartbeat', ?)", (mod.dt.datetime.now().isoformat(),))
+    pdb.commit()
+    pdb.close()
+    assert mod.plugin_holds() == ["לפטופ"], "a live holder still holds"
     monkeypatch.setattr(mod, "_remote_python", lambda *a, **k: (255, "", "ssh: connect timed out"))
     assert mod.plugin_holds() is None, "peer unreachable = unknown"
 

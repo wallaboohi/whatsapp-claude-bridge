@@ -7292,7 +7292,15 @@ def _fo_return_files(fc):
                     out[f.replace("\\", "/")] = base64.b64encode(fh.read()).decode()
     return out
 
-FO_HOLDS = r'''import glob
+FO_HOLDS = r'''import glob, sqlite3
+hb = ""
+try:  # the holder's agent heartbeat: a hold left by a dead agent must not keep the plugins away (owner 18.11)
+    _db = sqlite3.connect("file:" + C["root"] + "/agent/agent.db?mode=ro", uri=True, timeout=10)
+    hb = (_db.execute("SELECT v FROM kv WHERE k = 'heartbeat'").fetchone() or [""])[0] or ""
+    _db.close()
+except Exception:
+    pass
+print("@@HB@@" + hb)
 for f in glob.glob(C["root"] + "/agent/failover/hold-*.json"):
     print("@@H@@" + open(f, encoding="utf-8").read().replace("\n", " "))
 print("@@OK@@")
@@ -7634,6 +7642,18 @@ def plugin_holds():
         if rc or "@@OK@@" not in out:
             unknown = True
             continue
+        hb = next((ln[6:].strip() for ln in out.splitlines() if ln.startswith("@@HB@@")), None)
+        if hb:  # no heartbeat readable (no database, old peer): the hold is honoured as before
+            try:
+                age = (dt.datetime.now() - dt.datetime.fromisoformat(hb)).total_seconds()
+            except ValueError:
+                age = 0
+            # owner 18.11: the laptop's agent died at 00:04 right after taking over; its hold file stayed and the desktop
+            # restarted again and again (00:09-00:44) without answering. A holder whose agent is not alive holds nothing.
+            if age > 60 * int(CFG.get("hold_stale_minutes", 10)):
+                if any(ln.startswith("@@H@@") for ln in out.splitlines()):
+                    log("plugin hold ignored:", peer.get("name") or peer_alias(peer), "agent not alive since", hb)
+                continue
         for ln in out.splitlines():
             if ln.startswith("@@H@@"):
                 try:
