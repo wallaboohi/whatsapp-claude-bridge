@@ -9230,7 +9230,8 @@ def chrome_keeper():
                 msg = chrome_start()
                 log("chrome keeper:", msg, "(was down)" if was_down else "(no extension process)")
                 # owner 18.11: tell only when Chrome really was down, and at most once an hour (no repeated notices)
-                if was_down and time.time() - getattr(chrome_keeper, "_last_told", 0) > 3600:
+                # owner 18.11 08:15: a standby backup PC (laptop) fixes Chrome silently; only the host tells the group
+                if was_down and not failover_standby() and time.time() - getattr(chrome_keeper, "_last_told", 0) > 3600:
                     chrome_keeper._last_told = time.time()
                     _ctx.chat = PRIMARY
                     try:
