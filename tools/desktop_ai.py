@@ -32,7 +32,7 @@ APPS = {  # key -> (window title regex, Start-menu name regex used to launch it;
     "copilot": (r"^Copilot$", r"^Copilot$"),  # exact: "GitHub Copilot" is another app (lap 18.11: it was picked as Copilot)
     "grok": (r"Grok", r"^Grok"),
     "github_copilot": (r"GitHub Copilot", r"^GitHub Copilot$"),
-    "codex": (r"^Codex", r"^Codex"),
+    "codex": (r"^(Codex|ChatGPT)$", r"^Codex"),  # desktop 19.11: the Codex app (OpenAI.Codex package) is the window titled ChatGPT
     "jan": (r"^Jan$", r"^Jan$"),
     "lmstudio": (r"LM Studio", r"^LM Studio$"),
 }
@@ -70,11 +70,109 @@ def find_window(key):
     rx = re.compile(APPS[key][0], re.I)
     for w in ua.GetRootControl().GetChildren():
         try:
-            if w.ControlTypeName == "WindowControl" and rx.search(_clean(w.Name)):
-                return w
+            # LM Studio's top-level window is a PaneControl (desktop 19.11: "the window was not found")
+            if w.ControlTypeName in ("WindowControl", "PaneControl") and w.ClassName not in ("Shell_TrayWnd", "Progman")                     and rx.search(_clean(w.Name)):
+                return wake_a11y(w)
         except Exception:
             continue
     return None
+
+
+def wake_a11y(w):
+    """Chromium / WebView2 apps (Grok, Copilot, LM Studio) build their page's accessibility tree only when an assistive client asks
+    for it: an empty DocumentControl until then (desktop 18.11). Ask each renderer window for its IAccessible (what a screen reader
+    does), which turns the tree on for that window; then give it a moment to fill."""
+    import ctypes
+    from ctypes import wintypes
+    u = ctypes.windll.user32
+    found = []
+    cb_t = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    def cb(h, _l):
+        buf = ctypes.create_unicode_buffer(128)
+        u.GetClassNameW(h, buf, 128)
+        if buf.value in ("Chrome_RenderWidgetHostHWND", "Chrome_WidgetWin_0", "Chrome_WidgetWin_1", "Intermediate D3D Window"):
+            found.append(h)
+        return True
+    try:
+        u.EnumChildWindows(w.NativeWindowHandle, cb_t(cb), 0)
+    except Exception:
+        return w
+    if not found:
+        return w
+    try:
+        oleacc = ctypes.windll.oleacc
+
+        class GUID(ctypes.Structure):
+            _fields_ = [("a", ctypes.c_ulong), ("b", ctypes.c_ushort), ("c", ctypes.c_ushort), ("d", ctypes.c_ubyte * 8)]
+        iid = GUID(0x618736E0, 0x3C3D, 0x11CF, (ctypes.c_ubyte * 8)(0x81, 0x0C, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71))  # IID_IAccessible
+        for h in found:
+            for oid in (1, -4, -25):  # WM_GETOBJECT: Chromium's custom id, OBJID_CLIENT, UiaRootObjectId (each one turns it on)
+                u.SendMessageTimeoutW(h, 0x003D, 0, ctypes.c_long(oid), 2, 1000, None)
+            obj = ctypes.c_void_p()
+            oleacc.AccessibleObjectFromWindow(h, ctypes.c_long(-4), ctypes.byref(iid), ctypes.byref(obj))  # OBJID_CLIENT
+    except Exception:
+        pass
+    if not getattr(wake_a11y, "_slept", False):
+        time.sleep(5)
+        wake_a11y._slept = True
+    return w
+
+
+A11Y_FLAG = "--force-renderer-accessibility"
+
+
+def page_empty(w, limit=400):
+    """True when the window shows no page content to UI Automation (no text, no input box): the web page's tree is off."""
+    n = 0
+    for c, _d in _walk(w):
+        n += 1
+        if n > limit:
+            return False
+        try:
+            if c.ControlTypeName in ("EditControl", "TextControl", "HyperlinkControl", "ListItemControl"):
+                return False
+        except Exception:
+            pass
+    return True
+
+
+def _exe_of(pid):
+    import ctypes
+    k = ctypes.windll.kernel32
+    h = k.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return ""
+    try:
+        buf, n = ctypes.create_unicode_buffer(1024), ctypes.c_ulong(1024)
+        return buf.value if k.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(n)) else ""
+    finally:
+        k.CloseHandle(h)
+
+
+def relaunch_a11y(key, w):
+    """Electron / WebView2 apps that ignored the screen-reader request (desktop 19.11: Grok Bot, Copilot) start once more with
+    Chromium's --force-renderer-accessibility (WebView2: the same flag through WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS). Never while
+    the owner has the window in front (he may be typing in it). Returns the new window or None."""
+    import ctypes
+    if ctypes.windll.user32.GetForegroundWindow() == w.NativeWindowHandle:
+        relaunch_a11y.why = "החלון בחזית (יקיר אולי עובד בו)"
+        return None
+    exe = _exe_of(w.ProcessId)
+    if not exe or "WindowsApps" in exe or not os.path.exists(exe):
+        relaunch_a11y.why = f"אי אפשר להפעיל עם דגל: {exe or 'לא נמצא קובץ ההפעלה'}"
+        return None  # a Store package cannot be started with extra arguments
+    subprocess.run(["taskkill", "/im", os.path.basename(exe), "/t", "/f"], capture_output=True, creationflags=NO_WINDOW)
+    time.sleep(2)
+    env = dict(os.environ, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=A11Y_FLAG)
+    subprocess.Popen([exe, A11Y_FLAG], env=env, cwd=os.path.dirname(exe), creationflags=NO_WINDOW)
+    for _ in range(40):
+        time.sleep(1)
+        nw = find_window(key)
+        if nw and not page_empty(nw):
+            time.sleep(3)
+            return nw
+    return find_window(key)
 
 
 def window_text(w, limit=4000):
@@ -191,6 +289,8 @@ def cmd_ask(key, question, timeout):
         time.sleep(4)
     if not w:
         return out(ok=False, app=key, error="החלון של האפליקציה לא נמצא (לא מותקנת או לא נפתחה)")
+    # not relaunch_a11y here (desktop 19.11): even started with the flag, Grok Bot and Copilot kept an empty page tree, and every
+    # question would close the owner's app for nothing
     box = input_box(w)
     if not box:
         return out(ok=False, app=key, error="לא נמצאה תיבת ההקלדה בחלון")
@@ -327,6 +427,11 @@ def main(argv):
         return via_task([a for a in argv if a != "--via-task"])
     if argv and argv[0] == "tree":
         return cmd_tree(argv[1].lower())
+    if argv and argv[0] == "wake" and len(argv) >= 2:  # (test) start the app again with its page tree on
+        w = find_window(argv[1].lower())
+        nw = w and (relaunch_a11y(argv[1].lower(), w) if page_empty(w) else w)
+        return out(ok=bool(nw) and not page_empty(nw), app=argv[1], relaunched=bool(w) and nw is not w,
+                   why=getattr(relaunch_a11y, "why", ""))
     if argv and argv[0] == "windows":
         return cmd_windows()
     if argv and argv[0] == "has" and len(argv) >= 2:
