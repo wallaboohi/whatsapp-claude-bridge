@@ -18,6 +18,7 @@ import datetime as dt
 import importlib.util
 import wa_format  # WhatsApp formatting tools (owner 17.11)
 import emoji_icons  # 🔥 = emoji icons in the owner's own message (owner 18.11)
+import asks  # owner 19.11 21:14: what the owner raised and is not yet in the code
 import json
 import re
 import os
@@ -1211,6 +1212,14 @@ REJECT_RE = re.compile(r"(?i)((api error|http|status|code)\D{0,10}\b400\b|\b400 
 LOGIN_RE = re.compile(r"(?i)(oauth (session|token) expired|failed to authenticate|please run /login|not logged in|run the '?/login'? command|"
                       r"COPILOT_GITHUB_TOKEN|gh auth login|not signed in)")  # owner 19.11: Copilot's "run the /login command" was "an unknown error"
 ERROR_ANSWER_RE = re.compile(r"(?is)^\s*(API Error\b|Failed to authenticate|Error:|HTTP Error)")
+# Owner 19.11 21:14 ("error 22" in every provider, handled by the bridge, not provider by provider): faults of the bridge's own
+# plumbing — the pipe to the provider's process (stdin closed / invalid, [Errno 22] / [Errno 32], Windows pipe errors) or the ssh
+# hop to another computer dropping mid-handshake. The provider did nothing wrong: the bridge repeats the same run itself, never
+# cools the provider, never counts it as the provider's failure and never calls it "no quota" / "no connection".
+BRIDGE_FAULT_RE = re.compile(r"(?i)(errno (22|32|9)\b|\binvalid argument\b|broken pipe|the pipe (has been ended|is being closed)|"
+                             r"winerror (6|109|232|233)\b|kex_exchange_identification|ssh_exchange_identification|banner exchange|"
+                             r"connection reset by peer|connection closed by (remote host|[\w.:-]+ port \d+)|mux_client|control ?socket|"
+                             r"provider process ended before reading)")
 
 
 class ProviderDown(Exception):
@@ -1236,6 +1245,8 @@ def classify_down(text):
         return "key", 120
     if DOWN_RE.search(text):
         return "unreachable", 5
+    if BRIDGE_FAULT_RE.search(text):  # after every real provider reason: a quota text next to a broken pipe is still the quota
+        return "bridge", 0
     if REJECT_RE.search(text):
         return "rejected", 30
     return None
@@ -1250,6 +1261,7 @@ ERROR_HE = {
     "unreachable": ("אי אפשר להתחבר לספק: הוא לא עונה, או שאין חיבור לרשת", "מדלג עליו 5 דקות ועובר לבינה הבאה בסולם", "לבדוק חיבור לאינטרנט"),
     "rejected": ("הספק קיבל את הבקשה ודחה אותה כי הפורמט שלה לא מתאים לו (שגיאה 400). זו תקלה בגשר או בשרת התרגום ולא משהו שעשית", "מדלג עליו חצי שעה ועובר לבינה הבאה בסולם", "לספר לי כאן שזה קרה, כדי שאתקן את ההתאמה לספק הזה"),
     "login": ("ההתחברות של Claude בחשבון של המחשב הזה פגה ולא התחדשה", "אין בינה ש-Claude יכול להשיב בשמה עד שתתחבר מחדש; הגשר עובר לבינה אחרת אם יש", "להתחבר מחדש ל-Claude במחשב הזה (הפקודה /login)"),
+    "bridge": ("תקלה בצד הגשר: החיבור הפנימי שלו לבינה (צינור הקלט או ה-ssh למחשב השני) נקטע. הבינה עצמה תקינה ולא נגמרה לה מכסה", "ניסה שוב בעצמו עם אותה בינה, ולא סימן אותה כתקולה", "לשלוח שוב את ההודעה; אם חוזר, לספר לי"),
 }
 
 
@@ -1562,6 +1574,22 @@ def _probe_remote_claude(p, timeout=60):
 
 
 def provider_probe(name, timeout=90, big=False):
+    """provider_probe_once; owner 19.11 21:14: a bridge-side fault (broken pipe, ssh hop) is retried by the bridge itself and
+    never recorded as the provider's failure."""
+    for i in range(BRIDGE_RETRIES + 1):
+        res = _provider_probe_once(name, timeout, big)
+        if res.get("reason") != "bridge":
+            return res
+        bridge_fault_note(name, res.get("raw") or "probe", retried=i < BRIDGE_RETRIES)
+        _remote_claude_cache.clear()
+        _remote_cli_cache.clear()
+        time.sleep(2 * (i + 1))
+    res["he"] = "תקלה בצד הגשר (החיבור הפנימי לבינה), לא בבינה עצמה"
+    res["answered"] = None
+    return res
+
+
+def _provider_probe_once(name, timeout=90, big=False):
     """Owner 16.11: availability (no quota) and a real answer for one provider, through the bridge's own paths. Returns
     {"name","available","avail_detail","answered" (True / False / None = not testable),"seconds","reason","he" (Hebrew line for a fault),"raw"}."""
     p = providers().get(name) or {}
@@ -1606,7 +1634,7 @@ def provider_probe(name, timeout=90, big=False):
     if res["answered"] is False:
         res["reason"] = (classify_down(raw) or ("", 0))[0]
         res["he"] = error_line_he(raw, name)
-    if res["answered"] is not None:
+    if res["answered"] is not None and res["reason"] != "bridge":
         ai_state_set(name, res["answered"], res["reason"] or "error", raw, seconds=res["seconds"], model=p.get("model") or "", src="probe")
     return res
 
@@ -1887,7 +1915,8 @@ def down_why_he(e):
     if isinstance(e, AuthError):
         return "המפתח או החיבור נדחו"
     why = str(getattr(e, "why", "") or "")
-    return {"billing": "אין יתרה", "rate": "נגמרה המכסה או עומס", "quota": "נגמרה המכסה", "key": "המפתח נדחה", "unreachable": "אין חיבור", "error": "לא החזיר תשובה"}.get(why, why or "תקלה")
+    return {"billing": "אין יתרה", "rate": "נגמרה המכסה או עומס", "quota": "נגמרה המכסה", "key": "המפתח נדחה", "unreachable": "אין חיבור", "error": "לא החזיר תשובה",
+            "bridge": "תקלה בצד הגשר, לא בבינה"}.get(why, why or "תקלה")
 
 
 def local_last_resort(tried=()):
@@ -1930,20 +1959,77 @@ def auto_pick(skip=(), light=False):
     return sorted(scored)[0][2]
 
 
+BRIDGE_RETRIES = 2
+
+
+def bridge_fault(e):
+    """The bridge-side fault in a failed run ('' when the provider itself failed): see BRIDGE_FAULT_RE."""
+    if isinstance(e, ProviderDown) and e.why == "bridge":
+        return e.raw or "bridge"
+    if isinstance(e, ProviderDown) and e.why not in ("unreachable", "error"):
+        return ""  # the provider gave a real reason (quota, key, rate...)
+    m = BRIDGE_FAULT_RE.search(" ".join((str(e), getattr(e, "raw", "") or "")))
+    return m.group(0) if m else ""
+
+
+def bridge_fault_note(name, fault, retried=True):
+    """Owner 19.11 21:14: every bridge-side fault is counted per day and provider (shown in /תקלות גשר and the morning summary),
+    so a recurring one is fixed at its root instead of being blamed on the provider."""
+    log("bridge-side fault (not the provider):", name, fault[:160], "| retrying" if retried else "| gave up after retries")
+    try:
+        key = "bridge_faults:" + dt.date.today().isoformat()
+        d = json.loads(kv_get(key) or "{}")
+        r = d.setdefault(name or "?", {"n": 0, "last": "", "at": ""})
+        r["n"] = int(r.get("n", 0)) + 1
+        r["last"], r["at"] = fault[:200], dt.datetime.now().isoformat(timespec="seconds")
+        kv_set(key, json.dumps(d, ensure_ascii=False))
+    except Exception as ex:
+        log("bridge fault note failed", ex)
+
+
+def bridge_faults_text(days=2):
+    """Hebrew summary of the bridge-side faults of the last days ('' when none)."""
+    out = []
+    for i in range(days):
+        day = dt.date.today() - dt.timedelta(days=i)
+        try:
+            d = json.loads(kv_get("bridge_faults:" + day.isoformat()) or "{}")
+        except ValueError:
+            d = {}
+        for name, r in sorted(d.items(), key=lambda x: -int(x[1].get("n", 0))):
+            out.append(f"• {day:%d.%m} {prov_short(name)}: {r.get('n', 0)} פעמים, אחרונה {str(r.get('at', ''))[11:16]} (`{str(r.get('last', ''))[:80]}`)")
+    return ("🔧 *תקלות בצד הגשר (לא של הבינות), הגשר ניסה שוב לבד:*\n" + "\n".join(out)) if out else ""
+
+
 def _run_auto(*a, **k):
     """_run_claude; with provider "auto", a limit / billing / key / connection error moves on to the next provider of the ladder. Owner 14.11:
     when Claude's own quota is used up (whatever provider is set) the run moves to the failover target (a free provider, on the engine chosen
     for that case) instead of stopping the bridge."""
     tried = []
+    retries = 0
     try:
         while True:
             try:
                 return _run_claude(*a, **k)
-            except (ProviderDown, LimitHit, AuthError) as e:
-                if not _failover_step(e, tried):
-                    raise
-            except RuntimeError as e:  # owner 14.11: a hosted AI / engine that returns nothing (crash, empty answer) is a failed provider too
-                if str(e).startswith("closed:"):
+            except (ProviderDown, LimitHit, AuthError, RuntimeError) as e:
+                closed = isinstance(e, RuntimeError) and str(e).startswith("closed:")
+                fault = "" if closed or isinstance(e, (LimitHit, AuthError)) else bridge_fault(e)
+                used = getattr(_ctx, "provider_used", None) or active_provider()[0]
+                if fault:  # owner 19.11 21:14: a fault of the bridge's own pipe / ssh hop: the same provider again, nothing cooled
+                    bridge_fault_note(used, fault, retried=retries < BRIDGE_RETRIES)
+                    if retries < BRIDGE_RETRIES and not stop_wanted(k.get("chat")):
+                        retries += 1
+                        _remote_claude_cache.clear()
+                        _remote_cli_cache.clear()
+                        time.sleep(2 * retries)
+                        continue
+                    raise ProviderDown(used, "bridge", 0, raw=(getattr(e, "raw", "") or str(e))[-400:]) from None
+                if isinstance(e, (ProviderDown, LimitHit, AuthError)):
+                    if not _failover_step(e, tried):
+                        raise
+                    continue
+                # owner 14.11: a hosted AI / engine that returns nothing (crash, empty answer) is a failed provider too
+                if closed:
                     raise  # owner 19.11: closed from outside / stopped — never moved to another provider
                 used = getattr(_ctx, "provider_used", None)
                 if not used or used == "claude" and not getattr(_ctx, "force_provider", None):
@@ -1965,7 +2051,7 @@ def _run_auto(*a, **k):
 MONTHS_EN = {m: i + 1 for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"))}
 REASON_SHORT_HE = {"quota": "מכסת השימוש נגמרה", "rate": "מגבלת קצב או עומס אצל הספק", "billing": "אין יתרה או בעיית חיוב",
                    "key": "המפתח או ההתחברות נדחו", "unreachable": "אין חיבור לספק", "rejected": "הספק דחה את הבקשה (פורמט)",
-                   "login": "ההתחברות פגה", "error": "לא החזיר תשובה"}
+                   "login": "ההתחברות פגה", "error": "לא החזיר תשובה", "bridge": "תקלה בצד הגשר (החיבור הפנימי), לא בבינה"}
 
 
 def retry_hint_he(raw):
@@ -2166,6 +2252,11 @@ def ai_down_text(name, why, raw="", reason=""):
     reason = reason or (classify_down(raw or "") or ("", 0))[0]
     code = error_code(raw)
     why_he = REASON_SHORT_HE.get(reason) or why
+    if reason == "bridge":  # owner 19.11 21:14: the bridge's own plumbing, told as such — never "no quota" / "not available"
+        detail = next((l.strip() for l in reversed((raw or "").splitlines()) if l.strip()), "")[:160]
+        return (f"🔧 *תקלה בצד הגשר, לא ב-{prov_short(name)}:* החיבור הפנימי של הגשר לבינה נקטע. ניסיתי שוב {BRIDGE_RETRIES} פעמים "
+                "עם אותה בינה ולא עברתי לאחרת. הבינה עצמה תקינה ולא סומנה כתקולה.\nשלח שוב את ההודעה."
+                + (f"\n_פרטים טכניים: `{detail}`_" if detail else ""))
     # owner 19.11 08:49: "ספק זה לא זמין מהסיבה: … / למעבר, בינות פעילות הם: …" — the reason the provider (or ssh) itself gave
     head = f"⚠️ *{prov_short(name)}* לא זמין מהסיבה: {why_he}" + (f" (קוד {code}: {CODE_HE[code]})" if code in CODE_HE else f" (קוד {code})" if code else "")
     hint = retry_hint_he(raw)
@@ -2207,6 +2298,8 @@ def _cool_after(name, e):
         mins = max(1, int((until - dt.datetime.now()).total_seconds() // 60)) if until else reset_minutes(raw, 15)
         auto_cool(name, min(mins, 60 * 24 * 7), "quota")
     elif isinstance(e, ProviderDown):
+        if e.why == "bridge":
+            return  # owner 19.11 21:14: the bridge's own plumbing failed, the provider is not cooled
         if e.why in ("unreachable", "error") and getattr(_ctx, "run_seconds", 0) >= 45:
             soft_cool(name, 10, e.why)  # slow is not dead
         else:
@@ -4636,7 +4729,8 @@ def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
                     break
             if r is None or r.returncode == 255:
                 _remote_cli_cache.pop((str(c.get("ssh")), c.get("bin")), None)
-                raise ProviderDown(name, "unreachable", 10, raw=((r.stderr if r else "") or "ssh failed")[-300:])
+                _raw = ((r.stderr if r else "") or "ssh failed")[-300:]
+                raise ProviderDown(name, "bridge" if BRIDGE_FAULT_RE.search(_raw) else "unreachable", 0 if BRIDGE_FAULT_RE.search(_raw) else 10, raw=_raw)
         else:
             proc = None
             try:
@@ -5041,8 +5135,12 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
     _pu = getattr(_ctx, "provider_used", None) or eng
     if not res or res.get("is_error"):  # owner 19.11: every failed run leaves its real reason in the log, not just a label
         log("provider run failed", _pu, "exit", proc.returncode, "|", (result or errtext or str(stdin_err or "")).strip()[-400:])
+    if not res and stdin_err is not None and (classify_down(errtext) or ("bridge",))[0] == "bridge":
+        # owner 19.11 21:14: the pipe to the provider broke ([Errno 22] / [Errno 32]) and its own output gives no other reason
+        raise ProviderDown(_pu, "bridge", 0, raw=f"stdin: {stdin_err} | {errtext.strip()[-200:]}")
     if not res and (providers().get(_pu) or {}).get("kind") == "claude-remote" and proc.returncode == 255:
-        raise ProviderDown(_pu, "unreachable", 3, raw="ssh: " + (errtext.strip()[-300:] or "החיבור למחשב נכשל"))
+        raise ProviderDown(_pu, "bridge" if BRIDGE_FAULT_RE.search(errtext) else "unreachable", 0 if BRIDGE_FAULT_RE.search(errtext) else 3,
+                           raw="ssh: " + (errtext.strip()[-300:] or "החיבור למחשב נכשל"))
     if not res or res.get("is_error") or len(result) < 300:  # a real answer may talk about limits; only short / error results count
         reset = parse_limit(result + "\n" + errtext)
         if reset:
@@ -6729,6 +6827,13 @@ def owner_command(text, chat=None):
         return commands_index()
     if re.match(r"^/(מחכים|waiting)\s*$", text.strip()):
         return waiting_now()
+    m = re.match(r"^/\s*(פתוחים|נושאים פתוחים|asks)(?:\s+(סגור|בטל|פתח)\s+#?(\d+))?\s*$", text.strip())
+    if m:  # owner 19.11 21:14: what he raised and is not yet in the code
+        if m.group(2):
+            st = {"סגור": "done", "בטל": "not", "פתח": "open"}[m.group(2)]
+            ok = asks.close(int(m.group(3)), st, note="יקיר" if st != "open" else "", path=AGENT_DB)
+            return f"✅ נושא #{m.group(3)}: {asks.STATUS_HE[st]}" if ok else f"לא מצאתי נושא #{m.group(3)}."
+        return asks.report(chat if chat and chat != PRIMARY else None, path=AGENT_DB)
     if re.match(r"^/\s*(בריאות|health)\s*$", text.strip()):
         return health_report()
     m = re.match(r"^/\s*(חפש|search)(?:\s+(.*))?$", text.strip(), re.S)
@@ -7233,6 +7338,17 @@ def run_command(row):
         hints = None if guest else dictionary_hints(body)
         if hints:
             prompt += "\n\n" + hints
+        if not guest and not getattr(_ctx, "automation_cmd", False):  # owner 19.11 21:14: every request is kept until it is done
+            try:
+                ask_id = asks.record(chat, mid, when, raw_text(body), path=AGENT_DB)
+                asks.sync_commits(path=AGENT_DB)
+                block = asks.prompt_block(chat, path=AGENT_DB, skip_id=ask_id)
+                if ask_id:
+                    prompt += f"\n\n(ההודעה הזו נשמרה כנושא פתוח #{ask_id}; כשתסיים אותה סגור אותו כמתואר למטה.)"
+                if block:
+                    prompt += "\n\n" + block
+            except Exception as e:
+                log("owner asks failed", e)
         if not guest:  # owner 17.11 07:54: learned preferences + the order to record a new correction
             for extra in (learned_hints(), correction_prompt(raw_text(body))):
                 if extra:
@@ -7268,7 +7384,8 @@ def run_command(row):
             wait_for_limit(cid, chat, mid, src, e.until, mid_run=True)
             return
         except AIDown as e:
-            ai_state_set(e.name, False, e.reason or (classify_down(e.raw or "") or ("error", 0))[0], e.raw)
+            if (e.reason or (classify_down(e.raw or "") or ("error", 0))[0]) != "bridge":  # owner 19.11 21:14: a bridge-side fault is not the AI's
+                ai_state_set(e.name, False, e.reason or (classify_down(e.raw or "") or ("error", 0))[0], e.raw)
             reply(ai_down_text(e.name, e.why, e.raw, e.reason), quoted=mid if src == "wa" else None)
             react(mid, "⚠️")
             return
@@ -12054,6 +12171,14 @@ def morning_summary():
     body = out or ((("לא הצלחתי לסכם הבוקר." if LANG == "he" else "Couldn't summarize this morning.") if lines else "")
                    + (("\n*מחכים לתשובה ממך:*\n" if LANG == "he" else "\n*Waiting for your reply:*\n") + wait_txt if wait_txt else ""))
     fo = failover_line_he()  # owner 16.11: how many provider switches and between which AIs
+    try:  # owner 19.11 21:14: what he raised and is still open, and the bridge-side faults the bridge retried by itself
+        asks.sync_commits(path=AGENT_DB)
+        stale = [r for r in asks.open_asks(path=AGENT_DB) if r[1] <= (dt.datetime.now() - dt.timedelta(hours=12)).isoformat(sep=" ")]
+        extra = [f"📌 *{len(stale)} נושאים שהעלית עדיין לא מומשו* (מעל 12 שעות). הרשימה: /פתוחים"] if stale else []
+        bf = bridge_faults_text(1)
+        fo = "\n\n".join(x for x in [fo] + extra + [bf] if x)
+    except Exception as e:
+        log("morning asks failed", e)
     _ctx.chat = PRIMARY
     try:
         reply(f"{head}\n{body.strip()}" + (f"\n\n{fo}" if fo else ""))
