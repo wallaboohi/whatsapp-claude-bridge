@@ -3162,3 +3162,20 @@ def test_session_bootstrap_copies_history_for_a_fresh_backup(agent, monkeypatch)
     monkeypatch.setattr(agent, "session_pull", pull)
     agent.session_bootstrap()
     assert asked == ["נייח"] and os.path.exists(agent.MSG_DB)
+
+
+def test_a_pending_restart_holds_new_work_only_for_a_short_grace(agent, monkeypatch):
+    """Owner 19.11 07:39: a restart waiting for a long run in another group froze every conversation for 70 minutes."""
+    agent, _ = agent
+    clock = [1000.0]
+    monkeypatch.setattr(agent.time, "time", lambda: clock[0])
+    monkeypatch.setattr(agent, "restart_wanted", lambda: "בדיקה")
+    agent.CFG["restart_grace_sec"] = 120
+    agent._restart_seen["at"] = 0.0
+    assert agent.restart_blocks()
+    clock[0] += 119
+    assert agent.restart_blocks()
+    clock[0] += 2
+    assert not agent.restart_blocks()  # past the grace: new messages are answered again
+    monkeypatch.setattr(agent, "restart_wanted", lambda: None)
+    assert not agent.restart_blocks() and agent._restart_seen["at"] == 0.0

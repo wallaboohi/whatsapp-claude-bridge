@@ -6868,10 +6868,26 @@ def restart_wanted():
     return None
 
 
+_restart_seen = {"at": 0.0}
+
+
+def restart_blocks():
+    """True while a requested restart may hold back NEW work: only for a short grace (restart_grace_sec, default 120).
+    Owner 19.11 07:39: a restart asked at 06:46 waited for a 2.7-hour run in another group, and every conversation froze
+    for 70 minutes ("בתור לפניה" grew, nothing answered). After the grace new messages are answered again; the restart
+    happens at the first moment no answer is running."""
+    if not restart_wanted():
+        _restart_seen["at"] = 0.0
+        return False
+    if not _restart_seen["at"]:
+        _restart_seen["at"] = time.time()
+    return time.time() - _restart_seen["at"] < float(CFG.get("restart_grace_sec", 120))
+
+
 def conversation_worker(chat):
     """Answers one conversation's commands in order; other conversations run in parallel in their own workers."""
     try:
-        while not restart_wanted():
+        while not restart_blocks():
             row = claim_next(chat)
             if not row:
                 break
@@ -6927,7 +6943,7 @@ def command_worker():
                         except OSError:
                             pass
                     restart_now(reason)
-            else:
+            if not restart_blocks():
                 release_limit_waiters()
                 release_budget_waiters()
                 with adb() as db:
