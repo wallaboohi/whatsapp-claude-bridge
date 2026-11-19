@@ -6526,15 +6526,9 @@ class StatusMsg:
         prefix = CFG["reply_prefix"]
         if self.tick % 2 and prefix.strip() == "🤖":
             prefix = prefix.replace("🤖", "🦾")  # the robot "moves" too while working (owner request 08.11)
-        st, _, det = self.stage.partition(" · ")
-        lines = [f"{icon} בעבודה · ⏱ {self._elapsed()}"] + self._detail_lines() + [f"🔹 *פעולה:* {st}"]
-        if det:
-            lines.append(f"📎 *פרט:* {det}")
-        if len(self.steps) >= 2:  # owner 17.11 16:24: two process lines: the previous step (with its duration) and the current one
-            p, c = self.steps[-2], self.steps[-1]
-            lines.append(f"↩️ *קודם:* {p['text']} · {self._fmt(c['ts'] - p['ts'])}")
-        lines.append(f"🪜 *שלבים עד כה:* {len(self.steps)}")
-        lines.append("📝 *תשובה:* ⏳ בהכנה")  # owner 19.11: the answer is a parameter of the status message, filled in at its end
+        st = self.stage.partition(" · ")[0]
+        # Owner 19.11: keep live updates short; the full process belongs in the final status.
+        lines = [f"{icon} בעבודה · ⏱ {self._elapsed()}"] + self._detail_lines() + [f"🧵 {stage_icon(st) or '▫️'} {st}"]
         return prefix + italic("\n".join(lines))
 
     def _final(self):
