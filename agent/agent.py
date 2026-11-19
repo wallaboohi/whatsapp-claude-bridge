@@ -4846,7 +4846,11 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
     # owner 19.11 08:35 + 08:49 ("4 צודק"): no switching between providers by itself, only by his command (config auto_switch_provider)
     _ctx.no_failover = not auto_switch_on() or (interactive and chosen != "auto" and not getattr(_ctx, "automation_cmd", False))
     lu = limit_until()
-    if lu and chosen == "claude" and auto_switch_on() and CFG.get("account_balance", True) and provider_ready("claude_work") and (account_pct("claude_work") or 100) < 100:
+    # owner 19.11 09:35: the balance switch must not bypass the "owner's own message never moves to another AI" rule
+    # (no_failover), and a real failover target (14.11) takes precedence over moving to the other Claude account.
+    ft = failover_target() if lu and not _ctx.no_failover else None
+    if (lu and not _ctx.no_failover and not ft and chosen == "claude" and auto_switch_on() and CFG.get("account_balance", True)
+            and provider_ready("claude_work") and (account_pct("claude_work") or 100) < 100):
         lu = None  # owner 17.11: the personal account is out, the work account takes over (provider_env)
     if lu and _ctx.no_failover:
         if chosen == "claude" and not interactive:
@@ -4856,7 +4860,7 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
             raise AIDown("claude", f"נגמרה המכסה עד {lu:%H:%M}")
         lu = None  # another AI is chosen here: Claude's quota does not matter
     if lu:
-        tgt = failover_target()
+        tgt = ft or failover_target()
         if tgt:  # owner 14.11: the quota is used up, the bridge goes on with the failover target
             _ctx.force_engine, _ctx.force_provider = tgt
             _ctx.failover_used = True
