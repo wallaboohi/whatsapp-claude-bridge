@@ -3635,8 +3635,7 @@ def _detail_of(name, inp):
     if name in ("Grep", "Glob"):
         return str(inp.get("pattern", ""))[:30]
     if name in ("Bash", "PowerShell"):
-        c = re.sub(r"\s+", " ", str(inp.get("description") or inp.get("command") or "")).strip()
-        return c[:48] + ("…" if len(c) > 48 else "")
+        return ""  # owner 19.11: the action is shown in Hebrew only (the stage text); a raw command / English description is not
     if name == "WebFetch":
         return re.sub(r"^https?://([^/]+).*$", r"\1", str(inp.get("url", "")))
     if name == "WebSearch":
@@ -5582,7 +5581,7 @@ def group_name_template(chat):
     return tpl
 
 
-_MODEL_WORDS = {"קלאוד", "{model}", *MODEL_HE.values()}
+_MODEL_WORDS = {"קלאוד", "אין", "{model}", *MODEL_HE.values()}
 _COMPUTER_PREFIXES = {"LP", "LAP", "HW", "SL", "PR", "SA", "PE"}  # owner 19.11: SL = living room, PR = bedroom (a backup's prefix stayed in the name after the hand-back). owner 16.11: LAP = laptop (LP is the old form), HW = desktop; a prefix of the other computer is never part of the name
 
 
@@ -5638,6 +5637,8 @@ def group_label(model, chat=None):
             name = auto_pick() or "claude"
     if name != "claude":
         return (providers().get(name) or {}).get("short") or name
+    if not CFG.get("claude_enabled", True):
+        return "אין"  # owner 19.11: no provider in the bridge now -> "אין" instead of the previous provider's name
     return model_he(model)
 
 
@@ -5921,6 +5922,7 @@ class StatusMsg:
             p, c = self.steps[-2], self.steps[-1]
             lines.append(f"↩️ *קודם:* {p['text']} · {self._fmt(c['ts'] - p['ts'])}")
         lines.append(f"🪜 *שלבים עד כה:* {len(self.steps)}")
+        lines.append("📝 *תשובה:* ⏳ בהכנה")  # owner 19.11: the answer is a parameter of the status message, filled in at its end
         return prefix + italic("\n".join(lines))
 
     def _final(self):
@@ -5954,7 +5956,7 @@ class StatusMsg:
 
     def _full(self, answer):
         a = answer.strip()
-        return self._final() + "\n\n" + (italic(a) if CFG.get("reply_italic", True) else a)
+        return self._final() + "\n\n📝 *תשובה:*\n" + (italic(a) if CFG.get("reply_italic", True) else a)
 
     def finalize(self, answer=None):
         """Owner 17.11 15:15 (third request): ONE message for the whole exchange. The status message gets its last edit with the
