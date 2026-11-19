@@ -7006,9 +7006,10 @@ def fire_is_ours(chat, mid, within=1200):
 
 
 def fire_ai(prompt):
-    """The cheap model picks emoji for the words the table does not know (config fire_icons_ai, default on). Daily caps apply;
-    no answer = the table result alone."""
-    if not CFG.get("fire_icons_ai", True):
+    """The cheap model picks emoji for the words the table does not know (config fire_icons_ai, default OFF). Daily caps apply;
+    no answer = the table result alone. Owner 19.11 11:10: 🔥 is the bridge's own work only (word table, matching, edit), fast,
+    never waiting for the current provider's run."""
+    if not CFG.get("fire_icons_ai", False):
         return ""
     return claude(prompt, model=CFG.get("light_model") or "haiku", session=False, timeout=90, chat=PRIMARY, tools="",
                   budget_check=True) or ""
