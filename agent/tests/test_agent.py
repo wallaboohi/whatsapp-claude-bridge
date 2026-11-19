@@ -3180,3 +3180,17 @@ def test_a_pending_restart_holds_new_work_only_for_a_short_grace(agent, monkeypa
     assert not agent.restart_blocks()  # past the grace: new messages are answered again
     monkeypatch.setattr(agent, "restart_wanted", lambda: None)
     assert not agent.restart_blocks() and agent._restart_seen["at"] == 0.0
+
+
+def test_process_left_alive_after_the_answer_is_reaped(agent, monkeypatch):
+    """Owner 19.11 09:57: an answered run whose CLI waits on a hung background task must not hold the conversation."""
+    import subprocess, sys, time
+    mod, _ = agent
+    monkeypatch.setattr(mod, "REAP_AFTER_ANSWER_S", 0.5)
+    p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    mod._reap_after_answer(p, "x@g.us")
+    for _ in range(50):
+        if p.poll() is not None:
+            break
+        time.sleep(0.2)
+    assert p.poll() is not None

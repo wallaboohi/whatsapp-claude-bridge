@@ -3891,6 +3891,24 @@ def _kill_tree(proc):
         pass
 
 
+REAP_AFTER_ANSWER_S = 60
+
+
+def _reap_after_answer(proc, chat=None):
+    """Owner 19.11 09:57 "זה חייב להיפסק": the final answer is in, but the AI left a background shell running (a hung ssh
+    test), and headless Claude Code does not exit until its background tasks end. The conversation's queue stayed blocked
+    from 09:07 to 09:37 after the answer was ready. Not a time limit on the work: the work is done once the answer arrives;
+    only what was left behind is stopped, a minute later, and logged."""
+    def reap():
+        if proc.poll() is None:
+            log("run answered but its process is still alive after", REAP_AFTER_ANSWER_S, "s (left-over background task):",
+                "stopping it so the conversation is free", chat or "")
+            _kill_tree(proc)
+    t = threading.Timer(REAP_AFTER_ANSWER_S, reap)
+    t.daemon = True
+    t.start()
+
+
 _active_runs = {}  # chat -> start time of the interactive Claude run answering it now (stop button / restart coordination)
 _active_lock = threading.Lock()
 _live_runs = {}  # owner 17.11 "אשר דחיפה": chat -> the running Claude run whose stdin stays open, so a new message is pushed into it
@@ -4610,6 +4628,8 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
                         close_live()  # every pushed message is answered: end the run
                     else:  # a message was pushed after the turn ended: Claude answers it in another turn; never wait forever
                         threading.Timer(600, close_live).start()
+                if lst is None or done:
+                    _reap_after_answer(proc, chat)
                 res = ev
             elif on_stage:
                 st = _stage_of(ev)
