@@ -3654,18 +3654,41 @@ def auto_transcript(cj, mid, sender, ts):
 # ---------- headless Claude ----------
 
 def _detail_of(name, inp):
-    """Short, safe detail of a tool call: a file name, a search pattern, the start of a command, a web host."""
+    """Short, safe detail of a tool call: a file name, a search pattern, the start of a command, a web host.
+    Owner 19.11 16:09: the raw command / description STAYS here (the 📎 line); the Hebrew action is the stage next to it."""
     if name in ("Read", "Edit", "Write", "NotebookEdit"):
         return os.path.basename(str(inp.get("file_path") or inp.get("notebook_path") or ""))
     if name in ("Grep", "Glob"):
         return str(inp.get("pattern", ""))[:30]
     if name in ("Bash", "PowerShell"):
-        return ""  # owner 19.11: the action is shown in Hebrew only (the stage text); a raw command / English description is not
+        c = re.sub(r"\s+", " ", str(inp.get("description") or inp.get("command") or "")).strip()
+        return c[:48] + ("…" if len(c) > 48 else "")
     if name == "WebFetch":
-        return re.sub(r"^https?://([^/]+).*$", r"\1", str(inp.get("url", "")))
+        return re.sub(r"^https?://([^/]+).*$", r"", str(inp.get("url", "")))
     if name == "WebSearch":
         return str(inp.get("query", ""))[:40]
+    if name not in TOOL_STAGE_HE and name.rsplit("__", 1)[-1] not in TOOL_STAGE_HE and "__" not in name:
+        return name  # a tool with no Hebrew action yet: its raw name next to "⚙️ מפעיל כלי עזר"
     return ""
+
+
+# owner 19.11 15:58: every tool the AI may call has a Hebrew action (a raw English tool name never shows in the status message)
+TOOL_STAGE_HE = {
+    "list_chats": "💬 בודק רשימת שיחות", "get_chat": "💬 פותח שיחה", "get_direct_chat_by_contact": "💬 פותח שיחה",
+    "get_contact_chats": "💬 בודק שיחות של איש קשר", "get_last_interaction": "🧵 בודק הודעה אחרונה",
+    "search_contacts": "📇 מחפש איש קשר", "list_polls": "📊 בודק סקרים", "list_transcripts": "🎙️ קורא תמלולים",
+    "download_media": "🖼️ מוריד מדיה", "send_file": "📤 מכין טיוטה עם קובץ", "send_audio_message": "📤 מכין טיוטה קולית",
+    "react_to_message": "👍 מגיב להודעה", "set_group_name": "🏷️ מעדכן שם קבוצה", "get_status": "🩺 בודק מצב הגשר",
+    "phone_calls": "📞 בודק שיחות טלפון", "phone_events": "📱 בודק אירועים בטלפון", "phone_index": "📱 מעדכן אינדקס הטלפון",
+    "phone_search": "📱 מחפש בטלפון", "phone_who": "📇 מזהה מספר", "sms_index": "✉️ מעדכן אינדקס SMS",
+    "sms_search": "✉️ מחפש ב-SMS", "sms_show": "✉️ קורא SMS",
+    "ToolSearch": "🧰 טוען כלים", "TaskOutput": "📥 קורא תוצאת משימה", "TaskStop": "⏹️ עוצר משימה", "Monitor": "👀 עוקב אחרי משימה",
+    "ScheduleWakeup": "⏰ קובע המשך", "CronCreate": "⏰ קובע משימה מתוזמנת", "CronDelete": "🗑️ מבטל משימה מתוזמנת",
+    "CronList": "⏰ בודק משימות מתוזמנות", "SendMessage": "🧩 מעדכן סוכן עזר", "ListAgents": "🧩 בודק סוכני עזר",
+    "ReadMcpResourceTool": "📖 קורא משאב", "ListMcpResourcesTool": "📖 בודק משאבים", "ExitPlanMode": "🗺️ מסיים תכנון",
+    "EnterWorktree": "🗂️ פותח עותק עבודה", "ExitWorktree": "🗂️ סוגר עותק עבודה", "AskUserQuestion": "❓ שואל שאלה",
+    "WebFetch": "🌐 קורא דף ברשת", "WebSearch": "🌐 מחפש ברשת",
+}
 
 
 def _stage_of(ev):
@@ -3751,7 +3774,7 @@ def _stage_of(ev):
                 return "📚 קורא מדריך"
             if name in ("TodoWrite", "TaskCreate", "TaskUpdate"):
                 return "🗒️ מעדכן רשימת משימות"
-            return "⚙️ " + name
+            return TOOL_STAGE_HE.get(tool) or TOOL_STAGE_HE.get(name) or "⚙️ מפעיל כלי עזר"  # owner 19.11 15:58: the action in Hebrew only
         if part.get("type") == "thinking":
             return "💬 מנסח תשובה"
     return None
@@ -6052,7 +6075,8 @@ def group_name_template(chat):
     return tpl
 
 
-_MODEL_WORDS = {"קלאוד", "אין", "{model}", *MODEL_HE.values()}
+NO_PROVIDER = "-אין-"  # owner 19.11 15:58: the provider slot of a group name when the bridge has no working provider
+_MODEL_WORDS = {"קלאוד", "אין", NO_PROVIDER, "{model}", *MODEL_HE.values()}
 _COMPUTER_PREFIXES = {"LP", "LAP", "HW", "SL", "PR", "SA", "PE"}  # owner 19.11: SL = living room, PR = bedroom (a backup's prefix stayed in the name after the hand-back). owner 16.11: LAP = laptop (LP is the old form), HW = desktop; a prefix of the other computer is never part of the name
 
 
@@ -6097,6 +6121,8 @@ def group_label(model, chat=None):
     Owner 14.11: the name shows who really talks — in auto or after a Claude-quota failover, the provider that answered last
     (kv ai_label, written after every answer), so the minute sync does not flip the name back and forth."""
     name, _ = active_provider(chat)
+    if name != "auto" and (_blocked_until(name) or (name == "claude" and not CFG.get("claude_enabled", True))):
+        return NO_PROVIDER  # owner 19.11 15:58: no working provider in the bridge now -> "-אין-", not the previous provider's name
     used = getattr(_ctx, "provider_used", None)
     if used and (name == "auto" or getattr(_ctx, "failover_used", False)):
         name = used
@@ -6109,7 +6135,7 @@ def group_label(model, chat=None):
     if name != "claude":
         return (providers().get(name) or {}).get("short") or name
     if not CFG.get("claude_enabled", True):
-        return "אין"  # owner 19.11: no provider in the bridge now -> "אין" instead of the previous provider's name
+        return NO_PROVIDER
     return model_he(model)
 
 

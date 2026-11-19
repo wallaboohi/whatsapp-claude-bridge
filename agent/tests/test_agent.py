@@ -3371,3 +3371,17 @@ def test_handover_cmd_refuses_from_backup_and_unknown(agent, monkeypatch):
     assert "לא הבנתי" in agent.handover_cmd("מטבח")
     monkeypatch.setattr(agent, "failover_cfg", lambda: {"for": "נייח", "self_name": "סלון"})
     assert "רק מהנייח" in agent.handover_cmd("חדר")
+
+
+def test_no_provider_name_and_hebrew_actions(agent, monkeypatch):
+    """Owner 19.11 15:58: a blocked provider -> '-אין-' in the group name (and it is stripped back out); every action Hebrew."""
+    mod, _ = agent
+    monkeypatch.setattr(mod, "active_provider", lambda chat=None: ("claude", None))
+    monkeypatch.setattr(mod, "_blocked_until", lambda name: "2099-01-01T00:00:00")
+    assert mod.group_label("sonnet") == mod.NO_PROVIDER
+    mod.CFG["name_prefix"] = "HW"
+    assert mod.name_core("HW -אין- YB אוטומציה") == "YB אוטומציה"
+    for tool in ("mcp__whatsapp__download_media", "ToolSearch", "SomethingNew"):
+        st = mod._stage_of({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": tool, "input": {}}]}})
+        assert not any("a" <= ch.lower() <= "z" for ch in st), st
+    assert mod._detail_of("Grep", {"pattern": "def foo"}) == "def foo"  # raw detail stays (owner 16:09)
