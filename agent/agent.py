@@ -4833,6 +4833,10 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
     if sid and session_rotates(chat, prompt if raw is None else raw):
         write_handoff(sid, chat)
         sid = None
+        # owner 19.11 08:35: the hand-off loop. A run on another provider (claude_work) never stores its session id, so the old
+        # id stayed and every following message wrote a hand-off again (12 in 5 minutes). The rotated session is closed here, once.
+        kv_set(K("session_id", chat), "")
+        kv_set(K("session_runs", chat), "0")
     # owner 16.11: a short message on "auto" goes to a fast free provider; the Claude subscription is kept for real work
     light = bool(CFG.get("light_routing", True)) and chosen == "auto" and is_light_task(raw if raw is not None else prompt)
     _ctx.task_text = raw if raw is not None else prompt
@@ -5793,15 +5797,33 @@ class StatusMsg:
             if len(full) < 20000:
                 try:
                     r = bridge("/edit_message", {"jid": self.chat, "id": self.mid, "text": rtl(full)}, timeout=20)
-                    if r.get("success") is not False and not r.get("error"):
+                    if r.get("success") is not False and not r.get("error") and self._edit_landed(answer):
                         return True
-                    log("status merge refused", r)
+                    log("status merge refused or not seen", r)
                 except Exception as e:
                     log("status merge failed", e)
         try:
             bridge("/edit_message", {"jid": self.chat, "id": self.mid, "text": rtl(self._final())}, timeout=20)
         except Exception as e:
             log("status final edit failed", e)
+        return False
+
+    def _edit_landed(self, answer, wait=15):
+        """Owner 19.11 08:35: the bridge said "success" for edits that never reached WhatsApp, and six answers were lost inside
+        'in progress' messages. An edit counts only when its echo shows the new text in messages.db; otherwise the caller sends
+        the answer as its own message (an answer seen twice beats an answer lost)."""
+        first = next((l for l in (answer or "").splitlines() if l.strip()), "")
+        probe = first.strip().strip("_*~ ‏")[:30]
+        end = time.time() + wait
+        while time.time() < end:
+            try:
+                with mdb() as db:
+                    r = db.execute("SELECT content FROM messages WHERE id = ?", (self.mid,)).fetchone()
+                if r and probe and probe in (r[0] or ""):
+                    return True
+            except Exception:
+                pass
+            time.sleep(1.5)
         return False
 
     def _start(self):
