@@ -377,6 +377,33 @@ def _git(*args, timeout=120):
     return r.returncode, (r.stdout + r.stderr).strip()
 
 
+def missing_local_imports():
+    """Owner 19.11 23:24: the daily sync pushed agent.py with `import asks` but not the new agent/asks.py (its own commit was
+    held back), and every PC that pulled it could not start. Local modules imported by committed code (agent/, tools/, dash/)
+    that exist here but are not in HEAD; [] = safe to push."""
+    import ast
+    rc, tracked = _git("ls-tree", "-r", "--name-only", "HEAD")
+    if rc != 0:
+        return []
+    tracked = set(tracked.splitlines())
+    missing = set()
+    for path in [p for p in tracked if p.endswith(".py") and p.split("/")[0] in ("agent", "tools", "dash")]:
+        rc, src = _git("show", f"HEAD:{path}")
+        try:
+            tree = ast.parse(src) if rc == 0 else None
+        except SyntaxError:
+            continue
+        here = path.rsplit("/", 1)[0]
+        for node in ast.walk(tree) if tree else []:
+            names = [a.name for a in node.names] if isinstance(node, ast.Import) else                 [node.module] if isinstance(node, ast.ImportFrom) and node.module and not node.level else []
+            for name in names:
+                top = name.split(".")[0]
+                for cand in (f"{here}/{top}.py", f"agent/{top}.py", f"{here}/{top}/__init__.py"):
+                    if cand not in tracked and os.path.isfile(os.path.join(ROOT, *cand.split("/"))):
+                        missing.add(cand)
+    return sorted(missing)
+
+
 def day_sync_plan(changed):
     """What a set of changed paths (repo-relative, '/'-separated) requires: (run_go_tests, run_py_tests, rebuild_bridge)."""
     go = any(p.startswith("whatsapp-bridge/") and p.endswith(".go") for p in changed)
@@ -427,6 +454,9 @@ def _rebuild_bridge():
         REBUILD_NOTES.append(note)
     if not ok:
         return "הבנייה נעצרה: המיזוג עם hub לא הושלם"
+    miss = missing_local_imports()
+    if miss:
+        return "הבנייה נעצרה: הקוד מייבא קבצים שלא נשמרו בגיט (" + ", ".join(miss[:5]) + "); דחיפה לכל המחשבים הייתה מפילה אותם"
     _git("push", "hub", "HEAD:main", timeout=300)
     ver = open(os.path.join(ROOT, "VERSION")).read().strip() if os.path.exists(os.path.join(ROOT, "VERSION")) else "dev"
     r = subprocess.run(["go", "build", "-ldflags", f"-X main.version={ver}", "-o", "whatsapp-bridge-new.exe", "."], cwd=bdir,
@@ -635,6 +665,11 @@ def day_sync():
     ok, note = _hub_sync()
     if note:
         notes.append(note)
+    miss = missing_local_imports() if ok else []
+    if miss:
+        ok = False
+        notes.append("⛔ לא נדחף ל-hub: הקוד מייבא קבצים שלא נשמרו בגיט (" + ", ".join(miss[:5]) + "). "
+                     "דחיפה הייתה מפילה כל מחשב שמושך אותה; צריך לשמור אותם (או לתקן את הבדיקות) קודם.")
     if ok:
         rc, out = _git("push", "hub", "HEAD:main", timeout=300)
         notes.append("⬆️ נדחף ל-hub." if rc == 0 else "⚠️ הדחיפה ל-hub נכשלה: " + out.splitlines()[-1][:150])
@@ -10485,6 +10520,30 @@ print("@@OK@@")
 '''
 
 
+UNFENCE = r'''import os, socket, time
+store = C["store"]
+with open(store + "/lease_grant", "w", encoding="utf-8") as f:
+    f.write(C["who"] + " " + time.strftime("%Y-%m-%dT%H:%M:%S") + " unfenced: " + C["why"] + "\n")
+print("@@OK@@")
+'''
+
+
+def peer_unfence(peer, name, why=""):
+    """Undo a fence: give the peer its grant back (its bridge reconnects within seconds). Used when a backup fenced a PC and
+    then did not take over after all, so the identity is never left with nobody (owner 19.11, 17:38-17:58)."""
+    if not peer or not peer_alias(peer):
+        return False
+    try:
+        rc, out, err = _remote_python(peer, _remote_script(UNFENCE, {"store": _remote_root(peer) + "/whatsapp-bridge/store",
+                                                                     "who": socket.gethostname(), "why": str(why)[:120]}), timeout=40)
+    except Exception as e:
+        rc, out, err = 1, "", str(e)
+    ok = not rc and "@@OK@@" in out
+    _fence_at.pop(name, None)
+    log("chain unfence", name, "ok" if ok else f"failed {rc} {(err or out)[-200:]}", "-", why)
+    return ok
+
+
 _fence_at = {}  # peer name -> (time, result) of the last fence: a failed one is not retried every second
 
 
@@ -10532,6 +10591,9 @@ def chain_backup_step(fc, host, st, view, now=None):
             why, unfenced = f"{why}; לא הצלחתי לעצור את הגשר שלו דרך ssh", fence
             break
         fenced.add(fence)
+    if why and fenced:
+        for pn in fenced:  # owner 19.11: fenced and then not taking over left NOBODY connected for 20 minutes
+            peer_unfence(_fo_peer(pn), pn, why)
     if why:
         _chain_note_wait(host, why)
         if unfenced and kv_get(f"fo_chain_fence_said:{host}") != unfenced:
@@ -10554,6 +10616,8 @@ def chain_backup_step(fc, host, st, view, now=None):
     log(f"chain: take-over of \"{host}\" {'done' if took else 'not done'} {time.monotonic() - t0:.1f}s after the decision, "
         f"{secs:.1f}s after the first missed check" + (f" (handed by {passed})" if passed else ""))
     if not took:
+        for pn in fenced:
+            peer_unfence(_fo_peer(pn), pn, msg)
         _chain_backoff[host] = time.time() + 30
         _chain_note_wait(host, msg)
         if kv_get(f"fo_chain_fail_said:{host}") != msg:
@@ -10603,6 +10667,9 @@ def chain_holder_step(fc, host, st, view, now=None):
     return True
 
 
+_host_hold_seen = {}  # peer -> since when it reports holding our automations (host side)
+
+
 def chain_host_step(view, now=None):
     """The host (no failover section): its bridge connects whenever no PC in the chain holds its work, and lets go at once
     when one does (it came back cut off while a backup took over: the backup then hands the identity back, with the newer
@@ -10623,8 +10690,18 @@ def chain_host_step(view, now=None):
         why = ""
         if s == "unknown":
             why = f"\"{pn}\" not checked yet"
-        elif s == "up" and (d.get("holds") or _alive_holds_lease(d)):
+        elif s == "up" and _alive_holds_lease(d):
             why = f"\"{pn}\" holds our work"
+        elif s == "up" and d.get("holds"):
+            # owner 19.11 (20-minute outage 17:38-17:58): a backup held our automations WITHOUT the identity, and the host
+            # waited for it forever while nobody was connected to WhatsApp. Holding only automations blocks the identity for
+            # at most host_hold_grace_sec (60, a take-over in progress); after that WhatsApp is connected here again.
+            first = _host_hold_seen.setdefault(pn, now)
+            if now - first < float(CFG.get("host_hold_grace_sec", 60)):
+                why = f"\"{pn}\" holds our work"
+            elif kv_get(f"host_hold_ignored:{pn}") != str(int(first)):
+                kv_set(f"host_hold_ignored:{pn}", str(int(first)))
+                log(f"chain: \"{pn}\" holds our automations but not the identity for {int(now - first)}s: connecting here")
         elif s == "agent_down" and _maybe_holder(v):
             if v.get("last") and now - (v.get("since") or now) < grace:
                 why = f"\"{pn}\" held it and is restarting its agent"
@@ -10635,6 +10712,8 @@ def chain_host_step(view, now=None):
                 kv_set("chain_host_wait", why)
                 log("chain: host waits for the identity:", why)
             return
+    for pn in [p for p in _host_hold_seen if not ((view.get(p) or {}).get("data") or {}).get("holds")]:
+        _host_hold_seen.pop(pn, None)
     kv_set("chain_host_wait", "")
     lease_grant("no PC in the chain holds the identity")
 
