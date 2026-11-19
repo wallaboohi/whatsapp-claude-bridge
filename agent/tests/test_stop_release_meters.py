@@ -162,3 +162,15 @@ def test_availability_check_runs_at_six_and_eighteen_with_meters(agent, monkeypa
     monkeypatch.setattr(mod, "refresh_all_meters", lambda: done.append("meters"))
     mod.daily_engine_probe()
     assert done == ["inv", "models", "meters"]
+
+
+def test_a_provider_the_bridge_saw_run_out_is_blocked_in_the_meter(agent, monkeypatch):
+    mod, _ = agent
+    now = mod.dt.datetime.now()
+    mod.kv_set("meter:codex_work", json.dumps({"at": now.isoformat(timespec="seconds"),
+                                               "windows": [{"w": "חודשי", "pct": 60, "reset": "x"}], "note": ""}))
+    mod.kv_set("limit_until:codex_work", (now + mod.dt.timedelta(hours=9)).isoformat(timespec="seconds"))
+    assert "🔒 חסום עד" in mod.meter_line("codex_work") and "חודשי 60%" in mod.meter_line("codex_work")
+    assert mod.meter_high("codex_work") == ("חסום", 100)
+    mod.kv_set("limit_until:codex_work", "")
+    assert mod.meter_high("codex_work") is None

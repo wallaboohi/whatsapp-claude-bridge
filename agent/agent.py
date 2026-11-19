@@ -5420,7 +5420,8 @@ def _claude_probe(host):
         if host is None:
             r = subprocess.run([sys.executable, "-I", "-X", "utf8", "-c", _USAGE_PROBE], capture_output=True, timeout=40)
         else:
-            r = subprocess.run(["ssh", "-o", "ConnectTimeout=8", "-o", "BatchMode=yes", host, "python -I -X utf8 -"],
+            # owner 19.11: Git's ssh (ssh_exe). Windows' ssh with a stdin pipe never sent EOF: the probe hung 40 s and failed
+            r = subprocess.run([ssh_exe(), *ssh_opts(), host, "python -I -X utf8 -"],
                                input=_USAGE_PROBE.encode(), capture_output=True, timeout=40)
         if r.returncode == 0:
             return json.loads(r.stdout.decode("utf-8").strip().splitlines()[-1]), ""
@@ -5587,9 +5588,22 @@ def refresh_meter(name):
             note = "הספק לא חושף מד שימוש"
     except Exception as e:
         note = f"לא נקרא ({str(e)[:40]})"
-    snap = {"at": dt.datetime.now().isoformat(timespec="seconds"), "windows": windows, "note": note}
+    snap = {"at": dt.datetime.now().isoformat(timespec="seconds"), "windows": windows, "note": note, "blocked": _blocked_until(name)}
     kv_set("meter:" + name, json.dumps(snap, ensure_ascii=False))
     return snap
+
+
+def _blocked_until(name):
+    """When the bridge itself saw this provider's quota run out (it skips it until then): ISO time, else ''. The meter may
+    still show the provider's last reading; this is what the bridge acts on."""
+    try:
+        if name == "claude":
+            lu = limit_until()
+            return lu.isoformat(timespec="seconds") if lu else ""
+        v = kv_get("limit_until:" + name) or (kv_get("cool:" + name) if provider_cooled(name) else "") or ""
+        return v if v and dt.datetime.fromisoformat(v) > dt.datetime.now() else ""
+    except Exception:
+        return ""
 
 
 def refresh_all_meters():
@@ -5615,8 +5629,10 @@ def meter_line(name):
     if not snap:
         return "   📊 _נוצל: עוד לא נבדק (בבדיקה הבאה, 06:00 / 18:00)_"
     ws = snap.get("windows") or []
+    blk = _blocked_until(name)
+    lock = f"🔒 חסום עד {_reset_at(blk)} · " if blk else ""
     if not ws:
-        return f"   📊 _{snap.get('note') or 'אין נתון'}_"
+        return f"   📊 _{lock}{snap.get('note') or 'אין נתון'}_"
     by = {}
     for x in ws:
         by.setdefault(x["w"], x)
@@ -5628,12 +5644,14 @@ def meter_line(name):
             parts.append(f"{mark}{w} {x['pct']}%" + (f" ({x['detail']})" if x.get("detail") else ""))
         elif w in METER_SLOTS:
             parts.append(f"{w} —")
-    return f"   📊 _נוצל: {' · '.join(parts)} · נבדק {snap['at'][11:16]}_"
+    return f"   📊 _{lock}נוצל: {' · '.join(parts)} · נבדק {snap['at'][11:16]}_"
 
 
 def meter_high(name, share=None):
     """(window, pct) of the provider's fullest window when it is at or above share (default 90%, config quota_warn_pct), else None."""
     share = float(CFG.get("quota_warn_pct", 90)) if share is None else share
+    if _blocked_until(name):
+        return ("חסום", 100)
     snap = meter_get(name, max_age=1800) or {}
     top = max(snap.get("windows") or [], key=lambda x: x["pct"], default=None)
     return (top["w"], top["pct"]) if top and top["pct"] >= share else None
