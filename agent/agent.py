@@ -8243,9 +8243,11 @@ def _fo_say(fc, text):
         _ctx.chat = None
 
 
-def failover_activate(name, fc, st, now=None):
+def failover_activate(name, fc, st, now=None, take_session=True):
     """The owner approved: import the peer's last state (unless ours is newer: a hand-back never completed), load its
-    plugins here, write the hold file. Returns the reply text."""
+    plugins here, write the hold file. Returns the reply text. take_session=False (owner 19.11 14:54): only the peer's
+    agent restarts and its computer is up, so its bridge stays connected; taking the identity then put two bridges on one
+    WhatsApp identity and they threw each other off every ~4 minutes. The identity moves later only if the computer dies."""
     now = now or dt.datetime.now()
     missing = [p for p in fc["plugins"] if not os.path.exists(p)]
     if missing:
@@ -8288,7 +8290,7 @@ def failover_activate(name, fc, st, now=None):
     write_json(_fo_hold_path(name), {"for": name, "host": st["host"], "by": socket.gethostname(), "since": st["since"]})
     log("failover active:", name, fc["plugins"])
     try:
-        sline = session_take(f"take-over for {name}")
+        sline = session_take(f"take-over for {name}") if take_session else ""
     except Exception:
         log("session take failed", traceback.format_exc())
         sline = "⚠️ העברת הזדהות הווצאפ לכאן נכשלה (פרטים ביומן)."
@@ -8695,24 +8697,27 @@ try:
 except OSError:
     pass
 running = "whatsapp-bridge.exe" in subprocess.run(["tasklist", "/FI", "IMAGENAME eq whatsapp-bridge.exe", "/NH"], capture_output=True, text=True).stdout.lower()
-if running and not st.startswith(("waiting", "released")):
-    print("@@BUSY@@ bridge connected here: " + st)
-    raise SystemExit
+busy = running and not st.startswith(("waiting", "released"))
 path = store + "/whatsapp.db"
 stamp = time.strftime("%Y%m%d-%H%M%S")
-if os.path.exists(path):
+if busy:
+    # owner 19.11 14:54: the host's bridge is already connected with its own session. Its identity stays as it is (no
+    # overwrite, no stuck hand-back); only the messages received on the backup are merged below.
+    print("@@KEPT@@ bridge connected here: " + st)
+elif os.path.exists(path):
     src, dst = sqlite3.connect("file:" + path + "?mode=ro", uri=True, timeout=30), sqlite3.connect(path + ".pre-handback-" + stamp)
     src.backup(dst)
     src.close()
     dst.close()
-with open(path + ".lease-tmp", "wb") as f:
-    f.write(base64.b64decode(C["session"]))
-for ext in ("-wal", "-shm"):
-    try:
-        os.remove(path + ext)
-    except OSError:
-        pass
-os.replace(path + ".lease-tmp", path)
+if not busy:
+    with open(path + ".lease-tmp", "wb") as f:
+        f.write(base64.b64decode(C["session"]))
+    for ext in ("-wal", "-shm"):
+        try:
+            os.remove(path + ext)
+        except OSError:
+            pass
+    os.replace(path + ".lease-tmp", path)
 n = 0
 if C.get("messages") or C.get("chats"):
     db = sqlite3.connect(store + "/messages.db", timeout=60)
@@ -8749,7 +8754,8 @@ def session_handback(peer, name):
         log("session hand-back failed", name, rc, (err or out)[-300:])
         return False
     kv_set("session_taken_at", "")
-    log("session handed back to", name, next((ln for ln in out.splitlines() if ln.startswith("@@MSG@@")), ""))
+    log("session handed back to", name, next((ln for ln in out.splitlines() if ln.startswith("@@MSG@@")), ""),
+        "(its bridge was already connected: its own identity kept)" if "@@KEPT@@" in out else "")
     return True
 
 
@@ -9010,7 +9016,8 @@ def failover_tick(peer, name, peer_st):
                 log(f"failover: \"{name}\" is down but not taking over: {why}")
             return
         kv_set(f"fo_chain_wait:{name}", "")
-    if (peer_st or {}).get("grace"):
+    grace = bool((peer_st or {}).get("grace"))
+    if grace:
         # Owner 17.11 16:17: while the peer restarts, we hold its work at once (no waiting), and hand back when it is up again.
         if not (fc.get("auto") and fc.get("cover_restarts", True)):
             return
@@ -9022,7 +9029,7 @@ def failover_tick(peer, name, peer_st):
     for kind, text in acts:
         if kind == "ask" and fc.get("auto"):
             # owner 10.11 11:09: no approval — the backup takes over by itself when the peer is down, and says so
-            msg = failover_activate(name, fc, st)
+            msg = failover_activate(name, fc, st, take_session=not grace)
             st = failover_state(name)
             _fo_say(fc, f"🖥️ המחשב \"{name}\" לא זמין כבר {fc['after_minutes']} דקות או יותר. {msg}")
             push(f"\"{name}\" כבוי: האוטומציות עברו ל{fc['self_name']}", fc["group"], "failover")
@@ -9035,6 +9042,16 @@ def failover_tick(peer, name, peer_st):
             with open(RESTART_FILE, "w", encoding="utf-8") as f:
                 f.write(text)  # restart without the plugins (threads cannot be stopped); the new process hands back
     state = st.get("state") or "idle"
+    if (state == "active" and not grace and (peer_st or {}).get("off_since") and session_cfg()
+            and not kv_get("session_taken_at") and not peer_machine_up(peer)):
+        # covered a restart without the identity, and now the peer's computer itself is gone: the identity moves here
+        try:
+            sline = session_take(f"take-over for {name} (computer down after a restart)")
+        except Exception:
+            log("session take failed", traceback.format_exc())
+            sline = "⚠️ העברת הזדהות הווצאפ לכאן נכשלה (פרטים ביומן)."
+        if sline:
+            _fo_say(fc, sline)
     if state == "releasing" and name not in _failover_loaded and not (peer_st or {}).get("off_since"):
         failover_handback(peer, name, fc, st)
     elif state == "idle" and not (peer_st or {}).get("off_since") and peer_alias(peer):

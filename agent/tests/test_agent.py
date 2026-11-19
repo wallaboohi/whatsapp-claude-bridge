@@ -1627,7 +1627,7 @@ def test_failover_auto_takes_over_without_asking(agent, monkeypatch):
     monkeypatch.setattr(mod, "_fo_say", lambda fc, t: said.append(t))
     monkeypatch.setattr(mod, "push", lambda *a, **k: None)
     monkeypatch.setattr(mod, "_fo_snapshot", lambda name: None)
-    monkeypatch.setattr(mod, "failover_activate", lambda name, fc, st, now=None: acted.append(name) or "✅ עברו")
+    monkeypatch.setattr(mod, "failover_activate", lambda name, fc, st, now=None, take_session=True: acted.append(name) or "✅ עברו")
     off = (mod.dt.datetime.now() - mod.dt.timedelta(minutes=30)).isoformat(timespec="seconds")
     mod.failover_tick({"name": "לפטופ"}, "לפטופ", {"off_since": off})
     assert acted == ["לפטופ"] and said and "לאישור" not in said[0]
@@ -3043,6 +3043,64 @@ def test_session_take_and_handback_roundtrip(agent, monkeypatch, tmp_path):
     hdb = sqlite3.connect(host / "messages.db")
     assert hdb.execute("SELECT content FROM messages WHERE id = 'm1'").fetchone()[0] == "שלום"
     hdb.close()
+
+
+def test_handback_keeps_connected_host_identity(agent, monkeypatch, tmp_path):
+    """Owner 19.11 14:54: the host's bridge is already connected -> the hand-back keeps its identity (no overwrite) but still
+    merges the backup's messages and reports OK, so the backup does not retry forever (the 2-minute connect/disconnect loop)."""
+    agent, _ = agent
+    import io, contextlib, subprocess
+    host = tmp_path / "host"
+    host.mkdir()
+    _fake_session(str(host / "whatsapp.db"), "972500000000:50@s.whatsapp.net")
+    hdb = sqlite3.connect(host / "messages.db")
+    hdb.execute("CREATE TABLE chats (jid TEXT PRIMARY KEY, name TEXT, last_message_time TIMESTAMP)")
+    hdb.execute("CREATE TABLE messages (id TEXT, chat_jid TEXT, content TEXT, timestamp TIMESTAMP, PRIMARY KEY (id, chat_jid))")
+    hdb.commit()
+    hdb.close()
+    (host / "lease_status").write_text("connected 2026-11-19T14:50:00", encoding="utf-8")
+
+    class R:
+        stdout = "whatsapp-bridge.exe   1234 Console"
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: R())
+    payload = {"session": "QUJD", "messages": [{"id": "m9", "chat_jid": "c@g.us", "content": "בדרך", "timestamp": "2099-01-01"}],
+               "chats": []}
+    before = (host / "whatsapp.db").read_bytes()
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        exec(agent._remote_script(agent.SESSION_HANDBACK, {"store": str(host).replace("\\", "/"), **payload}), {})
+    out = buf.getvalue()
+    assert "@@KEPT@@" in out and "@@OK@@" in out and "@@MSG@@1" in out
+    assert (host / "whatsapp.db").read_bytes() == before
+    hdb = sqlite3.connect(host / "messages.db")
+    assert hdb.execute("SELECT content FROM messages WHERE id = 'm9'").fetchone()[0] == "בדרך"
+    hdb.close()
+
+
+def test_restart_cover_does_not_take_identity(agent, monkeypatch):
+    """Owner 19.11 14:54: the host's agent restarts (computer up, grace) -> the backup covers its work at once but leaves the
+    WhatsApp identity with the host's still-connected bridge. Only when the computer itself is gone does the identity move."""
+    agent, _ = agent
+    monkeypatch.setitem(agent.CFG, "session_share", {"enabled": True})
+    monkeypatch.setitem(agent.CFG, "failover", {"for": "נייח", "plugins": [__file__], "auto": True})
+    monkeypatch.setitem(agent.CFG, "peers", [{"name": "נייח"}])
+    taken, said = [], []
+    monkeypatch.setattr(agent, "session_take", lambda why: taken.append(why) or "📱 עברה")
+    monkeypatch.setattr(agent, "session_backup_tick", lambda *a: None)
+    monkeypatch.setattr(agent, "start_plugins", lambda p=None: None)
+    monkeypatch.setattr(agent, "_fo_snapshot", lambda n: None)
+    monkeypatch.setattr(agent, "_fo_say", lambda fc, t: said.append(t))
+    monkeypatch.setattr(agent, "push", lambda *a, **k: None)
+    up = {"v": True}
+    monkeypatch.setattr(agent, "peer_machine_up", lambda peer: up["v"])
+    off = agent.dt.datetime.now().isoformat(timespec="seconds")
+    agent.failover_tick({"name": "נייח"}, "נייח", {"off_since": off, "grace": True})
+    assert agent.failover_state("נייח").get("state") == "active" and not taken
+    agent.failover_tick({"name": "נייח"}, "נייח", {"off_since": off})  # grace over, computer still answers: identity stays
+    assert not taken
+    up["v"] = False
+    agent.failover_tick({"name": "נייח"}, "נייח", {"off_since": off})  # the computer itself is gone
+    assert len(taken) == 1
 
 
 def test_session_resume_stands_by_when_successor_holds(agent, monkeypatch):
