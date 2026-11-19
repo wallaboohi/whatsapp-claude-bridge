@@ -422,5 +422,30 @@
   "cost": "ChatGPT חינמי (החשבון שמחובר בחדר השינה)",
   "where": "remote",
   "how": "Codex CLI שרץ בחדר השינה, בחשבון ChatGPT שיקיר חיבר שם (18.11 12:59, תוכנית חינמית); הנייח שולח ב-ssh ולא מתחבר בעצמו. נבדק 18.11 13:02: עונה."
+ },
+ "jan_app_ybhw": {
+  "label": "Jan app · נייח",
+  "short": "Jan app · נייח",
+  "kind": "desktop-app",
+  "app": "jan",
+  "host": "YB-PC-HW",
+  "ssh": [
+   "ybhw",
+   "YB-PC-HW"
+  ],
+  "pc": "נייח",
+  "python": "C:/Users/walla/AppData/Local/Programs/Python/Python312/python.exe",
+  "timeout": 180,
+  "aliases": [
+   "jan app",
+   "jan app ybhw",
+   "jan app נייח",
+   "ג'אן",
+   "ג'אן נייח",
+   "אפליקציית jan"
+  ],
+  "cost": "חינם (מודל מקומי)",
+  "where": "local",
+  "how": "אפליקציית Jan בנייח, מודל מקומי שרץ במחשב: הגשר מקליד בחלון האפליקציה (tools/desktop_ai.py דרך ssh ומשימה בסשן המשתמש) וקורא את התשובה. נבדק 19.11 14:13: עונה תוך כ-10 שניות, אבל המודל המקומי הקטן טועה גם בשאלות פשוטות. בלי כלי הגשר."
  }
 }

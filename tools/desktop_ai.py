@@ -236,7 +236,10 @@ def cmd_ask(key, question, timeout):
 
 NOISE = re.compile(r"^(just now|now|\d+ ?(s|sec|m|min|h) ago|you.ve used|of your .*limit|\d+%|.* is ai and can make mistakes\.?|"
                    r".*finished the response|.*is thinking.*|low|medium|high|copy|retry|edit|share|"
-                   r"(claude )?(opus|sonnet|haiku|fable)( \d[\d.]*)?|gpt[- ]?\S*|stop|regenerate)$", re.I)
+                   r"(claude )?(opus|sonnet|haiku|fable)( \d[\d.]*)?|gpt[- ]?\S*|stop|regenerate|"
+                   # Jan (desktop 19.11): its message stamps, speed and context meter came back as the answer
+                   r"[a-z]{3} \d{1,2}, \d{4},? \d{1,2}:\d{2}( ?[ap]m)?|tokens/sec|\(|\)|\(?(\d+ )?tokens\)?|[\d.]+ ?%?|%|"
+                   r"reading: \d+%|[\d.]+k? / [\d.]+k? tokens|ask for approval)$", re.I)
 
 
 def _new_part(before, after, question):
