@@ -13,6 +13,7 @@ agent._rebuild_bridge() only when Go files changed, agent/restart.request (reaso
 writes a fresh heartbeat on the new commit. This PC: pull, then restart.request (the agent restarts after the current
 answer). Prints one JSON line per PC.
 """
+import tempfile
 import json
 import os
 import socket
@@ -30,6 +31,9 @@ REMOTE = r"""
 $ErrorActionPreference = 'Continue'
 $env:Path = 'C:\msys64\ucrt64\bin;' + $env:Path
 Set-Location "C:\Users\walla\whatsapp-mcp"
+# over ssh Windows will not pass uv's junction (cpython-3.11-...): "untrusted mount point" (os error 448). Use the real folder.
+$d = Get-ChildItem "$env:APPDATA\uv\python" -Directory -EA 0 | Where-Object Name -match '^cpython-3[.]11[.][0-9]+-' | Sort-Object Name | Select-Object -Last 1
+if ($d) { $PY = $d.FullName + '\python.exe' } else { $PY = (uv python find 3.11) }
 $before = git rev-parse HEAD
 if ($env:DRY) { git fetch -q hub 2>&1 | Out-Null; $pull = 'dry-run: fetched only' } else { $pull = git pull --ff-only hub main 2>&1 | Select-Object -Last 1 }
 $after = git rev-parse HEAD
@@ -39,7 +43,7 @@ $rb = ''
 if ($go -and -not $env:DRY) {
   Push-Location agent
   $py = "import sys; sys.path.insert(0,'.'); import agent; print(repr(agent._rebuild_bridge()))"
-  $rb = (uv run --no-project python -I -X utf8 -c $py 2>&1 | Select-Object -Last 1) -join ' '
+  $rb = (& $PY -I -X utf8 -c $py 2>&1 | Select-Object -Last 1) -join ' '
   Pop-Location
 }
 if ($after -ne $before -and -not $env:DRY) {
@@ -57,13 +61,19 @@ print(("pending " if req else "") + (r.stdout.strip() or "none"))
 
 
 def ssh(host, cmd, timeout=900):
-    r = subprocess.run(["ssh", "-o", "ConnectTimeout=15", "-o", "BatchMode=yes", host, cmd], capture_output=True, text=True,
-                       encoding="utf-8", errors="replace", timeout=timeout)
-    return r.returncode, "\n".join(l for l in (r.stdout + r.stderr).splitlines() if l.strip() and not any(n in l for n in NOISE))
+    # output goes to a temp file, not a pipe: when this tool runs inside an ssh session (e.g. on the desktop, started from
+    # the laptop), Windows OpenSSH with piped stdout never exits, even for "echo" (found 19.11: 60 s hang to the bedroom PC)
+    with tempfile.TemporaryFile() as f:
+        rc = subprocess.run(["ssh", "-n", "-o", "ConnectTimeout=15", "-o", "BatchMode=yes", host, cmd],
+                            stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT, timeout=timeout).returncode
+        f.seek(0)
+        out = f.read().decode("utf-8", "replace")
+    return rc, "\n".join(l for l in out.splitlines() if l.strip() and not any(n in l for n in NOISE))
 
 
 def scp(src, dst):
-    subprocess.run(["scp", "-q", src, dst], capture_output=True, timeout=120)
+    subprocess.run(["scp", "-q", "-o", "BatchMode=yes", src, dst], stdin=subprocess.DEVNULL,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
 
 
 def remote_py(host, code, timeout=60):
@@ -72,7 +82,12 @@ def remote_py(host, code, timeout=60):
     open(tmp, "w", encoding="utf-8").write(code)
     scp(tmp, f"{host}:{HOME}/chain_tmp.py")
     os.remove(tmp)
-    return ssh(host, f"uv run -q --no-project python -I -X utf8 {HOME}/chain_tmp.py", timeout)
+    # not "uv run": in an ssh logon uv's python junction gives os error 448, so run the real versioned folder
+    # (the laptop has no uv-managed python: fall back to "uv python find", which is a plain path there)
+    return ssh(host, 'powershell -NoProfile -Command "$d = Get-ChildItem $env:APPDATA\\uv\\python -Directory -EA 0 | '
+                     "Where-Object Name -match '^cpython-3[.]11[.][0-9]+-' | Sort-Object Name | Select-Object -Last 1; "
+                     "if ($d) { $x = $d.FullName + '\\python.exe' } else { $x = (uv python find 3.11) }; "
+                     f"& $x -I -X utf8 {HOME}/chain_tmp.py\"", timeout)
 
 
 def heartbeat(host):
