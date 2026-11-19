@@ -86,6 +86,7 @@ func registerAllAPI(client *whatsmeow.Client, messageStore *MessageStore) {
 		json.NewEncoder(w).Encode(SendMessageResponse{
 			Success: success,
 			Message: message,
+			ID:      sentID(message),
 		})
 	})
 

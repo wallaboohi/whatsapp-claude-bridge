@@ -27,6 +27,9 @@ import (
 type SendMessageResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
+	// Owner 19.11: the real WhatsApp message id. The agent edits the status message by this id instead of
+	// searching messages.db by text (a delayed echo could make it edit an older message with identical text).
+	ID string `json:"id,omitempty"`
 }
 
 // SendMessageRequest represents the request body for the send message API
