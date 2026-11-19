@@ -59,7 +59,7 @@ def test_the_gap_note_brings_claude_up_to_date_after_a_failover(agent, monkeypat
     monkeypatch.setattr(mod, "failover_target", lambda: None)
     mod.kv_set(mod.K("gap", c), "1")
     assert mod.claude("ההודעה החדשה", chat=c, on_stage=lambda *a: None) == "ok"
-    assert "בינה אחרת" in seen[0] and "תשובה מהבינה החלופית" in seen[0] and seen[0].rstrip().endswith("ההודעה החדשה")
+    assert "בינה או חשבון אחרים" in seen[0] and "תשובה מהבינה החלופית" in seen[0] and seen[0].rstrip().endswith("ההודעה החדשה")
     assert mod.kv_get(mod.K("gap", c)) == ""  # told once
     mod.claude("עוד הודעה", chat=c, on_stage=lambda *a: None)
-    assert "בינה אחרת" not in seen[1]
+    assert "בינה או חשבון אחרים" not in seen[1]
