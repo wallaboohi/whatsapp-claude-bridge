@@ -292,8 +292,20 @@ def cmd_ask(key, question, timeout):
     # not relaunch_a11y here (desktop 19.11): even started with the flag, Grok Bot and Copilot kept an empty page tree, and every
     # question would close the owner's app for nothing
     box = input_box(w)
+    for _try in range(3):  # 19.11: after a bridge restart the app's window was minimized / its page not ready: restore, wait, look again
+        if box:
+            break
+        try:
+            import ctypes
+            if ctypes.windll.user32.IsIconic(w.NativeWindowHandle):
+                ctypes.windll.user32.ShowWindow(w.NativeWindowHandle, 4)  # SW_SHOWNOACTIVATE
+        except Exception:
+            pass
+        time.sleep(6)
+        w = find_window(key) or w
+        box = input_box(w)
     if not box:
-        return out(ok=False, app=key, error="לא נמצאה תיבת ההקלדה בחלון")
+        return out(ok=False, app=key, error="לא נמצאה תיבת ההקלדה בחלון (נבדק 4 פעמים, כולל שחזור חלון ממוזער)")
     before = window_text(w)
     how = ""
     if bring_front(w):

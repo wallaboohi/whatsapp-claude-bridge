@@ -2059,9 +2059,13 @@ def journal_penalty(name):
     return 0 if not st else int((100 - st["score"]) * 4.5)
 
 
+AGENT_BOOT = dt.datetime.now().isoformat(timespec="seconds")
+
+
 def journal_real_recent(name, minutes=30, last=3):
     """(failed, total) among the last real runs (not probes) in the last minutes: a probe can pass where the real message does not."""
     cut = (dt.datetime.now() - dt.timedelta(minutes=minutes)).isoformat(timespec="seconds")
+    cut = max(cut, AGENT_BOOT)  # owner 19.11 20:43: a failure before this restart (app window not ready yet) must not block switching back after it
     rows = [r for r in journal_rows(name, 1, src="run", limit=last) if r[0] >= cut]
     return sum(1 for r in rows if not r[1]), len(rows)
 
