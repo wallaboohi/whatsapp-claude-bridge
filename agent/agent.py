@@ -2009,11 +2009,25 @@ def ai_state_set(name, ok, reason="", raw="", seconds=None, model="", src="run")
         log("ai_state_set failed", e)
 
 
-def ai_state_get(name, hours=12):
+# Owner 19.11 06:41: how long a seen failure stays true for the status list. A 429 / timeout from last night is not "not answering" at 05:10.
+STATE_TTL_MIN = {"rate": 30, "unreachable": 15, "error": 30, "rejected": 60, "quota": 360}
+
+
+def ai_state_get(name, hours=12, fresh=False):
+    """fresh=True (the status list): a failure that is past its reason's lifetime, and no longer cooling, is unknown, not failed."""
     try:
         st = json.loads(kv_get("aistate:" + name) or "")
-        if dt.datetime.now() - dt.datetime.fromisoformat(st["at"]) <= dt.timedelta(hours=hours):
-            return st
+        age = dt.datetime.now() - dt.datetime.fromisoformat(st["at"])
+        if age > dt.timedelta(hours=hours):
+            return None
+        if fresh and not st["ok"] and not provider_cooled(name):
+            why = st.get("reason")
+            if name == "claude" and why == "quota" and limit_raw() is None:
+                return None  # the subscription's limit already reset
+            ttl = STATE_TTL_MIN.get(why)
+            if ttl and not (why == "quota" and st.get("hint")) and age > dt.timedelta(minutes=ttl):
+                return None
+        return st
     except (ValueError, KeyError, TypeError):
         pass
     return None
@@ -2031,7 +2045,7 @@ def ai_status_lines(skip=()):
 def _ai_status_rows(names):
     ok, bad, unknown, off = [], [], [], []
     for n in names:
-        tag, st = provider_line(n), ai_state_get(n)
+        tag, st = provider_line(n), ai_state_get(n, fresh=True)
         if st and not st["ok"]:
             why = REASON_SHORT_HE.get(st["reason"], "לא עונה") + (f" (קוד {st['code']})" if st.get("code") else "") + (f", {st['hint']}" if st.get("hint") else "")
             bad.append(f"{tag} ({why})")
