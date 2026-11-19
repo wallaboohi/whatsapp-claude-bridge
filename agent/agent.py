@@ -4444,6 +4444,9 @@ def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
     pack = "" if getattr(_ctx, "probe", False) else conversation_pack(chat or PRIMARY) + "\n\n---\nההודעה הנוכחית (ענה עליה):\n"
     full = ((append + "\n\n") if append else "") + pack + prompt + HEBREW_TAIL
     cmd = ([exe] if remote else npm_direct(exe)) + list(c.get("args") or [])
+    codex_stream = os.path.basename(str(c.get("bin") or "")).lower().startswith("codex") and (c.get("args") or [""])[0] == "exec"
+    if codex_stream and "--json" not in cmd:
+        cmd.append("--json")  # Codex emits item.started/completed events; consume them for live progress.
     m = model or p.get("model")
     if m and c.get("model_flag"):
         cmd += [c["model_flag"], m]
@@ -4472,7 +4475,93 @@ def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
     if on_stage:
         on_stage(f"🧠 {AI_HE.get(name) or p.get('short') or name} חושב", "")
     t0 = time.time()
-    if remote:  # the remote shell is cmd.exe: printable ASCII arguments only; the Hebrew rides on stdin
+    codex_events = []
+    if codex_stream:
+        # Codex --json writes one event per line. Reading the stream keeps progress live while the final answer
+        # remains sourced from -o when local, or from agent_message events for a remote CLI.
+        if remote:  # the remote shell is cmd.exe: printable ASCII arguments only; the Hebrew rides on stdin
+            if any(not re.fullmatch(r"[\x20-\x7e]+", x) or '"' in x for x in cmd):
+                raise RuntimeError(f"{name}: an argument a remote shell cannot carry safely")
+            line = " ".join(x if re.fullmatch(r"[\w.:/=@+-]+", x) else f'"{x}"' for x in cmd)
+            r = None
+            for rc in _remote_cli_cmds(c, line):
+                try:
+                    proc = subprocess.Popen(rc, stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
+                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
+                                            creationflags=NO_WINDOW)
+                    if stdin_text is not None:
+                        try:
+                            proc.stdin.write(stdin_text)
+                            proc.stdin.close()
+                        except OSError as e:
+                            log("remote Codex CLI closed stdin before reading the prompt", e)
+                    stderr_lines = []
+                    err_reader = threading.Thread(target=lambda: stderr_lines.extend(proc.stderr), daemon=True)
+                    err_reader.start()
+                    killer = threading.Timer(timeout, _kill_tree, args=(proc,)) if timeout else None
+                    if killer:
+                        killer.start()
+                    stdout_lines = []
+                    codex_events = []
+                    for raw_line in proc.stdout:
+                        stdout_lines.append(raw_line)
+                        events = _codex_events(raw_line)
+                        codex_events.extend(events)
+                        for event in events:
+                            stage = _codex_stage(event)
+                            if stage and on_stage:
+                                on_stage(stage, "")
+                    proc.wait()
+                    err_reader.join(timeout=2)
+                    if killer:
+                        killer.cancel()
+                    r = type("CLIResult", (), {"returncode": proc.returncode, "stdout": "".join(stdout_lines),
+                                                "stderr": "".join(stderr_lines)})()
+                except OSError as e:
+                    r = type("CLIResult", (), {"returncode": 255, "stdout": "", "stderr": str(e)})()
+                if r.returncode != 255:
+                    break
+            if r is None or r.returncode == 255:
+                _remote_cli_cache.pop((str(c.get("ssh")), c.get("bin")), None)
+                raise ProviderDown(name, "unreachable", 10, raw=((r.stderr if r else "") or "ssh failed")[-300:])
+        else:
+            proc = None
+            try:
+                proc = subprocess.Popen(cmd, cwd=HOME, stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
+                                        env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                if stdin_text is not None:
+                    try:
+                        proc.stdin.write(stdin_text)
+                        proc.stdin.close()
+                    except OSError as e:
+                        log("Codex CLI closed stdin before reading the prompt", e)
+                stderr_lines = []
+                err_reader = threading.Thread(target=lambda: stderr_lines.extend(proc.stderr), daemon=True)
+                err_reader.start()
+                killer = threading.Timer(timeout, _kill_tree, args=(proc,)) if timeout else None
+                if killer:
+                    killer.start()
+                stdout_lines = []
+                for line in proc.stdout:
+                    stdout_lines.append(line)
+                    events = _codex_events(line)
+                    codex_events.extend(events)
+                    for event in events:
+                        stage = _codex_stage(event)
+                        if stage and on_stage:
+                            on_stage(stage, "")
+                proc.wait()
+                err_reader.join(timeout=2)
+                if killer:
+                    killer.cancel()
+                stdout, stderr = "".join(stdout_lines), "".join(stderr_lines)
+            except Exception as e:
+                if proc:
+                    _kill_tree(proc)
+                raise RuntimeError(f"{name} stream failed: {e}") from e
+            r = type("CLIResult", (), {"returncode": proc.returncode, "stdout": stdout, "stderr": stderr})()
+    elif remote:  # the remote shell is cmd.exe: printable ASCII arguments only; the Hebrew rides on stdin
         if any(not re.fullmatch(r"[\x20-\x7e]+", x) or '"' in x for x in cmd):
             raise RuntimeError(f"{name}: an argument a remote shell cannot carry safely")
         line = " ".join(x if re.fullmatch(r"[\w.:/=@+-]+", x) else f'"{x}"' for x in cmd)
@@ -4513,7 +4602,14 @@ def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
             text = ""
     else:
         text = (r.stdout or "").strip()
+    if codex_stream and not text:
+        text = next((str((e.get("item") or {}).get("text") or "").strip()
+                     for e in reversed(codex_events)
+                     if (e.get("item") or {}).get("type") == "agent_message" and (e.get("item") or {}).get("text")), "")
     if not text:
+        codex_error = next((str(e.get("message") or (e.get("error") or {}).get("message") or "")
+                            for e in reversed(codex_events) if e.get("type") in ("error", "turn.failed")), "")
+        err = codex_error or err
         bad = classify_down(err) or (("rate", 15) if re.search(r"429|quota|exhausted|rate.?limit", err, re.I) else None)             or (("key", 120) if re.search(r"login|log in|sign.?in|auth|401|403|credential", err, re.I) else None)
         if bad:
             raise ProviderDown(name, bad[0], bad[1], raw=err.strip()[-400:])
@@ -4523,6 +4619,46 @@ def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
                    (dt.datetime.now().isoformat(), None, 0, 0, 0, time.time() - t0, 1, m or name, 0, chat))
     _note_answer(name, time.time() - t0)
     return {"type": "result", "result": text, "is_error": False, "session_id": None, "usage": {}, "total_cost_usd": 0}
+
+
+def _codex_events(output):
+    """Decode Codex CLI --json lines, ignoring banners and malformed partial lines."""
+    events = []
+    for line in (output or "").splitlines():
+        try:
+            event = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    return events
+
+
+def _codex_stage(event):
+    """Map Codex CLI progress events to a short Hebrew stage without exposing raw commands."""
+    kind = event.get("type")
+    if kind == "turn.started":
+        return "🧠 מתחיל לעבוד"
+    if kind in ("error", "turn.failed"):
+        return "⚠️ בודק שגיאה"
+    if not str(kind or "").startswith("item."):
+        return None
+    item = event.get("item") or {}
+    item_type = item.get("type")
+    if item_type == "command_execution":
+        return "💻 מריץ פקודה"
+    if item_type == "file_change":
+        return "✍️ עורך קוד/קבצים"
+    if item_type == "mcp_tool_call":
+        name = item.get("tool_name") or item.get("name") or ""
+        if "." in name and "__" not in name:
+            name = name.rsplit(".", 1)[-1]
+        return _stage_of({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": name, "input": item.get("arguments") or {}}]}})
+    if item_type == "reasoning":
+        return "🧠 מנתח ומחליט על הצעד הבא"
+    if item_type == "agent_message":
+        return "💬 מנסח תשובה"
+    return None
 
 
 def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat=None, tools=None, max_budget=None, stoppable=None, fork=False):
