@@ -2549,6 +2549,21 @@ def test_codex_json_events_drive_live_hebrew_progress(agent):
     assert len(events) == 4
 
 
+def test_provider_event_stream_is_never_sent_as_answer(agent):
+    mod, _ = agent
+    raw = '\n'.join([
+        '{"type":"thread.started","thread_id":"internal-id"}',
+        '{"type":"turn.started"}',
+        '{"type":"item.completed","item":{"type":"agent_message","text":"תוקן"}}',
+    ])
+    answer, changed = mod.unwrap_provider_event_stream(raw)
+    assert changed and answer == "תוקן"
+    answer, changed = mod.unwrap_provider_event_stream('{"type":"thread.started"}\n{"type":"turn.started"}')
+    assert changed and answer == "לא התקבלה תשובה מהבינה; הגיע רק פלט טכני. נסה שוב."
+    ordinary = '{"type":"result","result":"שלום"}'
+    assert mod.unwrap_provider_event_stream(ordinary) == (ordinary, False)
+
+
 def test_watchdog_heals_a_bridge_whose_api_is_down(agent, monkeypatch):
     """Owner 14.11: the bridge process ran but its API did not answer (port held), so nothing was sent: kill it (its loop restarts it),
     and start the task when no loop runs."""

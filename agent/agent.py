@@ -4754,6 +4754,25 @@ def _codex_events(output):
     return events
 
 
+def unwrap_provider_event_stream(text):
+    """Never send a CLI/event protocol to the owner as if it were an answer.
+
+    A provider wrapper can accidentally return its JSON event stream as plain text. When that happens,
+    recover the last completed assistant message; if there is none, return a short Hebrew failure.
+    Ordinary JSON answers and normal prose are left untouched.
+    """
+    raw = (text or "").strip()
+    if not raw or not any(mark in raw for mark in ('"thread.started"', '"turn.started"', '"item.completed"', '"item.started"')):
+        return text, False
+    events = _codex_events(raw)
+    if not events or not any(e.get("type") in ("thread.started", "turn.started", "turn.completed", "turn.failed", "item.started", "item.completed") for e in events):
+        return text, False
+    answer = next((str((e.get("item") or {}).get("text") or "").strip()
+                   for e in reversed(events)
+                   if (e.get("item") or {}).get("type") == "agent_message" and (e.get("item") or {}).get("text")), "")
+    return (answer or "לא התקבלה תשובה מהבינה; הגיע רק פלט טכני. נסה שוב."), True
+
+
 def _codex_stage(event):
     """Map Codex CLI progress events to a short Hebrew stage without exposing raw commands."""
     kind = event.get("type")
@@ -7240,6 +7259,9 @@ def run_command(row):
             answer = claude(prompt + quota_note_for_prompt(chat), model=model,
                             session=not CFG.get("fresh_sessions") and not getattr(_ctx, "side_run", False), on_stage=status.set_stage, chat=chat,
                             raw=raw_text(text.lstrip("!")), timeout=limit_min * 60 if limit_min else None)
+            answer, event_stream = unwrap_provider_event_stream(answer)
+            if event_stream:
+                log("provider event stream was returned as text; sanitized before sending")
             status.hold = bool(answer) and status.wa  # the answer is merged into the status message below (owner 17.11 15:15)
         except LimitHit as e:
             parked = True
