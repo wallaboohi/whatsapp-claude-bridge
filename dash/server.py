@@ -502,6 +502,60 @@ def git_state():
         return None
 
 
+def _boot_time():
+    try:
+        import ctypes
+        ms = ctypes.windll.kernel32.GetTickCount64
+        ms.restype = ctypes.c_ulonglong
+        return time.time() - ms() / 1000.0
+    except Exception:
+        return 0.0
+
+
+def _holds():
+    """Whose work this PC holds right now (failover state active / releasing): the 4-PC chain asks (owner 18.11)."""
+    holds = []
+    for r in rows(paths()["agent"], "SELECT k, v FROM kv WHERE k LIKE 'failover:%'"):
+        try:
+            if (json.loads(r["v"] or "{}") or {}).get("state") in ("active", "releasing"):
+                holds.append(r["k"][len("failover:"):])
+        except (ValueError, AttributeError):
+            pass
+    return holds
+
+
+def _lease_info():
+    """The one WhatsApp identity on this PC (agent session_share): mode = gate on; held = a grant written after the last boot
+    (the bridge's own rule, lease.go); status = what the bridge wrote; standby = waits at the gate; copy_at = last copy."""
+    lease = {}
+    try:
+        sd = os.path.dirname(paths()["wa"])
+        lease["mode"] = os.path.exists(os.path.join(sd, "lease_mode"))
+        lease["status"] = open(os.path.join(sd, "lease_status"), encoding="utf-8").read().strip() if os.path.exists(os.path.join(sd, "lease_status")) else ""
+        g = os.path.join(sd, "lease_grant")
+        lease["held"] = lease["mode"] and os.path.exists(g) and os.path.getmtime(g) > _boot_time() - 60
+        lease["standby"] = lease["mode"] and not lease["status"].startswith("holding")
+        meta = os.path.join(sd, "session_copy", "meta.json")
+        lease["copy_at"] = (json.load(open(meta, encoding="utf-8")).get("at") or "") if os.path.exists(meta) else ""
+    except Exception:
+        pass
+    return lease
+
+
+def alive():
+    """Owner 18.11 19:42: the light answer the 4-PC chain asks every 2 s (agent chain_watch): no bridge, git or process calls
+    (/brief takes seconds on a busy PC). Agent heartbeat, the identity lease here, whose work this PC holds."""
+    c = cfg()
+    hb = kv("heartbeat")
+    try:
+        ok = bool(hb) and (dt.datetime.now() - dt.datetime.fromisoformat(hb)).total_seconds() < 180
+    except ValueError:
+        ok = False
+    fo = c.get("failover") or {}
+    return {"machine": socket.gethostname(), "agent_alive": ok, "heartbeat": hb, "holds": _holds(), "lease": _lease_info(),
+            "chain": {"v": 1, "for": fo.get("for") or "", "self": fo.get("self_name") or ""}}
+
+
 def brief():
     """Small status of this machine for the other machine's dashboard (tabs + the "computers" card)."""
     c, p = cfg(), paths()
@@ -530,23 +584,8 @@ def brief():
         acc = (rows(p["wa"], "SELECT jid FROM whatsmeow_device LIMIT 1") or [{"jid": ""}])[0]["jid"].split("@")[0].split(":")[0]
     except Exception:
         acc = ""
-    holds = []  # owner 18.11: the 4-PC backup chain asks every PC whose work it holds right now (failover_chain_blocker)
-    for r in rows(p["agent"], "SELECT k, v FROM kv WHERE k LIKE 'failover:%'"):
-        try:
-            if (json.loads(r["v"] or "{}") or {}).get("state") in ("active", "releasing"):
-                holds.append(r["k"][len("failover:"):])
-        except (ValueError, AttributeError):
-            pass
-    lease = {}  # owner 18.11: one WhatsApp identity moves along the chain (agent session_share); standby = waits at the gate
-    try:
-        sd = os.path.dirname(p["wa"])
-        lease["mode"] = os.path.exists(os.path.join(sd, "lease_mode"))
-        lease["status"] = open(os.path.join(sd, "lease_status"), encoding="utf-8").read().strip() if os.path.exists(os.path.join(sd, "lease_status")) else ""
-        lease["standby"] = lease["mode"] and not lease["status"].startswith("holding")
-        meta = os.path.join(sd, "session_copy", "meta.json")
-        lease["copy_at"] = (json.load(open(meta, encoding="utf-8")).get("at") or "") if os.path.exists(meta) else ""
-    except Exception:
-        pass
+    holds = _holds()  # owner 18.11: the 4-PC backup chain asks every PC whose work it holds right now (failover_chain_blocker)
+    lease = _lease_info()  # owner 18.11: one WhatsApp identity moves along the chain (agent session_share); standby = waits at the gate
     return {"machine": socket.gethostname(), "wa_account": acc, "failover_holds": holds, "session_lease": lease, "tool_version": (open(os.path.join(ROOT, "VERSION")).read().strip() if os.path.exists(os.path.join(ROOT, "VERSION")) else "?"),
             "dash_version": VERSION, "bridge": {k: b.get(k) for k in ("connected", "version", "paused", "error", "connected_since", "health")},
             "agent_alive": alive, "heartbeat": hb, "listen_paused": kv("listen_paused") or "", "groups": gl, "tunnels": tunnels,
@@ -2656,6 +2695,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/brief":
             try:
                 return self.send_json(brief())
+            except Exception as e:
+                return self.send_json({"error": str(e)}, 500)
+        if path == "/alive":  # owner 18.11 19:42: the chain's 2-second check
+            try:
+                return self.send_json(alive())
             except Exception as e:
                 return self.send_json({"error": str(e)}, 500)
         if path == "/legend":

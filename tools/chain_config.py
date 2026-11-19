@@ -25,7 +25,9 @@ PCS = [
     {"host": "salon-pc", "name": "סלון", "ssh": "SALON", "port": 8783, "ollama_port": 11436},
     {"host": "lap-yakir", "name": "לפטופ", "ssh": "4-MINE", "port": 8782},
 ]
-SESSION = {"חדר שינה": 2, "סלון": 3, "לפטופ": 5}  # minutes between fresh copies of the identity (first backup most often)
+# minutes between fresh copies of the identity (first backup most often). Owner 18.11 19:42: a take-over installs the last
+# copy, so a shorter gap means a fresher session (the copy travels compressed now: about a third of the bytes)
+SESSION = {"חדר שינה": 1, "סלון": 2, "לפטופ": 3}
 
 
 def chain_fields(me):
@@ -50,7 +52,9 @@ def chain_fields(me):
         peers.append(e)
     out["peers"] = peers
     if i:
-        out["failover"] = {"self_name": pc["name"], "defer_to": [p["name"] for p in PCS[1:i]]}
+        # owner 18.11 19:42: every hand-over within 7 seconds -> automatic and immediate (the agent's chain_watch decides in
+        # seconds; after_minutes 0 also for the old minute-based path)
+        out["failover"] = {"self_name": pc["name"], "defer_to": [p["name"] for p in PCS[1:i]], "auto": True, "after_minutes": 0}
     return out
 
 

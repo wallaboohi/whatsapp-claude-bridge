@@ -71,10 +71,16 @@ func registerEventHandlers(client *whatsmeow.Client, messageStore *MessageStore,
 			go func() { time.Sleep(3 * time.Second); os.Exit(1) }()
 
 		case *events.StreamReplaced:
+			logConn("stream_replaced")
+			if leaseYield() {
+				// owner 18.11 19:42: another PC of the chain connected with the identity: let go at once, never fight
+				logger.Warnf("Stream replaced by another PC holding the identity — lease released, exiting")
+				go func() { time.Sleep(500 * time.Millisecond); os.Exit(0) }()
+				break
+			}
 			// another client took over this session; whatsmeow does not reconnect by itself. Wait (to avoid a
 			// tug-of-war with a second copy) then exit so the loop starts a fresh connection.
 			logger.Warnf("Stream replaced by another client — restarting in 2 minutes")
-			logConn("stream_replaced")
 			go func() { time.Sleep(2 * time.Minute); os.Exit(1) }()
 		}
 	})

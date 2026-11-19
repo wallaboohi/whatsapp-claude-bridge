@@ -7465,15 +7465,26 @@ def peer_port(peer):
     return int(m.group(1)) if m else 8781
 
 
-def tunnel_cmd(peer, ssh="ssh", multi=False):
+def ssh_opts(connect=None):
+    """Owner 18.11 19:42 (ssh between the PCs "sometimes stops answering"): every ssh fails fast instead of hanging. Windows
+    OpenSSH has no ControlMaster, so each call is a new connection: a short ConnectTimeout, and ServerAlive so a session whose
+    TCP path died (Tailscale path change, the other PC asleep) ends within ~15 s instead of waiting for the call's timeout."""
+    return ["-o", "BatchMode=yes", "-o", f"ConnectTimeout={int(connect or CFG.get('ssh_connect_timeout', 8))}",
+            "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=3"]
+
+
+def tunnel_cmd(peer, ssh="ssh", multi=False, no_reverse=False):
     """ssh -L <port>→the peer's dashboard, -R <port>→ours, so each machine reaches the other on 127.0.0.1:<port>.
     Owner 18.11 (4-PC chain): a PC with several tunnel peers opens -L only (each peer on its own port: desktop 8781,
     laptop 8782, living room 8783, bedroom 8784); the reverse forward and the Ollama pair stay on the peer marked
-    "reverse": true (two tunnels forwarding the same port would both fail with ExitOnForwardFailure)."""
+    "reverse": true (two tunnels forwarding the same port would both fail with ExitOnForwardFailure).
+    Owner 18.11 19:42: keepalive every 5 s, 3 misses (was 30 s x 3): a dead tunnel is noticed and rebuilt within ~15 s, not
+    90 s + backoff. no_reverse: the other side still holds our -R port from a dead session ("remote port forwarding
+    failed"); open -L alone meanwhile so at least we keep seeing the peer."""
     port = peer_port(peer)
-    rev = bool(peer.get("reverse", not multi))
-    return [ssh, "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=30",
-            "-o", "ServerAliveCountMax=3", "-o", "ConnectTimeout=15",
+    rev = bool(peer.get("reverse", not multi)) and not no_reverse
+    return [ssh, "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=5",
+            "-o", "ServerAliveCountMax=3", "-o", "TCPKeepAlive=yes", "-o", "ConnectTimeout=5",
             "-L", f"{port}:127.0.0.1:8770"] + (["-R", f"{port}:127.0.0.1:8770",
             # owner 13.11: each machine reaches the OTHER machine's Ollama on 127.0.0.1:11435 (the laptop's is the default host)
             "-L", "11435:127.0.0.1:11434", "-R", "11435:127.0.0.1:11434"] if rev else []) + (
@@ -7491,6 +7502,9 @@ def _kill_old_tunnels():
         log("old tunnels", e)
 
 
+_tunnel_kick = set()  # names of peers whose tunnel the chain watch wants rebuilt now
+
+
 def tunnel_keeper():
     """Keeps one ssh tunnel per peer that has "tunnel" (restart with backoff; kv tunnel_off:<name> = switched off from the
     dashboard). State for the dashboard in kv tunnel:<name>."""
@@ -7499,11 +7513,18 @@ def tunnel_keeper():
         return
     ssh = shutil.which("ssh") or r"C:\Windows\System32\OpenSSH\ssh.exe"
     _kill_old_tunnels()
-    procs, wait, next_try = {}, {}, {}
+    procs, wait, next_try, no_rev = {}, {}, {}, {}
     while True:
         for p in peers:
             name = p.get("name") or p["tunnel"]
             proc = procs.get(name)
+            if name in _tunnel_kick:  # owner 18.11 19:42: the chain watch found the peer up but its tunnel dead: rebuild now
+                _tunnel_kick.discard(name)
+                if proc and proc.poll() is None:
+                    log("tunnel kicked (peer answers ssh, tunnel does not):", name)
+                    _kill_tree(proc)
+                    procs[name] = proc = None
+                    next_try[name] = 0
             off = kv_get(f"tunnel_off:{name}") == "1"
             if off:
                 if proc and proc.poll() is None:
@@ -7519,8 +7540,10 @@ def tunnel_keeper():
                     err = (proc.stderr.read() or b"").decode("utf-8", "replace")[-200:]
                 except Exception:
                     pass
-                wait[name] = min(120, max(5, wait.get(name, 5) * 2))
+                wait[name] = min(30, max(2, wait.get(name, 2) * 2))  # owner 18.11 19:42: was 5..120 s
                 next_try[name] = time.time() + wait[name]
+                if "remote port forwarding failed" in err:  # a dead session over there still holds our -R port
+                    no_rev[name] = time.time() + 300
                 kv_set(f"tunnel:{name}", json.dumps({"state": "down", "error": err.strip(), "retry_in": wait[name],
                                                      "at": dt.datetime.now().isoformat(timespec="seconds")}, ensure_ascii=False))
                 procs[name] = None
@@ -7529,17 +7552,18 @@ def tunnel_keeper():
             if time.time() < next_try.get(name, 0):
                 continue
             try:
-                procs[name] = subprocess.Popen(tunnel_cmd(p, ssh, multi=len(peers) > 1), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                procs[name] = subprocess.Popen(tunnel_cmd(p, ssh, multi=len(peers) > 1, no_reverse=time.time() < no_rev.get(name, 0)),
+                                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                                stderr=subprocess.PIPE, creationflags=NO_WINDOW)
                 kv_set(f"tunnel:{name}", json.dumps({"state": "up", "since": dt.datetime.now().isoformat(timespec="seconds")}))
-                wait[name] = 5 if wait.get(name, 5) <= 5 else wait[name]
+                wait[name] = 2 if wait.get(name, 2) <= 2 else wait[name]
             except Exception as e:
                 kv_set(f"tunnel:{name}", json.dumps({"state": "down", "error": str(e)[:200]}, ensure_ascii=False))
                 next_try[name] = time.time() + 60
-        for name, proc in procs.items():  # a tunnel that stayed up a minute resets the backoff
+        for name, proc in procs.items():  # a tunnel that stays up resets the backoff
             if proc and proc.poll() is None:
-                wait[name] = 5
-        time.sleep(10)
+                wait[name] = 2
+        time.sleep(2)  # owner 18.11 19:42: a dead tunnel is restarted within seconds (was 10 s)
 
 
 # ---------- backup ----------
@@ -7744,14 +7768,9 @@ def peer_fetch_confirmed(peer, tries=None, gap=5):
 
 
 def peer_machine_up(peer):
-    """Is the other COMPUTER alive (its ssh answers) even though its agent does not? True = only the agent is down (a restart)."""
-    alias = peer_alias(peer)
-    if not alias:
-        return False
-    try:
-        return _ssh(alias, "echo ok", timeout=15).returncode == 0
-    except Exception:
-        return False
+    """Is the other COMPUTER alive (its sshd answers) even though its agent does not? True = only the agent is down (a restart).
+    Owner 18.11 19:42: the sshd greeting over plain TCP (peer_machine_probe, ~1.5 s at most) instead of a full ssh login (15 s)."""
+    return bool(peer_machine_probe(peer, timeout=2 * float(chain_cfg()["machine_timeout"])))
 
 
 def _grace_state(peer, state, cfg):
@@ -7774,7 +7793,9 @@ def _grace_state(peer, state, cfg):
 def peer_watch():
     """Every 2 minutes (config peer_watch_seconds): is each other machine (config peers) up, and is its bridge connected? Alerts go to OUR primary
     control group — so a machine whose own bridge is down still gets reported. Config peer_watch (default on)."""
-    time.sleep(90)  # let the tunnel come up after a start
+    # let the tunnel come up after a start. Owner 18.11 19:42: the take-over / hand-back of the identity is chain_watch's (seconds);
+    # this loop keeps the alerts, the identity copies and the plugins' hand-back, so a shorter wait is enough
+    time.sleep(20 if chain_active() else 90)
     while True:
         try:
             if CFG.get("peer_watch", True):
@@ -7785,7 +7806,7 @@ def peer_watch():
                         state = json.loads(kv_get(key) or "{}")
                     except ValueError:
                         state = {}
-                    brief = peer_fetch_confirmed(peer)
+                    brief = peer_fetch_chain(peer, name) if chain_active() else peer_fetch_confirmed(peer)
                     if brief and brief.get("wa_account"):  # its WhatsApp number ("account" in /brief is the Claude account)
                         kv_set(f"peer_account:{name}", str(brief["wa_account"]))
                     state, msgs = peer_watch_step(state, brief, dt.datetime.now(), CFG, name)
@@ -7807,13 +7828,14 @@ def peer_watch():
             plugin_hold_watch()
         except Exception:
             log("peer_watch error", traceback.format_exc())
-        # owner 16.11: the backup laptop checks every few seconds and takes over at once (config peer_watch_seconds)
+        # owner 16.11: the backup laptop checks every few seconds and takes over at once (config peer_watch_seconds).
+        # Owner 18.11 19:42: with the identity chain, the take-over itself is chain_watch's (every 2 s); this loop is the slow part.
         time.sleep(max(10, int(CFG.get("peer_watch_seconds", 120))))
 
 
-def _ssh(alias, remote_cmd, timeout=120):
+def _ssh(alias, remote_cmd, timeout=120, connect=None):
     ssh = shutil.which("ssh") or r"C:\Windows\System32\OpenSSH\ssh.exe"
-    return subprocess.run([ssh, "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", alias, remote_cmd], capture_output=True,
+    return subprocess.run([ssh, *ssh_opts(connect), alias, remote_cmd], capture_output=True,
                           timeout=timeout, creationflags=NO_WINDOW)
 
 
@@ -7827,7 +7849,7 @@ def _ps_remote(alias, script, timeout=180):
 
 def _scp(alias, files, dest_dir, timeout=1800):
     scp = shutil.which("scp") or r"C:\Windows\System32\OpenSSH\scp.exe"
-    r = subprocess.run([scp, "-q", "-B", "-o", "ConnectTimeout=20", *files, f"{alias}:{dest_dir.rstrip('/')}/"],
+    r = subprocess.run([scp, "-q", *ssh_opts(), *files, f"{alias}:{dest_dir.rstrip('/')}/"],
                        capture_output=True, timeout=timeout, creationflags=NO_WINDOW)
     if r.returncode:
         raise RuntimeError((r.stderr or b"").decode("utf-8", "replace")[-200:] or f"scp exit {r.returncode}")
@@ -8165,7 +8187,7 @@ def _remote_python(peer, script, timeout=120):
     Returns (returncode, stdout, stderr)."""
     py = (peer or {}).get("python") or _remote_root(peer) + "/agent/.venv/Scripts/python.exe"
     ssh = shutil.which("ssh") or r"C:\Windows\System32\OpenSSH\ssh.exe"
-    r = subprocess.run([ssh, "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", peer_alias(peer), f'"{py}" -I -X utf8 -'],
+    r = subprocess.run([ssh, *ssh_opts(), peer_alias(peer), f'"{py}" -I -X utf8 -'],
                        input=script.encode("utf-8"), capture_output=True, timeout=timeout, creationflags=NO_WINDOW)
     return r.returncode, (r.stdout or b"").decode("utf-8", "replace"), (r.stderr or b"").decode("utf-8", "replace")
 
@@ -8221,7 +8243,17 @@ def put(path, kv):
 put(C["agent_db"], C["kv"])
 for p, kv in C["pdb"].items():
     put(p, kv)
-if C.get("reminders"):
+if C.get("reminders") and C.get("pass_host"):  # to an earlier backup: new rows there, mapped to the host's ids as here
+    db = sqlite3.connect(C["agent_db"], timeout=60)
+    with db:
+        for r in C["reminders"]:
+            rid = db.execute("INSERT INTO reminders (kind, text, due, chat_jid, ref_ts, status, created, fired) VALUES (?,?,?,?,?,?,?,?)",
+                             (r.get("kind"), r.get("text"), r.get("due"), r.get("chat_jid"), r.get("ref_ts"), r["status"], r.get("created"), r.get("fired"))).lastrowid
+            if r.get("orig"):
+                db.execute("INSERT OR REPLACE INTO kv VALUES (?, ?)", ("fo_rem:%d" % rid, str(r["orig"])))
+                db.execute("INSERT OR REPLACE INTO kv VALUES (?, ?)", ("fo_rem_orig:%s:%s" % (C["pass_host"], r["orig"]), str(rid)))
+    db.close()
+elif C.get("reminders"):
     db = sqlite3.connect(C["agent_db"], timeout=60)
     with db:
         for r in C["reminders"]:
@@ -8405,7 +8437,23 @@ def failover_activate(name, fc, st, now=None, take_session=True):
     missing = [p for p in fc["plugins"] if not os.path.exists(p)]
     if missing:
         return f"⚠️ לא העברתי: חסרים במחשב הזה הקבצים {', '.join(missing)}."
-    snap = None if st.get("handback_pending") else _fo_snapshot(name)
+    # owner 18.11 19:42: a later backup handed us the identity and its current plugin flags (identity_handoff "pass"):
+    # the host's older snapshot must not overwrite them
+    passed = chain_pass_marker(name)
+    snap = None if st.get("handback_pending") or passed else _fo_snapshot(name)
+    # Owner 18.11 19:42: the WhatsApp identity first (the bridge is what must move within seconds), the plugins after it.
+    # The state says "active" before the grant, so the idle-backup check never revokes it in between.
+    st.update(state="active", since=now.isoformat(timespec="seconds"), handback_pending=True,
+              host=(snap or {}).get("host") or st.get("host", ""))
+    st.pop("to", None)
+    failover_save(name, st)
+    try:
+        sline = session_take(f"take-over for {name}") if take_session else ""
+    except Exception:
+        log("session take failed", traceback.format_exc())
+        sline = "⚠️ העברת הזדהות הווצאפ לכאן נכשלה (פרטים ביומן)."
+    if passed:
+        kv_set(f"fo_passed:{name}", "")
     if snap:
         pre = tuple(fc["kv_prefixes"])
         with adb() as db:
@@ -8428,25 +8476,20 @@ def failover_activate(name, fc, st, now=None, take_session=True):
             kv_set(f"fo_rem:{rid}", str(r["id"]))
     with _sched_lock:  # register the jobs and set their "already done" flags before the scheduler looks at them
         nd, np_ = len(_daily), len(_periodic)
-        start_plugins(fc["plugins"])
-        jobs = sorted({k for _, k, _ in _daily[nd:]} | {k for _, k, _ in _periodic[np_:]})
+        if name not in _failover_loaded:  # taken again before the release restart: the plugins still run here
+            start_plugins(fc["plugins"])
+        jobs = sorted({k for _, k, _ in _daily[nd:]} | {k for _, k, _ in _periodic[np_:]}) or list(st.get("jobs") or [])
         for j in jobs if snap else []:
             for p in ("day:", "at:"):
                 if (snap.get("kv") or {}).get(p + j) is not None:
                     kv_set(p + j, snap["kv"][p + j])
     _failover_loaded.add(name)
-    st.update(state="active", since=now.isoformat(timespec="seconds"), jobs=jobs, handback_pending=True,
-              host=(snap or {}).get("host") or st.get("host", ""))
+    st.update(jobs=jobs)
     failover_save(name, st)
     work.put(lambda fc=fc, st=dict(st): failover_conversations(fc, st))
     os.makedirs(FAILOVER_DIR, exist_ok=True)
     write_json(_fo_hold_path(name), {"for": name, "host": st["host"], "by": socket.gethostname(), "since": st["since"]})
     log("failover active:", name, fc["plugins"])
-    try:
-        sline = session_take(f"take-over for {name}") if take_session else ""
-    except Exception:
-        log("session take failed", traceback.format_exc())
-        sline = "⚠️ העברת הזדהות הווצאפ לכאן נכשלה (פרטים ביומן)."
     return ((sline + "\n" if sline else "") + f"✅ האוטומציות ({_fo_plist(fc)}) עברו ל{fc['self_name']} ורצות כאן עד שהמחשב \"{name}\" יחזור. "
             + (f"מה שכבר בוצע אצלו (נכון ל-{snap['at'][11:16]}) לא ירוץ שוב." if snap else "")
             + ("\nגם השיחות שלו נענות כאן, וההודעות שנשלחו בזמן שלא היה זמין ייענו עכשיו." if fc.get("conversations") else "")
@@ -8526,9 +8569,11 @@ def failover_handback(peer, name, fc, st):
                 continue
             rems.append({**r, "orig": int(orig) if orig else None})
             mine.append(r["id"])
+    to = st.get("to") or ""  # owner 18.11 19:42: handed to an earlier backup (the host still down), not to the host
     rc, out, err = _remote_python(peer, _remote_script(FO_HANDBACK, {"agent_db": _remote_root(peer) + "/agent/agent.db",
                                                                      "kv": kv, "pdb": pdb, "files": files, "reminders": rems,
-                                                                     "backup_first": changed}), timeout=600)
+                                                                     "backup_first": changed, "pass_host": name if to else ""}),
+                                  timeout=600)
     if rc or "@@OK@@" not in out:
         log("failover hand-back failed", name, rc, (err or out)[-300:])
         return False
@@ -8546,7 +8591,11 @@ def failover_handback(peer, name, fc, st):
     except OSError:
         pass
     failover_save(name, {"state": "idle", "last": {"since": st.get("since"), "back": dt.datetime.now().isoformat(timespec="seconds")}})
-    log("failover released:", name, f"{len(kv)} keys handed back")
+    log("failover released:", name, f"{len(kv)} keys handed back" + (f" to {to}" if to else ""))
+    if to:
+        _fo_say(fc, f"✅ האוטומציות של \"{name}\" עברו מ{fc['self_name']} ל\"{to}\", שקודם לי בשרשרת וחזר"
+                    + (f" (עם {len(rems)} תזכורות)" if rems else "") + ". הזדהות הווצאפ כבר אצלו.")
+        return True
     _fo_say(fc, f"✅ המחשב \"{name}\" חזר, האוטומציות" + (" והשיחות" if fc.get("conversations") else "")
                 + " חזרו אליו (מה שבוצע כאן לא ירוץ אצלו שוב)."
                 + (f"\n📥 הועברו אליו {len(returned)} קבצים שחיכו לו (למשל טפסים חתומים), והוא יקלוט אותם." if returned else "")
@@ -8657,19 +8706,41 @@ def lease_revoke(why="", wait=None):
     except OSError:
         pass
     log("session lease revoked:", why)
-    wait = int(wait if wait is not None else (session_cfg() or {}).get("wait_bridge_seconds", 60))
+    wait = float(wait if wait is not None else (session_cfg() or {}).get("wait_bridge_seconds", 60))
     t0 = time.time()
     while True:
-        try:
-            st = open(LEASE_STATUS, encoding="utf-8").read()
-        except OSError:
-            st = ""
-        if not _bridge_running() or st.startswith(("waiting", "released")):
-            time.sleep(2)  # the process may still be closing its database
+        st = lease_status_text()
+        # owner 18.11 19:42 (7-second hand-overs): a bridge waiting at the gate never opened the session database, so it is free
+        # at once (was a fixed 2 s); one that is letting go is waited for until its process is gone (it is still disconnecting
+        # from WhatsApp, and the next PC must not connect before that)
+        if st.startswith("waiting") or not _bridge_running():
             return True
         if time.time() - t0 >= wait:
             return False
-        time.sleep(2)
+        time.sleep(0.3)
+
+
+def lease_status_text():
+    try:
+        with open(LEASE_STATUS, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def lease_replaced(seconds=120):
+    """Our bridge let go because WhatsApp said another PC connected with the identity (lease.go "replaced"), within seconds.
+    seconds=None: at any time since (a backup that lost the connection that way never takes it back by itself: in a split
+    network each side would think the other is down and they would take it from each other every few minutes)."""
+    st = lease_status_text()
+    if not st.startswith("replaced"):
+        return False
+    if seconds is None:
+        return True
+    try:
+        return time.time() - os.path.getmtime(LEASE_STATUS) < seconds
+    except OSError:
+        return False
 
 
 def _device_jid(path):
@@ -8712,7 +8783,7 @@ def _put_db(path, blob, keep_own=False):
     tmp = path + ".lease-tmp"
     with open(tmp, "wb") as f:
         f.write(blob)
-    for attempt in range(10):  # a reader of ours may still hold the file for a moment (Windows cannot replace an open file)
+    for attempt in range(25):  # a reader of ours may still hold the file for a moment (Windows cannot replace an open file)
         try:
             for ext in ("-wal", "-shm"):
                 if os.path.exists(path + ext):
@@ -8720,12 +8791,40 @@ def _put_db(path, blob, keep_own=False):
             os.replace(tmp, path)
             return
         except PermissionError:
-            if attempt == 9:
+            if attempt == 24:
                 raise
-            time.sleep(1)
+            time.sleep(0.2)
 
 
-SESSION_DUMP = r'''import base64, os, sqlite3, tempfile
+def _merge_history(src, dst=None):
+    """Owner 18.11 19:42: the copied message history goes INTO this PC's messages.db (rows it lacks, per table with a real
+    primary key, common columns) instead of replacing the file: that works while the bridge and the agent have it open
+    (replacing it failed with WinError 32 and cost the salon take-over 18.11 18:07), and it runs after the grant, off the
+    7-second path. Returns the number of rows added."""
+    dst = dst or os.path.join(STORE, "messages.db")
+    n = 0
+    db = sqlite3.connect(dst, timeout=60)
+    try:
+        db.execute("ATTACH DATABASE ? AS c", (src,))
+        mine = {r[0] for r in db.execute("SELECT name FROM main.sqlite_master WHERE type = 'table'")}
+        for (t,) in db.execute("SELECT name FROM c.sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").fetchall():
+            if t not in mine:
+                continue
+            info = db.execute(f'PRAGMA main.table_info("{t}")').fetchall()
+            pk = [r for r in info if r[5]]
+            if not pk or (len(pk) == 1 and str(pk[0][2]).upper() == "INTEGER"):
+                continue  # no key, or a row-number id that means different rows on each PC: never merged
+            theirs = {r[1] for r in db.execute(f'PRAGMA c.table_info("{t}")')}
+            cols = ",".join(f'"{r[1]}"' for r in info if r[1] in theirs)
+            with db:
+                n += db.execute(f'INSERT OR IGNORE INTO main."{t}" ({cols}) SELECT {cols} FROM c."{t}"').rowcount
+        db.execute("DETACH DATABASE c")
+    finally:
+        db.close()
+    return n
+
+
+SESSION_DUMP = r'''import base64, os, sqlite3, tempfile, zlib
 def copy(path):
     if not os.path.exists(path):
         return ""
@@ -8736,7 +8835,7 @@ def copy(path):
     dst.close()
     data = open(tmp, "rb").read()
     os.remove(tmp)
-    return base64.b64encode(data).decode()
+    return base64.b64encode(zlib.compress(data, 1)).decode()  # owner 18.11 19:42: about a third of the bytes over ssh
 for name in C["files"]:
     print("@@F@@" + name + "@@" + copy(C["store"] + "/" + name))
 print("@@OK@@")
@@ -8765,8 +8864,9 @@ def session_pull(peer, name, with_messages=False):
         if not b64.strip():
             continue
         tmp = os.path.join(SESSION_COPY, fname + ".tmp")
+        import zlib
         with open(tmp, "wb") as f:
-            f.write(base64.b64decode(b64))
+            f.write(zlib.decompress(base64.b64decode(b64)))
         if fname == "whatsapp.db":
             jid = _device_jid(tmp)
             for ext in ("-wal", "-shm"):  # opening the copy read-only leaves these next to it
@@ -8805,18 +8905,29 @@ def session_take(why):
         return "📱 הזדהות הווצאפ כבר כאן."
     if not os.path.exists(src):
         return "⚠️ אין כאן עותק של הזדהות הווצאפ, ולכן הגשר כאן לא התחבר."
-    lease_revoke("before installing the shared identity")
+    t0 = time.monotonic()
+    lease_revoke("before installing the shared identity", wait=10)
     with open(src, "rb") as f:
         _put_db(os.path.join(STORE, "whatsapp.db"), f.read(), keep_own=True)
-    msgs = os.path.join(SESSION_COPY, "messages.db")
-    if os.path.exists(msgs):
-        try:  # history only: the waiting bridge here holds messages.db open (WinError 32), and that aborted the whole
-            with open(msgs, "rb") as f:  # take-over on the salon PC 18.11 18:07 — the bridge never connected
-                _put_db(os.path.join(STORE, "messages.db"), f.read(), keep_own=True)
+    msgs, mine = os.path.join(SESSION_COPY, "messages.db"), os.path.join(STORE, "messages.db")
+    if os.path.exists(msgs) and not os.path.exists(mine):
+        try:
+            with open(msgs, "rb") as f:
+                _put_db(mine, f.read())
         except Exception:
             log("session take: message history not copied (the identity is):", traceback.format_exc())
     kv_set("session_taken_at", dt.datetime.now().isoformat(timespec="seconds"))
     lease_grant(why)
+    log(f"session take: identity installed and granted in {time.monotonic() - t0:.1f}s")
+    if os.path.exists(msgs) and os.path.exists(mine):
+        # owner 18.11 19:42: the history is merged after the grant, off the 7-second path (and without replacing a file the
+        # bridge / agent hold open: WinError 32 aborted the salon take-over 18.11 18:07)
+        def merge():
+            try:
+                log("session take: history merged,", _merge_history(msgs, mine), "rows added")
+            except Exception:
+                log("session take: history merge failed", traceback.format_exc())
+        threading.Thread(target=merge, daemon=True).start()
     meta = session_copy_meta()
     return f"📱 הזדהות הווצאפ של הגשר עברה לכאן (עותק מ-{str(meta.get('at', ''))[11:16]}), והגשר כאן מתחבר."
 
@@ -8824,7 +8935,9 @@ def session_take(why):
 def _session_handback_payload(since):
     """The holder, its bridge already stopped: the session file and the messages it received since the take-over."""
     import base64
-    data = {"session": base64.b64encode(_sqlite_bytes(os.path.join(STORE, "whatsapp.db"))).decode(), "messages": [], "chats": []}
+    import zlib
+    data = {"session": base64.b64encode(zlib.compress(_sqlite_bytes(os.path.join(STORE, "whatsapp.db")), 1)).decode(), "z": True,
+            "messages": [], "chats": []}
     try:
         db = sqlite3.connect(f"file:{os.path.join(STORE, 'messages.db')}?mode=ro", uri=True, timeout=30)
         db.row_factory = sqlite3.Row
@@ -8842,7 +8955,7 @@ def _session_handback_payload(since):
     return data
 
 
-SESSION_HANDBACK = r'''import base64, os, sqlite3, subprocess, time
+SESSION_HANDBACK = r'''import base64, json, os, sqlite3, subprocess, time, zlib
 store = C["store"]
 st = ""
 try:
@@ -8850,30 +8963,44 @@ try:
 except OSError:
     pass
 running = "whatsapp-bridge.exe" in subprocess.run(["tasklist", "/FI", "IMAGENAME eq whatsapp-bridge.exe", "/NH"], capture_output=True, text=True).stdout.lower()
-busy = running and not st.startswith(("waiting", "released"))
-path = store + "/whatsapp.db"
+mode = C.get("mode") or "host"
+blob = base64.b64decode(C["session"])
+if C.get("z"):
+    blob = zlib.decompress(blob)
 stamp = time.strftime("%Y%m%d-%H%M%S")
-if busy:
-    # owner 19.11 14:54: the host's bridge is already connected with its own session. Its identity stays as it is (no
-    # overwrite, no stuck hand-back); only the messages received on the backup are merged below.
-    print("@@KEPT@@ bridge connected here: " + st)
-elif os.path.exists(path):
-    src, dst = sqlite3.connect("file:" + path + "?mode=ro", uri=True, timeout=30), sqlite3.connect(path + ".pre-handback-" + stamp)
-    src.backup(dst)
-    src.close()
-    dst.close()
-if not busy:
+now = time.strftime("%Y-%m-%dT%H:%M:%S")
+def put(path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path + ".lease-tmp", "wb") as f:
-        f.write(base64.b64decode(C["session"]))
+        f.write(blob)
     for ext in ("-wal", "-shm"):
         try:
             os.remove(path + ext)
         except OSError:
             pass
     os.replace(path + ".lease-tmp", path)
+busy = running and not st.startswith(("waiting", "released", "replaced"))
+path = store + "/whatsapp.db"
+if busy:
+    # The target already holds the live identity; keep its DB and merge messages only.
+    print("@@KEPT@@ bridge connected here: " + st)
+    mpath = store + "/messages.db"
+elif mode == "pass":  # an earlier backup: the session waits in its session_copy; its own agent takes over with it
+    cdir = store + "/session_copy"
+    os.makedirs(cdir, exist_ok=True)
+    put(cdir + "/whatsapp.db")
+    mpath = cdir + "/messages.db" if os.path.exists(cdir + "/messages.db") else store + "/messages.db"
+else:
+    if os.path.exists(path):
+        src, dst = sqlite3.connect("file:" + path + "?mode=ro", uri=True, timeout=30), sqlite3.connect(path + ".pre-handback-" + stamp)
+        src.backup(dst)
+        src.close()
+        dst.close()
+    put(path)
+    mpath = store + "/messages.db"
 n = 0
-if C.get("messages") or C.get("chats"):
-    db = sqlite3.connect(store + "/messages.db", timeout=60)
+if (C.get("messages") or C.get("chats")) and os.path.exists(mpath):
+    db = sqlite3.connect(mpath, timeout=60)
     with db:
         for c in C.get("chats") or []:
             db.execute("INSERT INTO chats (jid, name, last_message_time) VALUES (?, ?, ?) ON CONFLICT(jid) DO UPDATE SET "
@@ -8886,42 +9013,108 @@ if C.get("messages") or C.get("chats"):
             n += db.execute("INSERT OR IGNORE INTO messages (" + ",".join(m) + ") VALUES (" + ",".join("?" * len(m)) + ")", list(m.values())).rowcount
     db.close()
 print("@@MSG@@%d" % n)
+if mode == "pass" and not busy:
+    meta = {}
+    try:
+        meta = json.load(open(cdir + "/meta.json", encoding="utf-8"))
+    except Exception:
+        pass
+    meta.update({"from": C.get("from", ""), "at": now, "passed_at": now})
+    with open(cdir + "/meta.json", "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False)
+    db = sqlite3.connect(C["agent_db"], timeout=60)
+    with db:
+        db.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)")
+        db.executemany("INSERT OR REPLACE INTO kv VALUES (?, ?)", list((C.get("kv") or {}).items())
+                       + [("fo_passed:" + C["host"], json.dumps({"from": C.get("from", ""), "at": now}))])
+    db.close()
+if C.get("grant"):  # the host: its bridge waits at the gate and connects within a second of this file
+    with open(store + "/lease_grant", "w", encoding="utf-8") as f:
+        f.write("hand-back from " + C.get("from", "") + " " + now + "\n")
 print("@@OK@@")
 '''
 
 
-def session_handback(peer, name):
-    """Before the plugins' hand-back: stop our bridge, send the identity (and the messages received here) back to the host.
-    True = done (or nothing to do); False = retry next round, the plugins' hand-back waits."""
+def _alive_holds_lease(d):
+    """A peer's /alive (or /brief) says its bridge holds the identity now."""
+    lease = (d or {}).get("lease") or (d or {}).get("session_lease") or {}
+    if "held" in lease:
+        return bool(lease.get("held"))
+    return str(lease.get("status") or "").startswith("holding")
+
+
+def _fo_plugin_kv(fc, st):
+    """The host's plugin state as it is here: agent kv by prefix and the day:/at: flags of its jobs."""
+    pre = tuple(fc["kv_prefixes"]) + tuple(p + j for j in st.get("jobs") or [] for p in ("day:", "at:"))
+    with adb() as db:
+        return {k: v for k, v in db.execute("SELECT k, v FROM kv") if k.startswith(pre)}
+
+
+def identity_handoff(peer, target, mode="host", host="", kv=None):
+    """Owner 18.11 19:42 ("every hand-over within 7 seconds; an earlier PC that comes back always has priority"): the holder
+    gives the WhatsApp identity to `target` in one ssh call. Our bridge is stopped first (never two connections on one
+    identity), then the session (compressed) and the messages received here are written there:
+      mode "host": into the host's store, with its grant: its bridge, waiting at the gate, connects within a second;
+      mode "pass": an earlier backup (the host is still down): into its session_copy with our plugin flags and a
+                   fo_passed marker; its own chain watch takes over with it on its next check (about a second).
+    The plugins follow after our release restart (failover_handback). True = handed over (or nothing to hand)."""
     if not session_cfg() or not kv_get("session_taken_at"):
         return True
-    if not lease_revoke("handing the identity back to " + name):
-        log("session hand-back: our bridge did not stop yet")
+    t0 = time.monotonic()
+    if not lease_revoke(f"handing the identity to {target}", wait=float(chain_cfg()["bridge_stop_seconds"])):
+        log("identity hand-over: our bridge did not stop in time; keeping the identity for now")
+        lease_grant("hand-over postponed: the bridge did not stop")
         return False
-    payload = _session_handback_payload(kv_get("session_taken_at"))
+    since = kv_get("session_taken_at")
+    if mode == "pass":  # its copy of the history may be older than our take-over: a few days back covers the gap
+        since = min(since, (dt.datetime.now() - dt.timedelta(days=3)).isoformat(timespec="seconds"))
+    data = {"store": _remote_root(peer) + "/whatsapp-bridge/store", "mode": mode, "grant": mode == "host",
+            "from": str((CFG.get("failover") or {}).get("self_name") or socket.gethostname()), **_session_handback_payload(since)}
+    if mode == "pass":
+        data.update(agent_db=_remote_root(peer) + "/agent/agent.db", host=host, kv=kv or {})
     try:
-        rc, out, err = _remote_python(peer, _remote_script(SESSION_HANDBACK, {"store": _remote_root(peer) + "/whatsapp-bridge/store", **payload}), timeout=600)
+        rc, out, err = _remote_python(peer, _remote_script(SESSION_HANDBACK, data), timeout=120)
     except Exception as e:
         rc, out, err = 1, "", str(e)
+    if "@@KEPT@@" in out:
+        # The target's bridge is already connected; preserve its live session and merge only messages.
+        log("identity hand-over:", target, "is connected already; the session there is the live one")
+        kv_set("session_taken_at", "")
+        return True
     if rc or "@@OK@@" not in out:
-        log("session hand-back failed", name, rc, (err or out)[-300:])
+        log("identity hand-over failed", target, rc, (err or out)[-300:])
+        d = peer_alive(peer, timeout=3)
+        if d is not None and not _alive_holds_lease(d) and not lease_replaced(None):
+            lease_grant(f"hand-over to {target} failed: the identity stays here")
+        else:  # it may have the identity now (the answer was lost): never two; the next check retries
+            log("identity hand-over: not taking it back, the state of", target, "is unknown")
         return False
     kv_set("session_taken_at", "")
-    log("session handed back to", name, next((ln for ln in out.splitlines() if ln.startswith("@@MSG@@")), ""),
-        "(its bridge was already connected: its own identity kept)" if "@@KEPT@@" in out else "")
+    log(f"identity handed to {target} ({mode}) in {time.monotonic() - t0:.1f}s",
+        next((ln for ln in out.splitlines() if ln.startswith("@@MSG@@")), ""),
+        "(live identity kept at target)" if "@@KEPT@@" in out else "")
     return True
 
 
-def session_host_start(deferred):
-    """Host at start-up: lease mode on; grant now unless a backup holds our work (then deferred_plugins grants after the
-    hand-back brought the session back)."""
+def session_handback(peer, name):
+    """Before the plugins' hand-back: the identity goes back to the host first (identity_handoff; normally already done by
+    chain_watch within seconds of the host's return). True = done (or nothing to do); False = retry next round."""
+    return identity_handoff(peer, name, "host")
+
+
+def session_host_start(deferred, holds=None):
+    """Host at start-up: lease mode on; grant now only when every peer said nobody holds our work (holds == []). A backup
+    holds it: wait for the hand-back (it writes our grant). Not known (a peer could not be asked): chain_watch decides
+    within seconds from the peers' /alive (owner 18.11 19:42: granting blindly put two PCs on one identity)."""
     if not session_cfg() or failover_cfg():
         return
     lease_enable()
-    if not deferred:
+    if deferred:
+        lease_revoke("a backup holds the identity; waiting for the hand-back", wait=20)
+    elif holds == [] or not chain_active():
         lease_grant("host start")
     else:
-        lease_revoke("a backup holds the identity; waiting for the hand-back", wait=20)
+        log("host start: not every peer answered; the chain watch grants the identity once nobody holds it")
 
 
 def session_backup_tick(peer, name, peer_st):
@@ -8933,8 +9126,9 @@ def session_backup_tick(peer, name, peer_st):
     lease_enable()
     if (failover_state(name).get("state") or "idle") != "idle":
         return
-    if lease_held():  # an idle backup must never hold the identity (e.g. left from an old take-over)
-        lease_revoke("idle backup")
+    with _take_lock:  # never while chain_watch is taking over (it grants before its state says "active")
+        if lease_held() and (failover_state(name).get("state") or "idle") == "idle":
+            lease_revoke("idle backup")  # an idle backup must never hold the identity (e.g. left from an old take-over)
     last = kv_get("session_pull_at") or ""
     now = dt.datetime.now()
     if last and now - dt.datetime.fromisoformat(last) < dt.timedelta(minutes=float(sc["pull_minutes"])):
@@ -8942,10 +9136,14 @@ def session_backup_tick(peer, name, peer_st):
     kv_set("session_pull_at", now.isoformat(timespec="seconds"))
     src_peer, src_name = (peer, name) if not (peer_st or {}).get("off_since") else (None, None)
     if not src_peer:
+        view = chain_view() if chain_active() else {}
         for p in CFG.get("peers") or []:
-            b = peer_fetch(p, timeout=8)
-            if b and name in (b.get("failover_holds") or []) and peer_alias(p):
-                src_peer, src_name = p, p.get("name") or peer_alias(p)
+            pn = p.get("name") or peer_alias(p)
+            v = view.get(pn)
+            b = (v or {}).get("data") if v else peer_fetch(p, timeout=8)
+            holds = (b or {}).get("holds") or (b or {}).get("failover_holds") or []
+            if b and name in holds and peer_alias(p):
+                src_peer, src_name = p, pn
                 break
     if not src_peer:
         return
@@ -9161,7 +9359,24 @@ def failover_tick(peer, name, peer_st):
     if planned == "mine" and (peer_st or {}).get("off_since"):
         fc = {**fc, "after_minutes": 0, "auto": True}
         peer_st = {k: v for k, v in peer_st.items() if k != "grace"}
-    if planned != "mine" and (failover_state(name).get("state") or "idle") == "idle" and (peer_st or {}).get("off_since") and             (fc.get("defer_to") or len(CFG.get("peers") or []) > 1):
+    if chain_active():
+        # owner 18.11 19:42: with the one identity, taking over and giving back are chain_watch's (seconds, not this loop's
+        # 15 s + retries); here only the slow part: the plugins' hand-back after the release restart, and the state copies
+        st = failover_state(name)
+        state = st.get("state") or "idle"
+        if state == "releasing" and name not in _failover_loaded:
+            to = st.get("to") or name
+            tpeer = _fo_peer(to) if to != name else peer
+            if tpeer and (chain_view().get(to) or {}).get("status") == "up":
+                failover_handback(tpeer, name, fc, st)
+        elif state == "idle" and not (peer_st or {}).get("off_since") and peer_alias(peer):
+            _failover_idle_pull(peer, name, fc)
+        cover_restart = state == "idle" and (peer_st or {}).get("grace")
+        check_host_loss = state == "active" and (peer_st or {}).get("off_since")
+        if not (cover_restart or check_host_loss):
+            return  # cover a restart without moving identity; later move it only if the host computer itself is down
+    if planned != "mine" and (failover_state(name).get("state") or "idle") == "idle" and \
+            (peer_st or {}).get("off_since") and (fc.get("defer_to") or len(CFG.get("peers") or []) > 1):
         why = failover_chain_blocker(fc, name)
         if why:
             if kv_get(f"fo_chain_wait:{name}") != why:
@@ -9208,15 +9423,20 @@ def failover_tick(peer, name, peer_st):
     if state == "releasing" and name not in _failover_loaded and not (peer_st or {}).get("off_since"):
         failover_handback(peer, name, fc, st)
     elif state == "idle" and not (peer_st or {}).get("off_since") and peer_alias(peer):
-        last = kv_get(f"failover_pull:{name}") or ""
-        if not last or dt.datetime.now() - dt.datetime.fromisoformat(last) >= dt.timedelta(minutes=int(fc["sync_minutes"])):
-            kv_set(f"failover_pull:{name}", dt.datetime.now().isoformat(timespec="seconds"))
-            problems = failover_code_pull(fc)
-            failover_pull(peer, name, fc)
-            note = "\n".join(problems)
-            if problems and kv_get(f"failover_code_problem:{name}") != note:  # once per distinct problem
-                _fo_say(fc, f"⚠️ הגיבוי ({fc['self_name']}) לא עדכן את קוד האוטומציות מהמחשב \"{name}\":\n{note}")
-            kv_set(f"failover_code_problem:{name}", note)
+        _failover_idle_pull(peer, name, fc)
+
+
+def _failover_idle_pull(peer, name, fc):
+    """Backup, idle, the host up: every sync_minutes its plugin code (fast-forward) and its plugin state."""
+    last = kv_get(f"failover_pull:{name}") or ""
+    if not last or dt.datetime.now() - dt.datetime.fromisoformat(last) >= dt.timedelta(minutes=int(fc["sync_minutes"])):
+        kv_set(f"failover_pull:{name}", dt.datetime.now().isoformat(timespec="seconds"))
+        problems = failover_code_pull(fc)
+        failover_pull(peer, name, fc)
+        note = "\n".join(problems)
+        if problems and kv_get(f"failover_code_problem:{name}") != note:  # once per distinct problem
+            _fo_say(fc, f"⚠️ הגיבוי ({fc['self_name']}) לא עדכן את קוד האוטומציות מהמחשב \"{name}\":\n{note}")
+        kv_set(f"failover_code_problem:{name}", note)
 
 
 def failover_resume():
@@ -9241,6 +9461,549 @@ def failover_resume():
     load_plugins(fc["plugins"])
     _failover_loaded.add(fc["for"])
     log("failover: still holding", fc["for"], "- plugins loaded again")
+
+
+# ---------- chain watch: who is up, within seconds; take over / give back the identity (owner 18.11.2026 19:42) ----------
+# "Every hand-over in the chain must complete within 7 seconds. The laptop (last) must take the bridge within 7 seconds.
+# Whenever a PC earlier in the chain comes back it always has priority: the bridge returns backward, in order desktop ->
+# bedroom -> living room -> laptop."
+#
+# Budget per step (defaults; config "chain" overrides any of them):
+#   check_seconds 2     every peer is asked for /alive (a light answer: heartbeat, lease, holds) through its tunnel
+#   http_timeout 1.5    ... and given 1.5 s
+#   machine_timeout 1.5 a miss starts a direct probe of the PC itself: TCP to its sshd, the "SSH-" greeting (no login)
+#   misses 2            down = 2 misses in a row AND the PC itself does not answer
+#   => a PC that loses power is "down" 3.5-5.5 s later (the probe of the 1st miss ends before the 2nd miss is counted).
+#   The take-over then installs the copied identity and grants it (< 1 s, the history is merged afterwards); the bridge
+#   waiting at the gate sees the grant within 1 s (lease.go) and connects. The way back is as short: the holder stops its
+#   bridge (<= 1.5 s), sends the session in one ssh call (1-2 s) and writes the earlier PC's grant (identity_handoff).
+#   agent_grace_seconds 180: a PC whose computer answers but whose agent does not is restarting its agent. Its bridge keeps
+#   the WhatsApp connection meanwhile (an agent restart does not stop the bridge), so taking over then would put two
+#   connections on one identity: we wait, and after the grace take over only once its bridge was stopped over ssh
+#   (peer_fence). A PC never seen holding (no history) is fenced at once instead of waited for.
+#   net_check: a backup without internet never takes over (its bridge could not connect; it would only fight later).
+
+CHAIN_DEFAULTS = {"check_seconds": 2, "http_timeout": 1.5, "machine_timeout": 1.5, "misses": 2, "agent_grace_seconds": 180,
+                  "net_check": True, "pass_marker_seconds": 120, "bridge_stop_seconds": 8, "fence_seconds": 8}
+_chain = {}  # peer name -> {"data", "last", "misses", "since", "machine", "probing", "seen", "via"}
+_chain_lock = threading.Lock()
+_chain_wake = threading.Event()
+_take_lock = threading.RLock()  # a take-over / hand-over in progress (session_backup_tick must not revoke in between)
+_ssh_targets = {}
+
+
+def chain_cfg():
+    fc = CFG.get("failover") or {}
+    grace = {"agent_grace_seconds": fc["agent_grace_seconds"]} if "agent_grace_seconds" in fc else {}
+    return {**CHAIN_DEFAULTS, **grace, **(CFG.get("chain") or {})}
+
+
+def chain_active():
+    """The fast chain logic runs where the one WhatsApp identity moves between PCs (session_share) and there are peers."""
+    return bool(session_cfg()) and bool(CFG.get("peers")) and (CFG.get("chain") or {}).get("enabled", True) is not False
+
+
+def peer_alive(peer, timeout=1.5):
+    """A peer's light liveness answer (/alive: no bridge, git or process calls on its side). An older peer without /alive:
+    its /brief, in the same shape. None = no answer."""
+    url = str((peer or {}).get("url") or "").rstrip("/")
+    if not url:
+        return None
+    try:
+        return json.loads(urllib.request.urlopen(url + "/alive", timeout=timeout).read().decode() or "{}")
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            return None
+    except Exception:
+        return None
+    b = peer_fetch(peer, timeout=max(timeout, 5))
+    if not b:
+        return None
+    lease = dict(b.get("session_lease") or {})
+    lease.setdefault("held", str(lease.get("status") or "").startswith("holding"))
+    return {"agent_alive": b.get("agent_alive", True), "holds": b.get("failover_holds") or [], "lease": lease, "old": True}
+
+
+def ssh_target(alias):
+    """(host, port) an ssh alias points at, from the user's ssh config (`ssh -G`), cached. None: it goes through a proxy
+    (no direct TCP probe possible)."""
+    if alias in _ssh_targets:
+        return _ssh_targets[alias]
+    host, port, proxy = alias, 22, False
+    try:
+        ssh = shutil.which("ssh") or r"C:\Windows\System32\OpenSSH\ssh.exe"
+        out = subprocess.run([ssh, "-G", alias], capture_output=True, text=True, timeout=10, creationflags=NO_WINDOW).stdout
+        for ln in out.splitlines():
+            k, _, v = ln.strip().partition(" ")
+            v = v.strip()
+            if k == "hostname" and v:
+                host = v
+            elif k == "port" and v.isdigit():
+                port = int(v)
+            elif k in ("proxyjump", "proxycommand") and v and v.lower() != "none":
+                proxy = True
+    except Exception as e:
+        log("ssh -G", alias, e)
+        return (alias, 22)  # not cached: try again next time
+    _ssh_targets[alias] = None if proxy else (host, port)
+    return _ssh_targets[alias]
+
+
+def peer_machine_probe(peer, timeout=1.5):
+    """Does the other COMPUTER answer at all? Its sshd's greeting over a plain TCP connection: no login, nothing started
+    over there (a full ssh login every 2 s from three PCs would load sshd: MaxStartups). True / False; None = no ssh alias."""
+    alias = peer_alias(peer or {})
+    if not alias:
+        return None
+    target = ssh_target(alias)
+    if target is None:  # behind a proxy: a real (short) login instead
+        try:
+            return _ssh(alias, "echo ok", timeout=timeout + 4, connect=max(2, int(timeout + 1))).returncode == 0
+        except Exception:
+            return False
+    try:
+        with socket.create_connection(target, timeout=timeout) as s:
+            s.settimeout(timeout)
+            return s.recv(64).startswith(b"SSH-")
+    except OSError:
+        return False
+
+
+def peer_alive_ssh(peer, timeout=8):
+    """Its /alive read on the PC itself over ssh (curl.exe ships with Windows 10+): tells a dead tunnel from a dead agent."""
+    alias = peer_alias(peer or {})
+    if not alias:
+        return None
+    try:
+        r = _ssh(alias, "curl.exe -s -m 3 http://127.0.0.1:8770/alive", timeout=timeout, connect=3)
+        if r.returncode:
+            return None
+        return json.loads((r.stdout or b"").decode("utf-8", "replace").strip() or "null")
+    except Exception:
+        return None
+
+
+def chain_status(v, cc=None):
+    """'up' (its agent answers) | 'agent_down' (the PC answers, its agent does not: a restart) | 'down' (the PC itself does
+    not answer, misses in a row) | 'unknown' (not decided yet)."""
+    cc = cc or chain_cfg()
+    d = v.get("data")
+    if d is not None:
+        return "up" if d.get("agent_alive", True) is not False else "agent_down"
+    if not v.get("misses"):
+        return "unknown"
+    if v.get("machine") is True:
+        return "agent_down"
+    if v["misses"] >= int(cc["misses"]) and (v.get("machine") is False or (v.get("machine") is None and not v.get("probing"))):
+        return "down"
+    return "unknown"
+
+
+def _chain_note(name, data, cc, now=None):
+    """One /alive result into the view. Returns (status before, after, start a machine probe?)."""
+    now = now or time.time()
+    with _chain_lock:
+        v = _chain.setdefault(name, {"misses": 0})
+        before = chain_status(v, cc)
+        probe = False
+        if data is not None:
+            v.update(data=data, last=data, misses=0, since=None, machine=True, seen=now, via="http")
+        else:
+            if not (v.get("via") == "ssh" and now - v.get("seen", 0) < 10):  # an answer over ssh stands for 10 s
+                v["data"] = None
+                v["misses"] = v.get("misses", 0) + 1
+                v["since"] = v.get("since") or now
+                if not v.get("probing"):
+                    v["probing"] = probe = True
+        return before, chain_status(v, cc), probe
+
+
+def _chain_machine(name, peer, cc):
+    """The direct probe after a miss; when the PC answers but its dashboard does not through the tunnel, its /alive is read
+    over ssh (at most every 10 s) and a dead tunnel is rebuilt."""
+    up, alt = None, None
+    try:
+        up = peer_machine_probe(peer, timeout=float(cc["machine_timeout"]))
+        if up:
+            with _chain_lock:
+                v = _chain.get(name) or {}
+                due = v.get("misses", 0) >= int(cc["misses"]) and time.time() - v.get("ssh_at", 0) >= 10
+                if due:
+                    v["ssh_at"] = time.time()
+            if due:
+                alt = peer_alive_ssh(peer)
+                if alt and alt.get("agent_alive", True) is not False and peer.get("tunnel"):
+                    _tunnel_kick.add(peer.get("name") or peer["tunnel"])
+    except Exception:
+        log("chain machine probe", name, traceback.format_exc())
+    finally:
+        with _chain_lock:
+            v = _chain.setdefault(name, {"misses": 0})
+            before = chain_status(v, cc)
+            v["probing"] = False
+            if v.get("data") is None:  # no fresh answer through the tunnel meanwhile
+                v["machine"] = up
+                if alt:
+                    v.update(data=alt, last=alt, misses=0, since=None, seen=time.time(), via="ssh")
+            after = chain_status(v, cc)
+        if before != after:
+            log(f"chain: \"{name}\" {before} -> {after}")
+            _chain_wake.set()
+
+
+def _chain_probe_loop(peer):
+    name = peer.get("name") or peer_alias(peer)
+    while True:
+        cc = chain_cfg()
+        t0 = time.monotonic()
+        try:
+            data = peer_alive(peer, timeout=float(cc["http_timeout"]))
+            before, after, probe = _chain_note(name, data, cc)
+            if probe:
+                threading.Thread(target=_chain_machine, args=(name, peer, cc), daemon=True).start()
+            if before != after:
+                log(f"chain: \"{name}\" {before} -> {after}")
+                _chain_wake.set()
+        except Exception:
+            log("chain probe", name, traceback.format_exc())
+        time.sleep(max(0.2, float(cc["check_seconds"]) - (time.monotonic() - t0)))
+
+
+def chain_view():
+    """name -> {"status", "data" (fresh answer or None), "last" (last answer ever), "since" (first miss, epoch)}."""
+    cc = chain_cfg()
+    with _chain_lock:
+        return {n: {"status": chain_status(v, cc), "data": v.get("data"), "last": v.get("last") or {}, "since": v.get("since"),
+                    "machine": v.get("machine")} for n, v in _chain.items()}
+
+
+def peer_fetch_chain(peer, name):
+    """peer_watch in chain mode: the peer's /brief only when the chain view says its agent is up (no 45 s of retries on a
+    PC that is off); /brief failing while /alive answers is not an outage."""
+    v = chain_view().get(name) or {}
+    if v.get("status") in ("down", "agent_down"):
+        return None if v.get("status") == "down" or not v.get("data") else {**v["data"], "agent_alive": False}
+    b = peer_fetch(peer, timeout=8)
+    if b is None and v.get("status") == "up":
+        d = v.get("data") or {}
+        return {"agent_alive": True, "failover_holds": d.get("holds") or [], "session_lease": d.get("lease") or {},
+                "bridge": {"connected": True}}
+    return b
+
+
+def chain_pass_marker(host):
+    """A later backup handed us the identity a moment ago (identity_handoff "pass"): its name, else ""."""
+    try:
+        m = json.loads(kv_get(f"fo_passed:{host}") or "{}")
+        at = dt.datetime.fromisoformat(m.get("at") or "")
+    except (ValueError, TypeError):
+        return ""
+    if (dt.datetime.now() - at).total_seconds() > float(chain_cfg()["pass_marker_seconds"]):
+        return ""
+    return str(m.get("from") or "")
+
+
+def _chain_ready(d):
+    """A peer's /alive says it can take the identity: its agent is up and its bridge waits at the gate with a copy."""
+    lease = (d or {}).get("lease") or {}
+    return (d or {}).get("agent_alive", True) is not False and bool(lease.get("mode")) and bool(lease.get("copy_at") or lease.get("held"))
+
+
+def _maybe_holder(v):
+    """From what we last heard: may this PC's bridge hold the identity? (no history at all: maybe)"""
+    last = v.get("last") or {}
+    return not last or bool(last.get("holds")) or _alive_holds_lease(last)
+
+
+def chain_take_blocker(fc, host, view, now=None, passed_from="", fenced=()):
+    """Backup: why it must not take the host's work and identity now. Returns (why, peer to fence first) - ("", None) = go.
+    Order (owner 18.11): desktop -> bedroom -> living room -> laptop; defer_to = the backups before this one."""
+    now = now or time.time()
+    grace = float(chain_cfg()["agent_grace_seconds"])
+    before = [str(x) for x in fc.get("defer_to") or []]
+    hv = view.get(host) or {"status": "unknown"}
+    hs = hv["status"]
+    if hs == "up":
+        return f"\"{host}\" זמין", None
+    if hs == "unknown":
+        return f"\"{host}\" עוד לא נבדק", None
+    if hs == "agent_down" and host not in fenced:
+        if now - (hv.get("since") or now) < grace:
+            return f"\"{host}\" מפעיל מחדש את הסוכן (המחשב עונה)", None
+        return f"\"{host}\": הסוכן לא עונה {int(now - hv['since'])} שנ' והמחשב כן", host
+    for pn, v in view.items():
+        if pn == host or pn == passed_from or pn in fenced:
+            continue
+        s, d = v["status"], v.get("data") or {}
+        if s == "up":
+            if host in (d.get("holds") or []) or _alive_holds_lease(d):
+                return f"\"{pn}\" מחזיק כבר את העבודה", None
+            if pn in before and _chain_ready(d):
+                return f"\"{pn}\" לפניי בשרשרת וזמין", None
+        elif s == "unknown" and (pn in before or _maybe_holder(v)):
+            return f"\"{pn}\" עוד לא נבדק", None
+        elif s == "agent_down" and _maybe_holder(v):
+            known = bool(v.get("last"))
+            if known and now - (v.get("since") or now) < grace:
+                return f"\"{pn}\" החזיק ומפעיל מחדש את הסוכן", None
+            return f"\"{pn}\": הסוכן לא עונה והמחשב כן; אולי הגשר שלו מחובר", pn
+    return "", None
+
+
+def chain_handback_target(fc, host, view):
+    """Holder: the earliest PC before us in the chain that is back and can take the identity: the host first, then the
+    backups in defer_to order. "" = keep holding."""
+    mine = lease_held()
+    for pn in [host] + [str(x) for x in fc.get("defer_to") or []]:
+        v = view.get(pn) or {}
+        if v.get("status") != "up":
+            continue
+        d = v.get("data") or {}
+        lease = d.get("lease") or {}
+        if not lease.get("mode"):
+            continue  # no identity gate there: it cannot take the identity
+        if pn == host:
+            if _alive_holds_lease(d) and mine:
+                continue  # both connected (it came back cut off): it lets go first (chain_host_step), then it is the target
+            return pn
+        if d.get("holds") or _alive_holds_lease(d) or (d.get("chain") or {}).get("for") != host:
+            continue  # it holds something itself, or runs code without the chain hand-over (or backs up another host)
+        return pn
+    return ""
+
+
+def internet_ok(timeout=2.0):
+    """This PC reaches WhatsApp at all (a backup without internet must not take the identity)."""
+    for h in ("web.whatsapp.com", "g.whatsapp.net"):
+        try:
+            socket.create_connection((h, 443), timeout=timeout).close()
+            return True
+        except OSError:
+            continue
+    return False
+
+
+FENCE = r'''import os, subprocess, time
+store = C["store"]
+try:
+    os.remove(store + "/lease_grant")
+except OSError:
+    pass
+t0 = time.time()
+while True:
+    st = ""
+    try:
+        st = open(store + "/lease_status", encoding="utf-8").read()
+    except OSError:
+        pass
+    run = "whatsapp-bridge.exe" in subprocess.run(["tasklist", "/FI", "IMAGENAME eq whatsapp-bridge.exe", "/NH"], capture_output=True, text=True).stdout.lower()
+    if not run or st.startswith("waiting"):
+        print("@@FENCED@@")
+        break
+    if time.time() - t0 > C["wait"]:
+        break
+    time.sleep(0.5)
+print("@@OK@@")
+'''
+
+
+_fence_at = {}  # peer name -> (time, result) of the last fence: a failed one is not retried every second
+
+
+def peer_fence(peer, name):
+    """Owner 18.11 19:42: a PC whose computer answers but whose agent does not may still have its bridge connected. Its grant
+    is removed over ssh and we wait until its bridge has let go (lease.go). True = it no longer holds the connection."""
+    if not peer or not peer_alias(peer):
+        return False
+    at, res = _fence_at.get(name, (0, False))
+    if time.time() - at < (10 if res else 30):
+        return res
+    wait = float(chain_cfg()["fence_seconds"])
+    try:
+        rc, out, err = _remote_python(peer, _remote_script(FENCE, {"store": _remote_root(peer) + "/whatsapp-bridge/store",
+                                                                   "wait": wait}), timeout=wait + 20)
+    except Exception as e:
+        rc, out, err = 1, "", str(e)
+    ok = not rc and "@@FENCED@@" in out
+    _fence_at[name] = (time.time(), ok)
+    log("chain fence", name, "ok" if ok else f"failed {rc} {(err or out)[-200:]}")
+    return ok
+
+
+def _chain_note_wait(host, why):
+    if kv_get(f"fo_chain_wait:{host}") != why:
+        kv_set(f"fo_chain_wait:{host}", why)
+        if why:
+            log(f"chain: not taking over \"{host}\": {why}")
+
+
+_chain_backoff = {}  # host -> no new take-over attempt before this time (a failed one, e.g. plugin files missing here)
+
+
+def chain_backup_step(fc, host, st, view, now=None):
+    """Backup, not holding: take the host's work and identity the moment everybody before us is down."""
+    if time.time() < _chain_backoff.get(host, 0):
+        return False
+    passed = chain_pass_marker(host)
+    fenced, unfenced = set(), None
+    for _ in range(3):
+        why, fence = chain_take_blocker(fc, host, view, now, passed, fenced)
+        if not fence:
+            break
+        if not peer_fence(_fo_peer(fence), fence):
+            why, unfenced = f"{why}; לא הצלחתי לעצור את הגשר שלו דרך ssh", fence
+            break
+        fenced.add(fence)
+    if why:
+        _chain_note_wait(host, why)
+        if unfenced and kv_get(f"fo_chain_fence_said:{host}") != unfenced:
+            kv_set(f"fo_chain_fence_said:{host}", unfenced)  # once per PC: the owner must look (never two connections)
+            _fo_say(fc, f"⚠️ \"{host}\" לא זמין, אבל לא העברתי את הגשר ל{fc['self_name']}: {why}. "
+                        "הגשר יעבור רק כשאוודא שאין שני חיבורים על אותה הזדהות.")
+        return False
+    if chain_cfg()["net_check"] and not internet_ok():
+        _chain_note_wait(host, "אין כאן אינטרנט")
+        return False
+    _chain_note_wait(host, "")
+    kv_set(f"fo_chain_fence_said:{host}", "")
+    since = (view.get(host) or {}).get("since") or time.time()
+    st = {**st, "off_since": dt.datetime.fromtimestamp(since).isoformat(timespec="seconds"),
+          "asked_at": dt.datetime.now().isoformat(timespec="seconds")}
+    t0 = time.monotonic()
+    msg = failover_activate(host, fc, st)
+    took = (failover_state(host).get("state") or "idle") == "active"
+    secs = time.time() - since
+    log(f"chain: take-over of \"{host}\" {'done' if took else 'not done'} {time.monotonic() - t0:.1f}s after the decision, "
+        f"{secs:.1f}s after the first missed check" + (f" (handed by {passed})" if passed else ""))
+    if not took:
+        _chain_backoff[host] = time.time() + 30
+        _chain_note_wait(host, msg)
+        if kv_get(f"fo_chain_fail_said:{host}") != msg:
+            kv_set(f"fo_chain_fail_said:{host}", msg)
+            _fo_say(fc, msg)
+        return False
+    kv_set(f"fo_chain_fail_said:{host}", "")
+    head = (f"🔁 \"{passed}\" החזיר לי את הגשר: אני לפניו בשרשרת." if passed
+            else f"🖥️ המחשב \"{host}\" לא זמין (נבדק לפני {int(secs)} שנ').")
+    _fo_say(fc, f"{head} {msg}")
+    push(f"\"{host}\" לא זמין: הגשר והאוטומציות ב{fc['self_name']}", fc["group"], "failover")
+    return True
+
+
+def chain_holder_step(fc, host, st, view, now=None):
+    """Backup holding the host's work: the moment a PC before us in the chain is back, the identity goes to the earliest one
+    (owner 18.11 19:42: "the bridge returns backward"), then our plugins follow after a release restart."""
+    state = st.get("state") or "idle"
+    holding = bool(kv_get("session_taken_at"))
+    target = chain_handback_target(fc, host, view)
+    if not target:
+        # a hand-over that failed half-way left the identity with nobody: take it back if no one else holds it
+        if state == "active" and holding and not lease_held() and not lease_replaced(None) and not any(
+                v["status"] == "up" and _alive_holds_lease(v.get("data")) for v in view.values()):
+            lease_grant("holding the host's work: the identity stays here")
+        return False
+    if state == "releasing" and not holding:
+        return False  # already given; the plugins follow (failover_tick)
+    mode = "host" if target == host else "pass"
+    tpeer = _fo_peer(target)
+    if not tpeer:
+        return False
+    if not identity_handoff(tpeer, target, mode, host=host, kv=_fo_plugin_kv(fc, st) if mode == "pass" else None):
+        return False
+    if state == "active":
+        st.update(state="releasing", back_at=dt.datetime.now().isoformat(timespec="seconds"))
+        if mode == "pass":
+            st["to"] = target
+        else:
+            st.pop("to", None)
+        failover_save(host, st)
+        why = (f"המחשב \"{target}\" חזר: הגשר עבר אליו, משחרר את האוטומציות של \"{host}\"" if mode == "host" else
+               f"המחשב \"{target}\" חזר לפניי בשרשרת: הגשר עבר אליו, משחרר את האוטומציות של \"{host}\" אליו")
+        with open(RESTART_FILE, "w", encoding="utf-8") as f:
+            f.write(why)  # restart without the plugins (threads cannot be stopped); the new process hands their state over
+        _fo_say(fc, f"🔁 {why}.")
+    return True
+
+
+def chain_host_step(view, now=None):
+    """The host (no failover section): its bridge connects whenever no PC in the chain holds its work, and lets go at once
+    when one does (it came back cut off while a backup took over: the backup then hands the identity back, with the newer
+    session, within seconds)."""
+    now = now or time.time()
+    grace = float(chain_cfg()["agent_grace_seconds"])
+    holders = [pn for pn, v in view.items() if v["status"] == "up" and _alive_holds_lease(v.get("data"))]
+    if lease_held():
+        if holders:
+            lease_revoke(f"\"{holders[0]}\" holds the identity: it hands it back with the newer session", wait=10)
+            if _own_plugins[0]:
+                kv_set("plugin_hold_at", "")  # plugin_hold_watch checks at once (restart without our plugins)
+        return
+    if lease_replaced():
+        return  # WhatsApp gave the connection to another PC a moment ago: wait until we see who
+    for pn, v in view.items():
+        s, d = v["status"], v.get("data") or {}
+        why = ""
+        if s == "unknown":
+            why = f"\"{pn}\" not checked yet"
+        elif s == "up" and (d.get("holds") or _alive_holds_lease(d)):
+            why = f"\"{pn}\" holds our work"
+        elif s == "agent_down" and _maybe_holder(v):
+            if v.get("last") and now - (v.get("since") or now) < grace:
+                why = f"\"{pn}\" held it and is restarting its agent"
+            elif not peer_fence(_fo_peer(pn), pn):
+                why = f"\"{pn}\" may still be connected and could not be stopped over ssh"
+        if why:
+            if kv_get("chain_host_wait") != why:
+                kv_set("chain_host_wait", why)
+                log("chain: host waits for the identity:", why)
+            return
+    kv_set("chain_host_wait", "")
+    lease_grant("no PC in the chain holds the identity")
+
+
+def chain_decide(view=None, now=None):
+    """One decision round (chain_watch: every second, and at once when a peer's status changes)."""
+    if not chain_active():
+        return
+    view = chain_view() if view is None else view
+    with _take_lock:
+        fc = failover_cfg()
+        if not fc:
+            return chain_host_step(view, now)
+        host = fc["for"]
+        st = failover_state(host)
+        state = st.get("state") or "idle"
+        if state == "releasing" and not kv_get("session_taken_at") and host not in _failover_loaded:
+            to = st.get("to") or host
+            if (view.get(to) or {}).get("status") == "down":
+                # the PC we gave it to went down before our plugins followed: take it again (our state is newer than the
+                # host's snapshot: handback_pending stays)
+                st["state"] = "asked"
+                st.pop("to", None)
+                failover_save(host, st)
+                state = "asked"
+        if state in ("idle", "asked"):
+            return chain_backup_step(fc, host, st, view, now)
+        if state in ("active", "releasing"):
+            return chain_holder_step(fc, host, st, view, now)
+
+
+def chain_watch():
+    """Owner 18.11 19:42: the fast part of the 4-PC chain: a probe thread per peer, decisions within a second."""
+    if not chain_active():
+        return
+    lease_enable()
+    for p in CFG.get("peers") or []:
+        if p.get("url"):
+            threading.Thread(target=_chain_probe_loop, args=(p,), daemon=True).start()
+    while True:
+        _chain_wake.wait(1.0)
+        _chain_wake.clear()
+        try:
+            chain_decide()
+        except Exception:
+            log("chain decide error", traceback.format_exc())
+            time.sleep(2)
 
 
 def plugin_holds():
@@ -9313,8 +10076,10 @@ def deferred_plugins():
             time.sleep(30)
     finally:
         conversations_resume()
-        if session_cfg() and not failover_cfg():
+        if session_cfg() and not failover_cfg() and not chain_active():
             lease_grant("hand-back done")  # owner 18.11: the identity came back with the hand-back
+        # owner 18.11 19:42: with the chain watch, the hand-back itself writes our grant, and the chain watch grants when
+        # nobody holds the identity; granting here after a timeout could put two PCs on one identity
     start_plugins()
     _own_plugins[0] = True
 
@@ -11151,13 +11916,16 @@ if __name__ == "__main__":
     except Exception:
         log("session bootstrap failed", traceback.format_exc())
     _defer = False  # the service: our plugins wait while another machine holds them (failover); unknown = run them now
+    _holds = []
     if len(sys.argv) == 1 and plugin_hold_applies():
         try:
-            _defer = bool(plugin_holds())
+            _holds = plugin_holds()
+            _defer = bool(_holds)
         except Exception:
+            _holds = None
             log("plugin hold check failed", traceback.format_exc())
     try:
-        session_host_start(_defer)  # owner 18.11: one WhatsApp identity; the host connects unless a backup holds it
+        session_host_start(_defer, _holds)  # owner 18.11: one WhatsApp identity; the host connects unless a backup holds it
     except Exception:
         log("session host start failed", traceback.format_exc())
     if _defer:  # owner 16.11: the backup is answering our conversations too; wait for the hand-back, then replay
@@ -11203,7 +11971,7 @@ if __name__ == "__main__":
         failover_resume()  # backup machine still holding another machine's plugins
     except Exception:
         log("failover resume failed", traceback.format_exc())
-    for target in [worker, slow_worker, command_worker, scheduler, event_listener, watchdog, tunnel_keeper, peer_watch, local_health_watch, push_loop, keep_awake, chrome_keeper, adb_keeper, sms_sync_loop, phone_db_loop] + list(_threads):
+    for target in [worker, slow_worker, command_worker, scheduler, event_listener, watchdog, tunnel_keeper, peer_watch, chain_watch, local_health_watch, push_loop, keep_awake, chrome_keeper, adb_keeper, sms_sync_loop, phone_db_loop] + list(_threads):
         threading.Thread(target=target, daemon=True).start()
     if _defer:
         threading.Thread(target=deferred_plugins, daemon=True).start()

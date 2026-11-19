@@ -9,7 +9,10 @@ package main
 //                      (a PC that crashed and comes back must not reconnect with a stale session while another PC holds it).
 //
 // At start-up the bridge waits (before opening the session database) until a valid grant exists. While running it
-// checks every few seconds: grant removed -> disconnect cleanly and exit (the run-bridge loop then waits at the gate).
+// checks every second: grant removed -> disconnect cleanly and exit (the run-bridge loop then waits at the gate).
+// Owner 18.11 19:42: every hand-over in the chain within 7 seconds, so both checks run every second (was 3 s), and in
+// lease mode a "stream replaced" (another PC connected with the identity) makes this bridge let go at once instead of
+// reconnecting in 2 minutes and fighting over the connection (leaseYield).
 
 import (
 	"os"
@@ -22,6 +25,9 @@ import (
 
 const leaseModeFile = "store/lease_mode"
 const leaseGrantFile = "store/lease_grant"
+
+// leasePoll: how often the gate and the running bridge look at the grant (owner 18.11 19:42: 7-second hand-overs)
+const leasePoll = time.Second
 
 func bootTime() time.Time {
 	k := syscall.NewLazyDLL("kernel32.dll").NewProc("GetTickCount64")
@@ -57,7 +63,7 @@ func waitForLease(logger waLog.Logger) {
 			setLeaseStatus("waiting")
 			last = time.Now()
 		}
-		time.Sleep(3 * time.Second)
+		time.Sleep(leasePoll)
 	}
 	logger.Infof("Session lease granted - connecting")
 	setLeaseStatus("holding")
@@ -73,14 +79,25 @@ func watchLease(client *whatsmeow.Client, logger waLog.Logger) {
 	}
 	go func() {
 		for {
-			time.Sleep(3 * time.Second)
+			time.Sleep(leasePoll)
 			if leaseOn() && !leaseValid() {
 				logger.Warnf("Session lease revoked - disconnecting and exiting")
 				setLeaseStatus("released")
 				client.Disconnect()
-				time.Sleep(time.Second)
+				time.Sleep(500 * time.Millisecond)
 				os.Exit(0)
 			}
 		}
 	}()
+}
+
+// leaseYield: WhatsApp moved the connection to another PC holding the same identity ("stream replaced"). In lease mode this
+// PC lets go for good: the grant goes (the agent decides who gets it next) and the status says why.
+func leaseYield() bool {
+	if !leaseOn() {
+		return false
+	}
+	os.Remove(leaseGrantFile)
+	setLeaseStatus("replaced")
+	return true
 }
