@@ -753,6 +753,9 @@ def report_restart():
         info = json.loads(raw)
     except Exception:
         info = {}
+    if failover_standby():  # owner 16.11: a standing-by backup is silent (its restart for pulled code is not news)
+        log("restart done (backup standing by, no notice):", info.get("reason", ""))
+        return
     wait_bridge(300)
     reason = restart_reason_he(info["reason"]) if info.get("reason") else ""
     for chat, g in load_groups().items():
@@ -1151,7 +1154,8 @@ QUOTA_RE = re.compile(r"(?i)(usage limit|hit your [^\n]{0,40}limit|(monthly|dail
 DENIED_RE = re.compile(r"(?i)(\b40[13]\b|unauthori[sz]ed|invalid api key|authentication)")
 DOWN_RE = re.compile(r"(?i)(connection refused|econnrefused|enotfound|fetch failed|timed out|unreachable|socket hang up)")
 REJECT_RE = re.compile(r"(?i)((api error|http|status|code)\D{0,10}\b400\b|\b400 bad request|bad input|bad request|invalid request|oneof at)")  # the provider refused the request itself (owner 14.11: Cloudflare 400); a bare "400" in other text is not one
-LOGIN_RE = re.compile(r"(?i)(oauth (session|token) expired|failed to authenticate|please run /login|not logged in)")
+LOGIN_RE = re.compile(r"(?i)(oauth (session|token) expired|failed to authenticate|please run /login|not logged in|run the '?/login'? command|"
+                      r"COPILOT_GITHUB_TOKEN|gh auth login|not signed in)")  # owner 19.11: Copilot's "run the /login command" was "an unknown error"
 ERROR_ANSWER_RE = re.compile(r"(?is)^\s*(API Error\b|Failed to authenticate|Error:|HTTP Error)")
 
 
@@ -1172,6 +1176,8 @@ def classify_down(text):
         return "billing", 180
     if RATE_RE.search(text):
         return "rate", 15
+    if LOGIN_RE.search(text):  # owner 19.11: a CLI that is not signed in (Copilot "run the /login command") is told as such
+        return "login", 120
     if DENIED_RE.search(text):
         return "key", 120
     if DOWN_RE.search(text):
@@ -1193,13 +1199,24 @@ ERROR_HE = {
 }
 
 
+LOGIN_OTHER_HE = ("הבינה לא מחוברת לחשבון במחשב הזה (ההתחברות חסרה או פגה)", "מדלג עליה שעתיים ועובר לבינה אחרת אם יש",
+                  "להתחבר מחדש לבינה הזו במחשב שבו היא רצה")
+
+
+def _error_he(reason, provider):
+    """ERROR_HE for a reason; a missing sign-in of a provider that is not Claude is told in its own words (not "Claude's login")."""
+    if reason == "login" and provider and (providers().get(provider) or {}).get("kind") not in ("claude", "claude-remote", "auto"):
+        return LOGIN_OTHER_HE
+    return ERROR_HE.get(reason)
+
+
 def explain_error(text, provider=None):
     """The owner's Hebrew explanation of a provider error text: what happened, where, why, what the bridge does, what he can do, and the
     raw technical line at the end (shortened)."""
     raw = re.sub(r"\s+", " ", text or "").strip()
     reason = "login" if LOGIN_RE.search(raw) else (classify_down(raw) or ("", 0))[0]
-    what, does, todo = ERROR_HE.get(reason, ("הבינה החזירה שגיאה שאני לא מכיר", "מנסה בינה אחרת אם יש", "לשלוח לי את הפרטים הטכניים למטה"))
     name = provider or getattr(_ctx, "provider_used", None) or ""
+    what, does, todo = _error_he(reason, name) or ("הבינה החזירה שגיאה שאני לא מכיר", "מנסה בינה אחרת אם יש", "לשלוח לי את הפרטים הטכניים למטה")
     p = providers().get(name) or {}
     where = (p.get("short") or name or "הבינה") + (" · ☁️ ענן" if p.get("where") == "remote" else "")
     code = re.search(r"\b([45]\d\d)\b", raw)
@@ -1218,7 +1235,7 @@ def error_line_he(text, provider=None):
     Never English (owner 16.11: every AI's fault numbers are passed on and translated)."""
     raw = re.sub(r"\s+", " ", text or "").strip()
     reason = "login" if LOGIN_RE.search(raw) else (classify_down(raw) or ("", 0))[0]
-    what, does, _todo = ERROR_HE.get(reason, ("שגיאה שאני לא מכיר", "מנסה בינה אחרת אם יש", ""))
+    what, does, _todo = _error_he(reason, provider or getattr(_ctx, "provider_used", None)) or ("שגיאה שאני לא מכיר", "מנסה בינה אחרת אם יש", "")
     m = re.search(r"(?<![\w.-])([45]\d\d)(?![\w.-])", raw)
     code = int(m.group(1)) if m else None
     head = (f"קוד {code} ({CODE_HE[code]})" if code in CODE_HE else f"קוד {code}") if code else "בלי קוד שגיאה"
@@ -1400,7 +1417,7 @@ def provider_ready(name):
     if not p or provider_cooled(name):
         return False
     if p.get("kind") == "claude":
-        return limit_raw() is None
+        return limit_raw() is None and not meter_full()
     if p.get("kind") == "claude-remote":
         return remote_claude_up(p)
     if p.get("kind") == "opencode":
@@ -1419,10 +1436,13 @@ def provider_status(name):
         return {"ok": False, "detail": "לא מוגדר"}
     if provider_cooled(name):
         return {"ok": False, "detail": "בהמתנה אחרי תקלה קודמת"}
+    if p.get("kind") == "claude" and meter_full():  # owner 19.11 10:59: weekly 100% was shown as "✅ זמין"
+        k, u, t = meter_full()
+        return {"ok": False, "detail": f"{WINDOW_HE.get(k, k)} של החשבון מלאה ({u:.0f}%), חוזרת {when_he(t)}"}
     if not provider_ready(name):
         return {"ok": False, "detail": "לא מותקן, לא מחובר או שאין מפתח"}
     if p.get("kind") == "claude":
-        return {"ok": True, "detail": "התחברות זמינה לפי מצב הסוכן"}
+        return {"ok": True, "detail": "התחברות זמינה, ומד השימוש של החשבון לא מלא"}
     if p.get("kind") in ("cli", "opencode", "anthropic-key"):
         return {"ok": True, "detail": "מותקן/מוגדר; תגובה בפועל לא נבדקה"}
     if p.get("kind") == "desktop-app":
@@ -3793,6 +3813,23 @@ def parse_signin(text):
 
 WINDOW_HE = {"five_hour": "חלון 5 השעות", "seven_day": "המגבלה השבועית"}
 WEEKDAY_HE = ["ב׳", "ג׳", "ד׳", "ה׳", "ו׳", "ש׳", "א׳"]
+
+
+def meter_full(max_age=120):
+    """(window key, utilization %, reset) of the first full window of this machine's Claude plan, from the cached meter; None when
+    nothing is full or the meter is unavailable. Owner 19.11 10:59: the desktop's weekly limit stood at 100% while the bridge said
+    "✅ זמין", because only a limit seen in a run (limit_until) counted."""
+    u = claude_usage(max_age=max_age) or {}
+    for key in WINDOW_HE:
+        x = u.get(key) or {}
+        try:
+            if x.get("utilization") is not None and float(x["utilization"]) >= 99.5:
+                t = dt.datetime.fromisoformat(str(x["resets_at"]).replace("Z", "+00:00")).astimezone().replace(tzinfo=None)
+                if t > dt.datetime.now():
+                    return key, float(x["utilization"]), t
+        except (KeyError, ValueError, TypeError):
+            continue
+    return None
 
 
 def blocking_windows():
@@ -6937,8 +6974,31 @@ def queue_fire(chat, mid):
         for old, at in list(_fire_recent.items()):
             if now - at > 1800:
                 del _fire_recent[old]
-    work.put(lambda: fire_icons(chat, mid))
+    # owner 19.11: the 08:35 and 09:06 🔥 waited in the work queue behind a long run and were lost in the restarts at 08:40 / 09:42
+    threading.Thread(target=fire_icons, args=(chat, mid), daemon=True).start()
     return True
+
+
+def fire_catch_up(minutes=30):
+    """At start-up: 🔥 reactions of the owner from the last minutes that were not iconized (the process stopped first) are done now."""
+    if not CFG.get("fire_icons", True):
+        return
+    since = (dt.datetime.now().astimezone() - dt.timedelta(minutes=minutes)).isoformat(timespec="seconds")
+    try:
+        with adb() as db:
+            rows = db.execute("SELECT chat_jid, message_id FROM owner_reactions WHERE emoji = ? AND at >= ?", (FIRE, since)).fetchall()
+    except sqlite3.Error as e:
+        log("fire catch-up", e)
+        return
+    for cj, mid in rows:
+        if kv_get(f"fire_done:{mid}"):
+            continue
+        if (cj == PRIMARY or cj in load_groups()) and not serves_here(cj):
+            continue
+        if not (cj == PRIMARY or cj in load_groups()) and not watches_people():
+            continue
+        log("fire catch-up:", cj, mid)
+        queue_fire(cj, mid)
 
 
 def fire_is_ours(chat, mid, within=1200):
@@ -6972,6 +7032,7 @@ def fire_icons(chat, mid):
     WhatsApp allows edits only for ~15 minutes: an older message (or a failed edit) gets the iconized text as an answer instead,
     like 🛞 — quoting it in a control chat, and in the control group (never to the other person) for any other chat.
     🔥 on someone else's message, a voice note / image or one of the bot's own answers is an ordinary reaction: nothing happens."""
+    kv_set(f"fire_done:{mid}", dt.datetime.now().isoformat(timespec="seconds"))  # fire_catch_up skips it after a restart
     try:
         with mdb() as db:
             r = db.execute("SELECT content, is_from_me, media_type, timestamp FROM messages WHERE id = ? AND chat_jid = ?",
@@ -8019,7 +8080,13 @@ def failover_code_pull(fc):
     fast-forward only; local edits of mirrored data files (the host's live copy overwrites them right after) are reset
     first, any other local edit stops the update and is reported once. Returns [problem texts]."""
     problems = []
-    for spec in fc.get("git_pull") or []:
+    specs = list(fc.get("git_pull") or [])
+    # owner 19.11 10:59: the bedroom and living-room PCs ran the bridge's own code 7 commits behind the host (only ppe-tracker was
+    # pulled; the tool waited for the nightly update), so a take-over would have run without the day's fixes. The tool itself is
+    # pulled from hub too, and a new agent.py is loaded by a restart while this PC is only standing by.
+    if not any(os.path.normcase(os.path.abspath(x.get("path") or "")) == os.path.normcase(ROOT) for x in specs) and fc.get("pull_self", True):
+        specs.append({"path": ROOT, "remote": "hub", "branch": "main", "restart": True})
+    for spec in specs:
         path, remote, branch = spec.get("path"), spec.get("remote"), spec.get("branch") or "master"
         if not path or not remote:
             continue
@@ -8041,11 +8108,16 @@ def failover_code_pull(fc):
             continue
         for f in dirty:
             g("checkout", "--", f)
+        before = g("rev-parse", "HEAD").stdout.strip()
         r = g("merge", "--ff-only", "-q", "FETCH_HEAD")
         if r.returncode:
             problems.append(f"{os.path.basename(path)}: אי אפשר לעדכן בלי מיזוג ({(r.stderr or '').strip()[-120:]})")
         else:
             log("failover code pull:", path, g("rev-parse", "--short", "HEAD").stdout.strip())
+            changed = g("diff", "--name-only", before, "HEAD").stdout.split()
+            if spec.get("restart") and any(f.startswith(("agent/", "dash/")) and f.endswith(".py") for f in changed):
+                with open(RESTART_FILE, "w", encoding="utf-8") as f:
+                    f.write("קוד חדש של הגשר נמשך מה-hub לגיבוי; עולה מחדש כדי שהגיבוי יריץ אותו")
     return problems
 
 
@@ -10718,6 +10790,7 @@ if __name__ == "__main__":
         threading.Thread(target=target, daemon=True).start()
     if _defer:
         threading.Thread(target=deferred_plugins, daemon=True).start()
+    threading.Thread(target=lambda: (time.sleep(20), fire_catch_up()), daemon=True).start()  # 🔥 cut off by a restart (owner 19.11)
     sys.path.insert(0, ROOT)
     from dash import server as dash_server  # control panel, also on http://127.0.0.1:8770
     threading.Thread(target=dash_server.serve, args=(8770,), daemon=True).start()

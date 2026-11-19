@@ -1,3 +1,4 @@
+import time
 """🔥 = emoji icons in the owner's own message (owner 18.11): the table / stemming module and the agent's reaction handling."""
 import datetime as dt
 import json
@@ -129,8 +130,29 @@ def test_fire_reaction_is_queued_once(agent, monkeypatch):
     mod, _ = agent
     monkeypatch.setattr(mod, "watches_people", lambda: True)
     monkeypatch.setattr(mod, "note_reaction", lambda *a: None)
-    before = mod.work.qsize()
+    started = []
+    monkeypatch.setattr(mod, "fire_icons", lambda c, m: started.append((c, m)))
     ev = {"type": "reaction", "chat_jid": "972500000001@s.whatsapp.net", "message_id": "R1", "emoji": "🔥"}
     mod.handle_reaction_event(ev)
     mod.handle_reaction_event(json.loads(json.dumps(ev)))
-    assert mod.work.qsize() == before + 1
+    time.sleep(0.3)
+    assert started == [("972500000001@s.whatsapp.net", "R1")]  # own thread, not behind a long run in the work queue (owner 19.11)
+
+
+def test_meter_full_marks_private_claude_unavailable(agent, monkeypatch):
+    mod, _ = agent
+    t = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=10)).isoformat()
+    monkeypatch.setattr(mod, "claude_usage", lambda max_age=0: {"seven_day": {"utilization": 100.0, "resets_at": t}})
+    monkeypatch.setattr(mod, "limit_raw", lambda: None)
+    assert mod.meter_full()[0] == "seven_day"
+    assert not mod.provider_ready("claude")
+    st = mod.provider_status("claude")
+    assert not st["ok"] and "100%" in st["detail"]
+
+
+def test_copilot_login_is_named_and_cools(agent):
+    mod, _ = agent
+    raw = "Error: No authentication information found. Run the '/login' command • Set the COPILOT_GITHUB_TOKEN, GH_TOKEN"
+    assert mod.classify_down(raw)[0] == "login"
+    line = mod.error_line_he(raw, "copilot")
+    assert "לא מחוברת" in line and "Claude" not in line
