@@ -105,7 +105,7 @@ def test_switch_message_gives_reason_code_and_groups_every_ai(agent, monkeypatch
     mod.ai_state_set("codex", False, "quota", FAULTS["codex"][0])
     mod.ai_state_set("cloudflare", False, "rate", "HTTP 429 rate limit")
     out = mod.ai_down_text("copilot", "x", FAULTS["copilot"][0])
-    assert "*Copilot לא עונה:* מכסת השימוש נגמרה" in out and "לא עברתי לבינה אחרת" in out
+    assert "*Copilot* לא זמין מהסיבה: מכסת השימוש נגמרה" in out and "לא עברתי לבינה אחרת" in out
     assert "✅ *ענו לאחרונה:*" in out and "/3 " in out
     assert "⛔ *מחוברים ולא עונים:*" in out and "/11 *Codex*" in out and "(מכסת השימוש נגמרה, חוזרת ב-14.12)" in out
     assert "(מגבלת קצב או עומס אצל הספק (קוד 429)" in out

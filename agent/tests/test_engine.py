@@ -52,6 +52,7 @@ def test_failover_target_picks_the_first_ready_free_provider_and_the_chosen_engi
 
 def test_a_capped_claude_does_not_stop_the_bridge(agent, monkeypatch, tmp_path):
     mod, _ = agent
+    monkeypatch.setitem(mod.CFG, "auto_switch_provider", True)  # owner 19.11: switching is off by default; this tests the opt-in
     _no_state_files(mod, monkeypatch, tmp_path)
     monkeypatch.setattr(mod, "failover_target", lambda: ("qwen", "groq"))
     seen = {}

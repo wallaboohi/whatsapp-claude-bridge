@@ -583,7 +583,7 @@ def test_usage_limit_parks_and_requeues_commands(agent, monkeypatch):
         st = [r[0] for r in db.execute("SELECT status FROM commands ORDER BY id")]
     # owner 15.11: Claude is the chosen AI and capped: no silent wait, no switch — each message is told to switch AI
     assert st == ["done", "done"] and not called
-    assert sum("לא עונה:" in t and "לא עברתי לבינה אחרת" in t and "/ ומספר" in t for t in sent) == 2
+    assert sum("לא זמין מהסיבה:" in t and "לא עברתי לבינה אחרת" in t and "/ ומספר" in t for t in sent) == 2
 
 def test_stranded_limit_waiters_are_requeued(agent, monkeypatch):
     """Owner 11.11: the limit flag was cleared but the PC slept / the notice hung before the re-queue, so the commands sat
@@ -622,6 +622,7 @@ def test_requeue_happens_even_if_the_notice_fails(agent, monkeypatch):
 def test_limit_hit_during_a_run_parks_the_command(agent, monkeypatch):
     mod, _ = agent
     monkeypatch.setattr(mod, "active_provider", lambda chat=None: ("auto", None))  # owner 15.11: only the auto ladder waits / switches by itself
+    monkeypatch.setitem(mod.CFG, "auto_switch_provider", True)  # owner 19.11: switching is off by default; this tests the opt-in
     monkeypatch.setattr(mod, "claude_usage", lambda max_age=120: None)  # the bridge words the limit; no real meter call
     sent = []
     monkeypatch.setattr(mod, "send", lambda chat, text, media=None, quoted=None: sent.append(text) or True)

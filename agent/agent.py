@@ -1355,6 +1355,14 @@ def translator_up(max_age=30):
 _remote_claude_cache = {}
 
 
+def ssh_exe():
+    """Owner 19.11 08:49 ("error 22 stdin"): every ssh the agent starts from Python uses Git's ssh. Windows' own ssh.exe, started
+    with pipes, sometimes hangs before connecting (6+ min in a test) or exits at once, so writing the prompt failed with
+    [Errno 22] and a healthy provider was reported "no connection". The readiness check already used Git's ssh, so the two disagreed."""
+    git_ssh = r"C:\Program Files\Git\usr\bin\ssh.exe"
+    return git_ssh if os.path.exists(git_ssh) else (shutil.which("ssh") or "ssh")
+
+
 def remote_claude_status(p, max_age=120):
     """(up, account e-mail) of Claude Code on the computer named in provider p["ssh"], over ssh (cached): `claude auth status`."""
     host = p.get("ssh") or ""
@@ -1363,8 +1371,8 @@ def remote_claude_status(p, max_age=120):
         return hit[1], hit[2]
     up, who = False, ""
     try:
-        git_ssh = r"C:\Program Files\Git\usr\bin\ssh.exe"  # owner 17.11 19:55: Windows' ssh.exe started from Python hangs before connecting (25 s timeout); Git's answers in under a second
-        r = subprocess.run([git_ssh if os.path.exists(git_ssh) else "ssh", "-n", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", host, "claude auth status"],  # owner 17.11 19:47: -n = no stdin; with an open stdin the remote claude waited for input, timed out at 25 s and the work account showed "not ready"
+        # owner 17.11 19:55: Windows' ssh.exe started from Python hangs before connecting (25 s timeout); Git's answers in under a second
+        r = subprocess.run([ssh_exe(), "-n", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", host, "claude auth status"],  # owner 17.11 19:47: -n = no stdin; with an open stdin the remote claude waited for input, timed out at 25 s and the work account showed "not ready"
                            stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=25)
         m = re.search(r"\{.*\}", r.stdout, re.S)
         o = json.loads(m.group(0)) if m else {}
@@ -2072,10 +2080,12 @@ def ai_down_text(name, why, raw="", reason=""):
     reason = reason or (classify_down(raw or "") or ("", 0))[0]
     code = error_code(raw)
     why_he = REASON_SHORT_HE.get(reason) or why
-    head = f"⚠️ *{prov_short(name)} לא עונה:* {why_he}" + (f" (קוד {code}: {CODE_HE[code]})" if code in CODE_HE else f" (קוד {code})" if code else "")
+    # owner 19.11 08:49: "ספק זה לא זמין מהסיבה: … / למעבר, בינות פעילות הם: …" — the reason the provider (or ssh) itself gave
+    head = f"⚠️ *{prov_short(name)}* לא זמין מהסיבה: {why_he}" + (f" (קוד {code}: {CODE_HE[code]})" if code in CODE_HE else f" (קוד {code})" if code else "")
     hint = retry_hint_he(raw)
-    return (head + (f", {hint}" if hint else "") + ". לא עברתי לבינה אחרת.\n"
-            "להמשך: בחר בינה אחרת עם / ומספר (או השם), ושלח שוב את ההודעה.\n\n"
+    detail = next((l.strip() for l in reversed((raw or "").splitlines()) if l.strip()), "")[:200]
+    return (head + (f", {hint}" if hint else "") + "\n" + (f"פירוט מהספק: `{detail}`\n" if detail else "")
+            + "לא עברתי לבינה אחרת.\n\n*למעבר, בינות פעילות הן:* (בחר עם / ומספר או שם, ושלח שוב את ההודעה)\n"
             + "\n".join(ai_status_lines(skip=(name,))) + "\n\nכל הרשימה: /ספק · בדיקת מענה לכולן: /בדוק מענה")
 
 
@@ -2235,10 +2245,16 @@ def account_pct(name):
     return v
 
 
+def auto_switch_on():
+    """Owner 19.11 ("אל תעבור לבד בין ספקים, רק על ידי פקודות המשתמש"): the bridge never moves a conversation to another provider or
+    account by itself — no failover ladder, no 80% account balance, no /12 automatic provider. config auto_switch_provider=true restores it."""
+    return bool(CFG.get("auto_switch_provider", False))
+
+
 def balance_account(name):
     """Owner 17.11 11:22: the two Claude accounts (work = the laptop's, personal = this computer's) back each other up. At 80% of the
     chosen one the run goes to the other while it is lower; when both are above 80% the lower one works until its limit ends."""
-    if name not in ("claude", "claude_work") or not CFG.get("account_balance", True):
+    if name not in ("claude", "claude_work") or not CFG.get("account_balance", True) or not auto_switch_on():
         return name
     other = "claude" if name == "claude_work" else "claude_work"
     a, b = account_pct(name), account_pct(other)
@@ -3124,7 +3140,7 @@ def providers_text():
             peer_brief = peer_fetch(peer, timeout=8) or None
         except Exception:
             peer_brief = None
-    rem = ["auto" if "auto" in names else ""] + [k for k in names if k != "auto" and not provider_is_local(k)]
+    rem = ["auto" if "auto" in names and auto_switch_on() else ""] + [k for k in names if k != "auto" and not provider_is_local(k)]
     loc = [k for k in names if k != "auto" and provider_is_local(k)]
     lines = ["*🔌 ספק הבינה של הגשר* (כל השיחות עוברות דרכו) · מודל של ספק: /N M"]
     lines += ["", f"*{machine_tag()}* · ☁️ *בענן*"] + [_provider_row(k, cur, cm) for k in rem if k]
@@ -4441,7 +4457,9 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
     if eng == "claude":
         rp = providers().get(getattr(_ctx, "provider_used", None)) or {}
         if rp.get("kind") == "claude-remote" and not guest and tools is None:  # owner 17.11: the same run, on the other computer's Claude account
-            cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", rp.get("ssh"),
+            if resume and resume != kv_get(K("rsession:" + _ctx.provider_used, chat or PRIMARY)):
+                resume = None  # owner 19.11: a session id of this computer's Claude does not exist there ("No conversation found", exit in 1 s)
+            cmd = [ssh_exe(), "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", rp.get("ssh"),
                    f'cd /d {rp.get("home")} && claude -p --output-format stream-json --verbose --permission-mode {mode}'
                    + (" --input-format stream-json --replay-user-messages" if live else "")
                    + (f" --model {model}" if model and re.fullmatch(r"[\w.\[\]-]+", model) else "")]
@@ -4503,6 +4521,7 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
                 errbuf.append(line)
     err_thread = threading.Thread(target=read_err, daemon=True)
     err_thread.start()
+    stdin_err = None
     live = live if eng == "claude" else False
     lst = {"proc": proc, "sent": 1, "seen": 0, "closed": False, "results": []} if live else None
     try:
@@ -4515,7 +4534,10 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
             proc.stdin.write(prompt)
             proc.stdin.close()
     except OSError as e:
-        log("claude stdin failed", e)
+        # owner 19.11 08:49: [Errno 22] / [Errno 32] here only means the process had already ended; the real reason is
+        # in its own output (read below). It is logged with that reason, never reported as a provider fault by itself.
+        stdin_err = e
+        log("provider process ended before reading the prompt", getattr(_ctx, "provider_used", None) or eng, e)
 
     def close_live():
         with _live_lock:
@@ -4623,6 +4645,13 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
     result = res.get("result") or ""
     if res.get("is_error") and not result:  # Qwen Code reports its error under "error", not in "result"
         result = str((res.get("error") or {}).get("message") or "")
+    if res.get("is_error") and not result and res.get("errors"):  # Claude Code: {"errors": ["No conversation found ..."]}
+        result = "; ".join(str(x) for x in res["errors"])
+    _pu = getattr(_ctx, "provider_used", None) or eng
+    if not res or res.get("is_error"):  # owner 19.11: every failed run leaves its real reason in the log, not just a label
+        log("provider run failed", _pu, "exit", proc.returncode, "|", (result or errtext or str(stdin_err or "")).strip()[-400:])
+    if not res and (providers().get(_pu) or {}).get("kind") == "claude-remote" and proc.returncode == 255:
+        raise ProviderDown(_pu, "unreachable", 3, raw="ssh: " + (errtext.strip()[-300:] or "החיבור למחשב נכשל"))
     if not res or res.get("is_error") or len(result) < 300:  # a real answer may talk about limits; only short / error results count
         reset = parse_limit(result + "\n" + errtext)
         if reset:
@@ -4663,7 +4692,16 @@ def write_handoff(old_sid, chat=None):
     try:
         # the cheap model: this run re-reads the whole day's context (the CLI default may be the most expensive model)
         hmodel = CFG.get("light_model") or CFG.get("claude_model") or "sonnet"
-        res = _run_claude(T["handoff_prompt"].format(owner=OWNER), hmodel, old_sid, 300, append=group_prompt(chat), chat=chat)
+        # owner 19.11: the hand-off runs on the provider that owns the session. A failover target left in the run's context
+        # sent it to OpenRouter with a Claude session ("unrecognized_model inclusionai/ling-3.2-flash:free", 05:14)
+        owner_p = next((n for n, p in providers().items() if p.get("kind") == "claude-remote"
+                        and old_sid and kv_get(K("rsession:" + n, chat or PRIMARY)) == old_sid), "claude")
+        saved = (getattr(_ctx, "force_provider", None), getattr(_ctx, "force_engine", None), getattr(_ctx, "force_model", None))
+        _ctx.force_provider, _ctx.force_engine, _ctx.force_model = owner_p, "claude", None
+        try:
+            res = _run_claude(T["handoff_prompt"].format(owner=OWNER), hmodel, old_sid, 300, append=group_prompt(chat), chat=chat)
+        finally:
+            _ctx.force_provider, _ctx.force_engine, _ctx.force_model = saved
         if res.get("result"):
             with open(handoff_path(chat), "w", encoding="utf-8") as f:
                 f.write(f"{T['handoff_title']} ({dt.datetime.now():%d.%m.%Y %H:%M})\n\n{res['result'].strip()}\n")
@@ -4778,6 +4816,9 @@ def session_rotates(chat, raw=""):
     """True when the conversation's current session ends before the next run (midnight, or the message cap for business work)."""
     g = load_groups().get(chat or PRIMARY) or {}
     sid, started = kv_get(K("session_id", chat)), kv_get(K("session_started", chat))
+    ap = active_provider(chat)[0]
+    if (providers().get(ap) or {}).get("kind") == "claude-remote":
+        sid = kv_get(K("rsession:" + ap, chat))  # owner 19.11: the work account's own session (kept on the laptop)
     if not sid:
         return False
     if started and dt.datetime.fromisoformat(started).date() != dt.date.today():
@@ -4802,11 +4843,15 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
     interactive = on_stage is not None  # the owner's commands; plugin / background runs skip quietly instead
     _ctx.failover_used, _ctx.failover_why = False, ""
     chosen = active_provider(chat)[0]
-    _ctx.no_failover = interactive and chosen != "auto" and not getattr(_ctx, "automation_cmd", False)
+    # owner 19.11 08:35 + 08:49 ("4 צודק"): no switching between providers by itself, only by his command (config auto_switch_provider)
+    _ctx.no_failover = not auto_switch_on() or (interactive and chosen != "auto" and not getattr(_ctx, "automation_cmd", False))
     lu = limit_until()
-    if lu and chosen == "claude" and CFG.get("account_balance", True) and provider_ready("claude_work") and (account_pct("claude_work") or 100) < 100:
+    if lu and chosen == "claude" and auto_switch_on() and CFG.get("account_balance", True) and provider_ready("claude_work") and (account_pct("claude_work") or 100) < 100:
         lu = None  # owner 17.11: the personal account is out, the work account takes over (provider_env)
     if lu and _ctx.no_failover:
+        if chosen == "claude" and not interactive:
+            log("claude skipped (usage limit until", lu.strftime("%H:%M") + ", no provider switch) for", chat)
+            return None
         if chosen == "claude":
             raise AIDown("claude", f"נגמרה המכסה עד {lu:%H:%M}")
         lu = None  # another AI is chosen here: Claude's quota does not matter
@@ -4828,15 +4873,18 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
             log(f"claude skipped ({why}) for", chat)
             return None
     if session and not _ctx.failover_used and active_engine() == "claude" and kv_get(K("gap", chat)):
-        prompt = ("בזמן שהמכסה שלך הייתה חסומה ענתה בשיחה הזו בינה אחרת. כך נראתה השיחה; המשך משם:\n" + conversation_pack(chat, 20) + "\n\n---\n" + prompt)
+        prompt = ("חלק מהשיחה הזו התנהל בלי הסשן הזה (בינה או חשבון אחרים, או סשן חדש). כך נראתה השיחה; המשך משם:\n" + conversation_pack(chat, 20) + "\n\n---\n" + prompt)
         kv_set(K("gap", chat), "")
-    sid = kv_get(K("session_id", chat)) if session else None
+    # owner 19.11: the work account (Claude of the laptop) keeps its own session there, so it remembers the conversation
+    # instead of starting fresh on every message; this computer's session id is never sent to it
+    remote_sess = (providers().get(chosen) or {}).get("kind") == "claude-remote"
+    sid = (kv_get(K("rsession:" + chosen, chat)) if remote_sess else kv_get(K("session_id", chat))) if session else None
     if sid and session_rotates(chat, prompt if raw is None else raw):
         write_handoff(sid, chat)
         sid = None
         # owner 19.11 08:35: the hand-off loop. A run on another provider (claude_work) never stores its session id, so the old
         # id stayed and every following message wrote a hand-off again (12 in 5 minutes). The rotated session is closed here, once.
-        kv_set(K("session_id", chat), "")
+        kv_set(K("session_id" if not remote_sess else "rsession:" + chosen, chat), "")
         kv_set(K("session_runs", chat), "0")
     # owner 16.11: a short message on "auto" goes to a fast free provider; the Claude subscription is kept for real work
     light = bool(CFG.get("light_routing", True)) and chosen == "auto" and is_light_task(raw if raw is not None else prompt)
@@ -4849,7 +4897,7 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
             finally:
                 _ctx.light_task = False
         except (ProviderDown, LimitHit, AuthError, RuntimeError) as e:
-            if not _ctx.no_failover or (isinstance(e, AuthError) and chosen == "claude"):
+            if not _ctx.no_failover or not interactive or (isinstance(e, AuthError) and chosen == "claude"):
                 raise
             why = ("נגמרה המכסה" + (f" עד {e.until:%H:%M}" if getattr(e, "until", None) else "") if isinstance(e, LimitHit)
                    else down_why_he(e) if isinstance(e, (ProviderDown, AuthError)) else "לא החזיר תשובה")
@@ -4871,7 +4919,14 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
     except Exception as e:
         log("claude failed", e)
         return None
-    if getattr(_ctx, "failover_used", False) or getattr(_ctx, "engine_used", "claude") != "claude" or (getattr(_ctx, "provider_used", None) or "claude") != "claude":
+    pu = getattr(_ctx, "provider_used", None) or "claude"
+    if session and res.get("session_id") and remote_sess and pu == chosen and not getattr(_ctx, "failover_used", False):
+        if res["session_id"] != kv_get(K("rsession:" + pu, chat)):  # owner 19.11: the work account's session, resumed next time
+            kv_set(K("session_started", chat), dt.datetime.now().isoformat())
+            kv_set(K("session_runs", chat), "0")
+        kv_set(K("rsession:" + pu, chat), res["session_id"])
+        kv_set(K("session_runs", chat), str(int(kv_get(K("session_runs", chat)) or 0) + 1))
+    elif getattr(_ctx, "failover_used", False) or getattr(_ctx, "engine_used", "claude") != "claude" or pu != "claude":
         kv_set(K("gap", chat), "1")  # Claude's own session missed this exchange: its next run gets the conversation as context
     if session and res.get("session_id") and getattr(_ctx, "engine_used", "claude") == "claude" and not getattr(_ctx, "failover_used", False) \
             and (getattr(_ctx, "provider_used", None) or "claude") == "claude":  # a hosted AI's fresh session never replaces Claude's
