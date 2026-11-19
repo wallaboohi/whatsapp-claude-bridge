@@ -2528,6 +2528,7 @@ def test_every_hosted_ai_gets_the_hebrew_rule(agent, monkeypatch, tmp_path):
     monkeypatch.setattr(mod.shutil, "which", lambda b: "C:/x/" + str(b) + ".exe")
     monkeypatch.setattr(mod.subprocess, "run", lambda cmd, **k: seen.update(cmd=cmd, input=k.get("input")) or R())
     monkeypatch.setattr(mod, "conversation_pack", lambda chat: "")
+    monkeypatch.setattr(mod, "_run_tracked", lambda cmd, chat=None, **k: seen.update(cmd=cmd, input=k.get("input")) or R())  # CLI runs are stoppable (19.11)
     p = {"short": "Gemini CLI", "cli": {"bin": "gemini", "args": ["-o", "json"], "prompt": "stdin", "out": "json:response"}}
     res = mod._run_cli("gemini_cli", p, "מה שלומך?", None, None, mod.PRIMARY, None, 60)
     assert res["result"] == "שלום"

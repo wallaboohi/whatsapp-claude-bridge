@@ -1727,9 +1727,12 @@ def hourly_engine_status():
 
 
 def daily_engine_probe():
+    """Owner 19.11 19:30: the fixed availability check, at 06:00 and 18:00: inventory, a real answer from every model,
+    and every provider's usage meter (how much of its daily / weekly / monthly quota is used)."""
     engine_status_report(live=False)  # the inventory snapshot, with no model calls at all
     daily_model_check()  # owner 16.11: a real answer from every model, and a message only when something changed
-    log("daily engine response probe completed")
+    refresh_all_meters()
+    log("engine response probe completed (with usage meters)")
 
 
 def _probe_model(name, p, model, timeout=120):
@@ -1940,6 +1943,8 @@ def _run_auto(*a, **k):
                 if not _failover_step(e, tried):
                     raise
             except RuntimeError as e:  # owner 14.11: a hosted AI / engine that returns nothing (crash, empty answer) is a failed provider too
+                if str(e).startswith("closed:"):
+                    raise  # owner 19.11: closed from outside / stopped — never moved to another provider
                 used = getattr(_ctx, "provider_used", None)
                 if not used or used == "claude" and not getattr(_ctx, "force_provider", None):
                     raise
@@ -3198,7 +3203,8 @@ def _provider_row(k, cur, cm, ok=None, detail="", models=None):
     st = "" if ok is None else (" ✅" if ok else f" ⚪ {str(detail)[:40]}")
     if ok and k == "ollama" and detail:  # which of this computer's Ollama hosts serves it (owner 17.11)
         st += f" · {str(detail)[:80]}"
-    return _provider_head(k, p.get("label"), k == cur, icon, st, note) + ("\n" + "\n".join(lines) if lines else "") + "\n"
+    meter = "" if k == "auto" else "\n" + meter_line(k)  # owner 19.11 19:30: usage under every provider
+    return _provider_head(k, p.get("label"), k == cur, icon, st, note) + meter + ("\n" + "\n".join(lines) if lines else "") + "\n"
 
 
 def _peer_rows(peer_brief, local):
@@ -3985,6 +3991,60 @@ class Stopped(Exception):
     pass
 
 
+# Owner 19.11 19:30: /עצור must stop the AI that is thinking, whatever it is (Claude, OpenCode, Codex, a CLI over ssh).
+# Every process that works for a conversation is registered here; a stop kills them and the run ends as "stopped",
+# never as "the provider is not available".
+_run_procs, _run_procs_lock, _stop_wanted = {}, threading.Lock(), set()
+
+
+def _track(proc, chat=None):
+    c = chat or cur_chat() or PRIMARY
+    with _run_procs_lock:
+        _run_procs.setdefault(c, set()).add(proc)
+    return proc
+
+
+def _untrack(proc):
+    with _run_procs_lock:
+        for procs in _run_procs.values():
+            procs.discard(proc)
+
+
+def stop_wanted(chat=None):
+    return (chat or cur_chat() or PRIMARY) in _stop_wanted
+
+
+def _raise_if_stopped(chat=None):
+    if stop_wanted(chat):
+        raise Stopped()
+
+
+def stop_chat(chat):
+    """Stop every process working for this conversation now. Returns how many processes were stopped."""
+    with _run_procs_lock:
+        procs = [p for p in _run_procs.get(chat, ()) if p.poll() is None]
+        _stop_wanted.add(chat)
+    for p in procs:
+        _kill_tree(p)
+    log("stop requested", chat, len(procs), "process(es)")
+    return len(procs)
+
+
+def _run_tracked(cmd, chat=None, input=None, timeout=None, **kw):
+    """subprocess.run(capture_output=True) with the process registered, so /עצור can stop it; the same result object."""
+    proc = _track(subprocess.Popen(cmd, stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kw), chat)
+    try:
+        out, err = proc.communicate(input=input, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        proc.communicate()
+        raise
+    finally:
+        _untrack(proc)
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
 def _kill_tree(proc):
     """Kill Claude and everything it started (MCP servers, shells): a bare kill leaves children holding the pipe open."""
     if proc.poll() is not None:
@@ -4331,6 +4391,7 @@ def desktop_ai_call(p, args, stdin_text=None, timeout=240):
         except OSError as e:
             last = {"ok": False, "error": str(e), "unreachable": True}
             continue
+        _raise_if_stopped()
         lines = [x for x in (r.stdout or "").splitlines() if x.strip().startswith("{")]
         if lines:
             try:
@@ -4508,9 +4569,9 @@ def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
             r = None
             for rc in _remote_cli_cmds(c, line):
                 try:
-                    proc = subprocess.Popen(rc, stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
-                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
-                                            creationflags=NO_WINDOW)
+                    proc = _track(subprocess.Popen(rc, stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
+                                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
+                                                   errors="replace", creationflags=NO_WINDOW), chat)
                     if stdin_text is not None:
                         try:
                             proc.stdin.write(stdin_text)
@@ -4526,6 +4587,7 @@ def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
                     stdout_lines = []
                     codex_events = []
                     for raw_line in proc.stdout:
+                        note_progress(chat)
                         stdout_lines.append(raw_line)
                         events = _codex_events(raw_line)
                         codex_events.extend(events)
@@ -4534,9 +4596,11 @@ def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
                             if stage and on_stage:
                                 on_stage(stage, "")
                     proc.wait()
+                    _untrack(proc)
                     err_reader.join(timeout=2)
                     if killer:
                         killer.cancel()
+                    _raise_if_stopped(chat)
                     r = type("CLIResult", (), {"returncode": proc.returncode, "stdout": "".join(stdout_lines),
                                                 "stderr": "".join(stderr_lines)})()
                 except OSError as e:
@@ -4549,9 +4613,9 @@ def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
         else:
             proc = None
             try:
-                proc = subprocess.Popen(cmd, cwd=HOME, stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
-                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
-                                        env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                proc = _track(subprocess.Popen(cmd, cwd=HOME, stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
+                                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
+                                               env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)), chat)
                 if stdin_text is not None:
                     try:
                         proc.stdin.write(stdin_text)
@@ -4566,6 +4630,7 @@ def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
                     killer.start()
                 stdout_lines = []
                 for line in proc.stdout:
+                    note_progress(chat)
                     stdout_lines.append(line)
                     events = _codex_events(line)
                     codex_events.extend(events)
@@ -4582,6 +4647,10 @@ def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
                 if proc:
                     _kill_tree(proc)
                 raise RuntimeError(f"{name} stream failed: {e}") from e
+            finally:
+                if proc:
+                    _untrack(proc)
+            _raise_if_stopped(chat)
             r = type("CLIResult", (), {"returncode": proc.returncode, "stdout": stdout, "stderr": stderr})()
     elif remote:  # the remote shell is cmd.exe: printable ASCII arguments only; the Hebrew rides on stdin
         if any(not re.fullmatch(r"[\x20-\x7e]+", x) or '"' in x for x in cmd):
@@ -4590,10 +4659,11 @@ def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
         r = None
         for rc in _remote_cli_cmds(c, line):
             try:
-                r = subprocess.run(rc, input=stdin_text, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                                   timeout=timeout or None, creationflags=NO_WINDOW)
+                r = _run_tracked(rc, chat, input=stdin_text, text=True, encoding="utf-8", errors="replace",
+                                 timeout=timeout or None, creationflags=NO_WINDOW)
             except subprocess.TimeoutExpired:
                 raise RuntimeError(f"{name} did not finish in time")
+            _raise_if_stopped(chat)
             if r.returncode != 255:  # 255 = ssh did not reach that alias: try the next one
                 break
         if r is None or r.returncode == 255:
@@ -4601,10 +4671,11 @@ def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
             raise ProviderDown(name, "unreachable", 10, raw=((r.stderr if r else "") or "ssh failed")[-300:])
     else:
         try:
-            r = subprocess.run(cmd, cwd=HOME, input=stdin_text, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                               timeout=timeout or None, env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            r = _run_tracked(cmd, chat, cwd=HOME, input=stdin_text, text=True, encoding="utf-8", errors="replace",
+                             timeout=timeout or None, env=env, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"{name} did not finish in time")
+        _raise_if_stopped(chat)
     text, err = "", (r.stderr or "") + ("\n" + r.stdout if r.returncode else "")
     o = c.get("out") or "text"
     if o.startswith("json:"):
@@ -4781,8 +4852,8 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
     cc = card_chat_for(chat)
     if cc and not guest:  # owner 15.11: tools run here (wa_send.py) post their draft cards in this group
         run_env = dict(run_env or os.environ, WA_CARD_CHAT=cc)
-    proc = subprocess.Popen(cmd, cwd=guest_home(guest) if guest else HOME, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, encoding="utf-8", errors="replace", env=run_env)
+    proc = _track(subprocess.Popen(cmd, cwd=guest_home(guest) if guest else HOME, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", env=run_env), chat)
     errbuf = []
 
     def read_err():  # stderr carries the sign-in expiry warning and limit / login errors
@@ -4854,6 +4925,7 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
     began = False
     try:
         for line in proc.stdout:
+            note_progress(chat)
             try:
                 ev = json.loads(line)
             except ValueError:
@@ -4908,11 +4980,12 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
                 if _active_runs.get(chat) == t0:
                     _active_runs.pop(chat, None)
     err_thread.join(2)
+    _untrack(proc)
     errtext = "".join(errbuf)
     si = parse_signin(errtext)
     if si:
         kv_set("signin_ends", f"{si[0]}|{si[1]}")
-    if stopped.is_set():
+    if stopped.is_set() or stop_wanted(chat):
         raise Stopped()
     result = res.get("result") or ""
     if res.get("is_error") and not result:  # Qwen Code reports its error under "error", not in "result"
@@ -4943,6 +5016,8 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
         if bad:
             raise ProviderDown(_ctx.provider_used, bad[0], bad[1])
     if not res:
+        if not errtext.strip() and time.time() - t0 > 5:
+            raise RuntimeError("closed: the run's process ended with no answer and no error (stopped from outside or crashed)")
         raise RuntimeError("claude returned no result" + (f": {errtext.strip()[-200:]}" if errtext.strip() else ""))
     usage = res.get("usage", {})
     with adb() as db:
@@ -5173,6 +5248,10 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
             finally:
                 _ctx.light_task = False
         except (ProviderDown, LimitHit, AuthError, RuntimeError) as e:
+            if isinstance(e, RuntimeError) and str(e).startswith("closed:"):  # owner 19.11 19:30: a stopped run is not a fault
+                log("run closed without an answer", chosen, str(e)[:120])
+                return ("⛔ העבודה נעצרה באמצע: התהליך של הספק נסגר בלי תשובה (נעצר מבחוץ או קרס). "
+                        "מה שכבר בוצע נשמר; כתוב \"המשך\" כדי להמשיך.") if interactive else None
             if not _ctx.no_failover or not interactive or (isinstance(e, AuthError) and chosen == "claude"):
                 raise
             why = ("נגמרה המכסה" + (f" עד {e.until:%H:%M}" if getattr(e, "until", None) else "") if isinstance(e, LimitHit)
@@ -5422,6 +5501,165 @@ def codex_limits():
                 except (ValueError, KeyError, TypeError):
                     continue
     return None, None
+
+
+_CODEX_METER_PY = r"""
+import glob,json,os
+fs=sorted(glob.glob(os.path.expanduser("~/.codex/sessions/*/*/*/*.jsonl")),key=os.path.getmtime,reverse=True)[:5]
+out=None
+for f in fs:
+    with open(f,"rb") as fh:
+        fh.seek(max(0,os.path.getsize(f)-600000)); ls=fh.read().decode("utf-8","replace").splitlines()
+    for ln in reversed(ls):
+        if '"rate_limits"' in ln:
+            try: out={"rl":json.loads(ln)["payload"]["rate_limits"],"at":os.path.getmtime(f)}; break
+            except Exception: pass
+    if out: break
+print(json.dumps(out))
+"""
+
+METER_SLOTS = ("יומי", "שבועי", "חודשי")
+
+
+def _meter_from_claude(u):
+    out = []
+    for k, w in (("five_hour", "5 שעות"), ("seven_day", "שבועי")):
+        x = (u or {}).get(k) or {}
+        if x.get("utilization") is not None:
+            out.append({"w": w, "pct": round(float(x["utilization"])), "reset": _reset_at(x.get("resets_at") or "")})
+    return out
+
+
+def _meter_from_codex(rl):
+    out = []
+    for k in ("primary", "secondary"):
+        x = (rl or {}).get(k) or {}
+        if x.get("used_percent") is not None:
+            w = {300: "5 שעות", 1440: "יומי", 10080: "שבועי", 43200: "חודשי"}.get(x.get("window_minutes")) or _window_he(x.get("window_minutes"))
+            reset = ""
+            if x.get("resets_at"):
+                try:
+                    reset = _reset_at(dt.datetime.fromtimestamp(x["resets_at"]).astimezone().isoformat())
+                except (TypeError, ValueError, OSError):
+                    reset = ""
+            out.append({"w": w, "pct": round(float(x["used_percent"])), "reset": reset})
+    return out
+
+
+def refresh_meter(name):
+    """Owner 19.11 19:30: one provider's usage meter, read from the provider itself (Claude's plan meter, Codex's rate
+    limits, the bridge's own daily request count for free APIs). Saved in kv meter:<name>; nothing is invented."""
+    p = providers().get(name) or {}
+    kind = p.get("kind")
+    c = p.get("cli") or {}
+    windows, note = [], ""
+    try:
+        if name == "auto":
+            return None
+        if name == "claude":
+            windows = _meter_from_claude(claude_usage(max_age=0))
+            note = "" if windows else "מד השימוש של Claude לא נקרא"
+        elif kind == "claude-remote":
+            d, why = _claude_probe(p.get("ssh"))
+            windows = _meter_from_claude((d or {}).get("usage"))
+            note = "" if windows else (why or "מד השימוש לא נקרא")
+        elif kind == "cli" and c.get("bin") == "codex":
+            if c.get("ssh"):
+                hosts = c["ssh"] if isinstance(c["ssh"], list) else [c["ssh"]]
+                d = None
+                for h in hosts:
+                    r = subprocess.run([ssh_exe(), *ssh_opts(), h, "python -I -X utf8 -"], input=_CODEX_METER_PY.encode(),
+                                       capture_output=True, timeout=60, creationflags=NO_WINDOW)
+                    if r.returncode == 0:
+                        d = json.loads((r.stdout.decode("utf-8", "replace").strip().splitlines() or ["null"])[-1])
+                        break
+                windows = _meter_from_codex((d or {}).get("rl"))
+            else:
+                rl, _ = codex_limits()
+                windows = _meter_from_codex(rl)
+            note = "" if windows else "עוד אין נתון (קודקס כותב אותו אחרי הרצה)"
+        elif provider_is_local(name):
+            note = "מקומי · ללא מכסה"
+        if quota_limit(name):  # the bridge's own count of today's requests against the provider's free daily quota
+            windows.append({"w": "יומי", "pct": round(100 * quota_used(name) / quota_limit(name)), "reset": "חצות",
+                            "detail": f"{quota_used(name)}/{quota_limit(name)} בקשות"})
+        if not windows and not note:
+            note = "הספק לא חושף מד שימוש"
+    except Exception as e:
+        note = f"לא נקרא ({str(e)[:40]})"
+    snap = {"at": dt.datetime.now().isoformat(timespec="seconds"), "windows": windows, "note": note}
+    kv_set("meter:" + name, json.dumps(snap, ensure_ascii=False))
+    return snap
+
+
+def refresh_all_meters():
+    for name in providers():
+        if name != "auto":
+            refresh_meter(name)
+
+
+def meter_get(name, max_age=None):
+    """The last saved meter of a provider (dict or None). With max_age (seconds), an older one is refreshed in the background."""
+    try:
+        snap = json.loads(kv_get("meter:" + name) or "null")
+    except ValueError:
+        snap = None
+    if max_age is not None and (not snap or (dt.datetime.now() - dt.datetime.fromisoformat(snap["at"])).total_seconds() > max_age):
+        threading.Thread(target=refresh_meter, args=(name,), daemon=True).start()
+    return snap
+
+
+def meter_line(name):
+    """'📊 נוצל: יומי — · 5 שעות 12% · שבועי 85% · חודשי —' under a provider in the /ספק list (owner 19.11 19:30)."""
+    snap = meter_get(name, max_age=6 * 3600)
+    if not snap:
+        return "   📊 _נוצל: עוד לא נבדק (בבדיקה הבאה, 06:00 / 18:00)_"
+    ws = snap.get("windows") or []
+    if not ws:
+        return f"   📊 _{snap.get('note') or 'אין נתון'}_"
+    by = {}
+    for x in ws:
+        by.setdefault(x["w"], x)
+    parts = []
+    for w in ["יומי", "5 שעות", "שבועי", "חודשי"]:
+        x = by.get(w)
+        if x:
+            mark = "🔴 " if x["pct"] >= 90 else ""
+            parts.append(f"{mark}{w} {x['pct']}%" + (f" ({x['detail']})" if x.get("detail") else ""))
+        elif w in METER_SLOTS:
+            parts.append(f"{w} —")
+    return f"   📊 _נוצל: {' · '.join(parts)} · נבדק {snap['at'][11:16]}_"
+
+
+def meter_high(name, share=None):
+    """(window, pct) of the provider's fullest window when it is at or above share (default 90%, config quota_warn_pct), else None."""
+    share = float(CFG.get("quota_warn_pct", 90)) if share is None else share
+    snap = meter_get(name, max_age=1800) or {}
+    top = max(snap.get("windows") or [], key=lambda x: x["pct"], default=None)
+    return (top["w"], top["pct"]) if top and top["pct"] >= share else None
+
+
+def quota_note_for_prompt(chat):
+    """Owner 19.11 19:30, a base rule: when ANY provider's quota (the one answering here) is at 90% or more, the bridge
+    advises against big work: the AI is told (in the prompt), and the owner sees one warning in the conversation."""
+    try:
+        name = active_provider(chat)[0]
+        if name == "auto":
+            return ""
+        hi = meter_high(name)
+        if not hi:
+            return ""
+        key = K("quota_warned", chat)
+        stamp = f"{name}:{hi[0]}:{dt.date.today()}"
+        if kv_get(key) != stamp:
+            kv_set(key, stamp)
+            reply(f"⚠️ מכסת *{AI_HE.get(name) or name}* מנוצלת {hi[1]}% ({hi[0]}). כלל בסיס: לא להתחיל עכשיו עבודה גדולה — "
+                  "היא עלולה להיקטע באמצע ולהשאיר דברים פתוחים. עדיף משימה קצרה, או לעבור ספק (/ספק).")
+        return (f"\n\n[הגשר: מכסת הספק שעונה כאן מנוצלת {hi[1]}% ({hi[0]}). אל תתחיל עבודה גדולה או רב-שלבית שעלולה להיקטע "
+                "באמצע; בצע רק חלק קצר שאפשר לסיים, ואם הבקשה גדולה — אמור זאת והצע להמשיך אחרי איפוס המכסה או בספק אחר.]")
+    except Exception as e:
+        log("quota note failed", e)
+        return ""
 
 
 def _window_he(minutes):
@@ -6059,6 +6297,8 @@ class StatusMsg:
         self.glass = Hourglass(self.chat, self.react_to, first="") if self.react_to else None
         self.steps, self.tick, self.ended = [], 0, None
         self.hold, self.loop_done = False, threading.Event()  # owner 17.11 15:15: hold = the answer will be merged into this message
+        if not getattr(_ctx, "side_run", False):
+            note_progress(self.chat)
         self._save(False)
         self.timer = threading.Timer(8, self._start)
         if wa:  # PC-only conversations show progress in the dashboard only
@@ -6072,6 +6312,7 @@ class StatusMsg:
             log("live_steps save failed", e)
 
     def set_stage(self, st, detail=""):
+        note_progress(self.chat)
         text = f"{st} · {detail}" if detail else st
         self.stage = text
         self.ai_short, self.ai_model, self.ai_location = status_ai_info(self.model, self.chat, use_run_state=True)
@@ -6946,7 +7187,10 @@ def run_command(row):
         status = StatusMsg(effective_model(model), chat, wa=not pc_only(), react_to=mid if src == "wa" else None)
         limit_min = run_timeout_minutes(chat)
         try:
-            answer = claude(prompt, model=model, session=not CFG.get("fresh_sessions"), on_stage=status.set_stage, chat=chat,
+            with _run_procs_lock:
+                _stop_wanted.discard(chat)
+            answer = claude(prompt + quota_note_for_prompt(chat), model=model,
+                            session=not CFG.get("fresh_sessions") and not getattr(_ctx, "side_run", False), on_stage=status.set_stage, chat=chat,
                             raw=raw_text(text.lstrip("!")), timeout=limit_min * 60 if limit_min else None)
             status.hold = bool(answer) and status.wa  # the answer is merged into the status message below (owner 17.11 15:15)
         except LimitHit as e:
@@ -7438,6 +7682,46 @@ def voice_reply(chat, text):
 
 _workers = set()  # conversations that have a worker thread right now
 _workers_lock = threading.Lock()
+_side_workers = set()  # owner 19.11: conversations whose next message runs beside a silent run
+_progress_at = {}  # conversation -> last time its running work showed any sign of life (output, a stage)
+
+
+def note_progress(chat=None):
+    _progress_at[chat or cur_chat() or PRIMARY] = time.time()
+
+
+def release_seconds():
+    """Owner 19.11 19:30: a message is never stuck behind work that shows no progress. After this many seconds of silence the
+    next queued message of that conversation runs beside it (config queue_release_seconds; 0 = off)."""
+    try:
+        return float(CFG.get("queue_release_seconds", 30))
+    except (TypeError, ValueError):
+        return 30.0
+
+
+def side_worker(chat):
+    """Answers ONE queued message of a conversation whose running work went silent, beside it, in a separate session."""
+    try:
+        row = claim_next(chat)
+        if row:
+            _ctx.side_run = True
+            try:
+                silent = int(time.time() - _progress_at.get(chat, time.time()))
+                _ctx.chat, _ctx.src, _ctx.sync = chat, row[5] or "wa", row[6] or 0
+                try:
+                    reply(f"▶️ העבודה הקודמת כאן לא הראתה התקדמות {silent} שניות — עונה על ההודעה הזו במקביל, בסשן נפרד.",
+                          quoted=row[1] if (row[5] or "wa") == "wa" else None)
+                finally:
+                    _ctx.chat = None
+                run_command(row)
+            finally:
+                _ctx.side_run = False
+    except Exception:
+        log("side worker error", chat, traceback.format_exc())
+    finally:
+        with _workers_lock:
+            _side_workers.discard(chat)
+        _command_signal.set()
 
 
 def restart_wanted():
@@ -7510,6 +7794,75 @@ def pause_notice(chat, since):
         _ctx.chat = None
 
 
+def _dashboard_stop_any():
+    """The dashboard's stop button (stop.request) for work that is not a Claude run (OpenCode, Codex, a CLI): stop it too."""
+    exists, target = stop_target()
+    if not exists or not target:
+        return
+    with _active_lock:
+        if target in _active_runs:
+            return  # a Claude run watches the file itself
+    with _run_procs_lock:
+        mine = any(p.poll() is None for p in _run_procs.get(target, ()))
+    if mine:
+        try:
+            os.remove(STOP_FILE)
+        except OSError:
+            pass
+        stop_chat(target)
+
+
+REAP_NAMES = ("ssh.exe", "codex.exe", "claude.exe", "opencode-cli.exe", "qwen.exe", "gemini.exe", "copilot.exe", "node.exe")
+_REAP_PS = r"""
+$all = @{}; Get-CimInstance Win32_Process | ForEach-Object { $all[[int]$_.ProcessId] = $_ }
+$out = foreach ($p in $all.Values) {
+  $par = $all[[int]$p.ParentProcessId]
+  [pscustomobject]@{ pid = [int]$p.ProcessId; name = $p.Name; cmd = [string]$p.CommandLine;
+    age = [int]((Get-Date) - $p.CreationDate).TotalSeconds;
+    orphan = (-not $par) -or ($par.CreationDate -gt $p.CreationDate) }
+}
+$out | Where-Object { $_.orphan } | ConvertTo-Json -Compress
+"""
+
+
+def reap_orphans(min_age=600):
+    """Owner 19.11 19:30 ("5 ssh that never close themselves and just jam the computer"): a process the bridge's work
+    starts (ssh to another PC, an AI CLI) whose parent is gone has nobody reading it: it only holds the computer and the
+    other PC. Every few minutes such processes older than min_age seconds are stopped. Only these program names, and only
+    with no live parent (a run in progress, a tunnel of the running agent, an open terminal are never touched)."""
+    if os.name != "nt":
+        return 0
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", _REAP_PS], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=90, creationflags=NO_WINDOW)
+        rows = json.loads(r.stdout or "[]") if (r.stdout or "").strip() else []
+    except Exception as e:
+        log("orphan scan failed", e)
+        return 0
+    if isinstance(rows, dict):
+        rows = [rows]
+    killed = []
+    for x in rows:
+        name, cmd = str(x.get("name") or "").lower(), str(x.get("cmd") or "")
+        if name not in REAP_NAMES or int(x.get("age") or 0) < min_age:
+            continue
+        if "WindowsApps" in cmd or ("ai.opencode.desktop" in cmd and " serve" in cmd):
+            continue  # an installed app's own helpers (Codex / Claude / OpenCode apps) are never the bridge's
+        if name == "node.exe" and not re.search(r"codex|claude|opencode|qwen|gemini|copilot", cmd, re.I):
+            continue  # some other program's node
+        if name == "claude.exe" and " -p" not in cmd and "--print" not in cmd:
+            continue  # an interactive Claude Code session is the owner's, never the bridge's
+        try:
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(x["pid"])], capture_output=True, timeout=30, creationflags=NO_WINDOW)
+            killed.append(f"{name}:{x['pid']}")
+        except Exception as e:
+            log("orphan kill failed", x.get("pid"), e)
+    if killed:
+        log("orphans stopped", len(killed), " ".join(killed[:20]))
+        kv_set("orphans_last", json.dumps({"at": dt.datetime.now().isoformat(timespec="seconds"), "n": len(killed)}))
+    return len(killed)
+
+
 def command_worker():
     """Dispatcher: one worker thread per conversation with pending commands (serial within a conversation, parallel
     across conversations). A requested restart waits until every running answer has been sent. Conversations the owner
@@ -7540,9 +7893,15 @@ def command_worker():
                         continue
                     with _workers_lock:
                         if chat in _workers:
+                            lim = release_seconds()
+                            if (lim > 0 and chat not in _side_workers
+                                    and time.time() - _progress_at.get(chat, time.time()) > lim):
+                                _side_workers.add(chat)
+                                threading.Thread(target=side_worker, args=(chat,), daemon=True, name=f"side:{chat}").start()
                             continue
                         _workers.add(chat)
                     threading.Thread(target=conversation_worker, args=(chat,), daemon=True, name=f"conv:{chat}").start()
+                _dashboard_stop_any()
         except Exception:
             log("dispatcher error", traceback.format_exc())
         _command_signal.wait(3)  # short: the dashboard (a separate process) queues PC messages straight into the table
@@ -10459,6 +10818,8 @@ def live_control(cj, mid, content):
     word, rest = m.group(1).lower(), (m.group(2) or "").strip()
     with _active_lock:
         running = cj in _active_runs
+    with _workers_lock:
+        running = running or cj in _workers or cj in _side_workers  # owner 19.11: OpenCode / Codex / any CLI too
     q = ("SELECT id, at, status, text FROM commands WHERE coalesce(chat_jid, ?) = ? AND status IN ('running','pending','waiting_limit','interrupted') "
          "AND msg_id != ? ORDER BY id")
     with adb() as db:
@@ -10471,7 +10832,9 @@ def live_control(cj, mid, content):
         if running:
             with open(STOP_FILE, "w", encoding="utf-8") as f:
                 f.write(cj)
-            out.append("⛔ עוצר את הפעולה הנוכחית. הסשן נשמר: ההודעה הבאה ממשיכה מאותה נקודה.")
+            stop_chat(cj)
+            out.append(f"⛔ עוצר את {AI_HE.get(active_provider(cj)[0]) or active_provider(cj)[0]} באמצע העבודה. "
+                       "הסשן נשמר: ההודעה הבאה ממשיכה מאותה נקודה.")
         else:
             out.append("אין פעולה שרצה עכשיו בשיחה הזו.")
         if rest in ("הכל", "הכול", "all"):
@@ -11947,7 +12310,8 @@ def scheduler():
                          (CFG.get("auto_update_time", "23:50"), "auto_update", auto_update),
                          (CFG.get("monthly_jobs_time", "02:00"), "monthly_jobs", monthly_jobs),
                          (CFG.get("health_report_time", "08:00"), "weekly_health", weekly_health),
-                         (CFG.get("engine_probe_time", "06:00"), "engine_response_probe", daily_engine_probe)]
+                         (CFG.get("engine_probe_time", "06:00"), "engine_response_probe", daily_engine_probe),
+                         (CFG.get("engine_probe_time_pm", "18:00"), "engine_response_probe_pm", daily_engine_probe)]
                 # owner 11.11: the PC slept in the middle of the 03:00 backup and the day was already marked: retry
                 # until it really finished today (backup_done), at most every 30 minutes
                 if (now.strftime("%H:%M") >= CFG["backup_time"] and (kv_get("backup_done") or "")[:10] != today
@@ -11986,9 +12350,12 @@ def scheduler():
                     if not last or now - dt.datetime.fromisoformat(last) > dt.timedelta(minutes=minutes):
                         kv_set(f"at:{key}", now.isoformat())
                         slow.put(fn)  # plugin jobs (e.g. extracting requests with Claude) run off the owner's fast queue
-                if not kv_get("at:hourly_engine_status") or now - dt.datetime.fromisoformat(kv_get("at:hourly_engine_status")) >= dt.timedelta(hours=1):
-                    kv_set("at:hourly_engine_status", now.isoformat())
-                    slow.put(hourly_engine_status)
+                # owner 19.11 19:30: the availability check runs at 06:00 and 18:00 only (was every hour); see the daily list.
+                # Orphaned ssh / AI CLI processes are cleared every few minutes.
+                if not kv_get("at:reap_orphans") or now - dt.datetime.fromisoformat(kv_get("at:reap_orphans")) >= dt.timedelta(
+                        minutes=float(CFG.get("reap_minutes", 5))):
+                    kv_set("at:reap_orphans", now.isoformat())
+                    slow.put(reap_orphans)
         except Exception:
             log("scheduler error", traceback.format_exc())
         time.sleep(30)
