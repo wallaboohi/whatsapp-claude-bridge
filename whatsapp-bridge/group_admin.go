@@ -45,6 +45,15 @@ func adminHandler(path string, fn func(ctx context.Context, body map[string]any)
 
 func str(b map[string]any, k string) string { s, _ := b[k].(string); return s }
 
+// markLocalEdit records a successful edit in messages.db at once. The agent verifies edits by reading this table;
+// the WhatsApp echo can arrive late (or not at all), which made a successful edit look refused and duplicated answers.
+func markLocalEdit(store *MessageStore, chat, id, text string) {
+	if store == nil || id == "" {
+		return
+	}
+	store.db.Exec("UPDATE messages SET content = ?, edited = 1 WHERE id = ? AND chat_jid = ?", text, id, chat)
+}
+
 func jidList(b map[string]any, k string) ([]types.JID, error) {
 	var out []types.JID
 	raw, _ := b[k].([]any)
@@ -225,6 +234,9 @@ func registerAdminAPI(client *whatsmeow.Client) {
 		}
 		msg := client.BuildEdit(chat, types.MessageID(str(b, "id")), &waE2E.Message{Conversation: proto.String(str(b, "text"))})
 		_, err = client.SendMessage(ctx, chat, msg)
+		if err == nil {
+			markLocalEdit(globalStore, chat.String(), str(b, "id"), str(b, "text"))
+		}
 		return nil, err
 	})
 

@@ -241,9 +241,10 @@ def rtl(text):
     return "\n".join([lines[0]] + [l if not l.strip() or "\u200f" in l[:3] or l.startswith("```") else "\u200f" + l for l in lines[1:]])
 
 
-def send(recipient, text, media=None, quoted=None, read_aloud_of=None, card_chat=None):
+def send(recipient, text, media=None, quoted=None, read_aloud_of=None, card_chat=None, want_id=False):
     """Send through the bridge (send policy + pacing apply there). Never retried: a retry could double-send.
-    read_aloud_of = the message the owner reacted 🛞 on: the bridge lets that one voice note skip the draft."""
+    read_aloud_of = the message the owner reacted 🛞 on: the bridge lets that one voice note skip the draft.
+    want_id=True returns the real WhatsApp message id from /api/send (used by the status message to edit itself)."""
     text = rtl(text)
     body = {"recipient": recipient, "message": text}
     if media:
@@ -259,6 +260,7 @@ def send(recipient, text, media=None, quoted=None, read_aloud_of=None, card_chat
         body["quoted_id"] = quoted
     if card_chat:
         body["card_chat"] = card_chat  # the draft card (if any) is posted in this group, not the control group (owner 15.11)
+    res = {}
     try:
         try:
             res = bridge("/send", body)
@@ -272,6 +274,8 @@ def send(recipient, text, media=None, quoted=None, read_aloud_of=None, card_chat
     with adb() as db:
         db.execute("INSERT INTO sent VALUES (?, ?, ?, ?, ?)", (dt.datetime.now().isoformat(), recipient, text[:500], ok, detail))
     log("send", recipient, ok, detail[:120])
+    if want_id:
+        return (res.get("id") or "") if ok else ""  # owner 19.11: the exact message id, never a guess from the echo
     return ok
 
 
@@ -6143,18 +6147,24 @@ class StatusMsg:
         if self.done.is_set():
             return
         text = rtl(self._text())
-        send(self.chat, text)
-        for _ in range(8):
-            try:
-                with mdb() as db:
-                    r = db.execute("SELECT id FROM messages WHERE chat_jid = ? AND is_from_me = 1 AND content = ? ORDER BY timestamp DESC LIMIT 1",
-                                   (self.chat, text)).fetchone()
-                if r:
-                    self.mid = r[0]
-                    break
-            except Exception:
-                pass
-            time.sleep(1)
+        # Owner 19.11: /api/send now returns the real id. Searching by text could catch an older status message with
+        # the same text (⏳ 0:08) when the echo was late, so edits jumped to that old message while the owner scrolled.
+        mid = send(self.chat, text, want_id=True)
+        if mid:
+            self.mid = mid
+        else:
+            log("status send id missing: falling back to echo lookup")
+            for _ in range(8):  # fallback for an older bridge that does not return an id yet
+                try:
+                    with mdb() as db:
+                        r = db.execute("SELECT id FROM messages WHERE chat_jid = ? AND is_from_me = 1 AND content = ? ORDER BY timestamp DESC LIMIT 1",
+                                       (self.chat, text)).fetchone()
+                    if r:
+                        self.mid = r[0]
+                        break
+                except Exception:
+                    pass
+                time.sleep(1)
         last = text
         edits = 0
         # owner 17.11 16:20: many edits in a short time look like abuse to WhatsApp (ban risk): an edit at most every 20 s

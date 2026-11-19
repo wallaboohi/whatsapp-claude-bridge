@@ -2945,6 +2945,48 @@ def test_finished_status_lists_step_durations_and_total(agent, monkeypatch):
     assert "סה״כ מקבלת ההודעה עד התשובה" in text and "0:11" in text
 
 
+def test_send_want_id_returns_bridge_message_id(agent, monkeypatch):
+    """Owner 19.11: /api/send returns the real WhatsApp id; the status loop must use it, not a text search."""
+    mod = agent[0]
+    calls = []
+
+    def fake_bridge(path, body=None, **k):
+        calls.append(path)
+        return {"success": True, "message": "Message sent to g@g.us id=ABC123", "id": "ABC123"}
+
+    monkeypatch.setattr(mod, "bridge", fake_bridge)
+    assert mod.send("g@g.us", "hello", want_id=True) == "ABC123"
+    assert mod.send("g@g.us", "hello") is True
+    assert calls == ["/send", "/send"], "want_id only changes the return value, not the send path"
+
+
+def test_status_start_edits_the_id_returned_by_send(agent, monkeypatch):
+    """Owner 19.11: a late echo must not make status edits land on an older, identically-worded message."""
+    mod = agent[0]
+    asked, edits = [], []
+    monkeypatch.setattr(mod, "send", lambda chat, text, **k: asked.append(k.get("want_id")) or "FRESH1")
+    monkeypatch.setattr(mod, "bridge", lambda path, body=None, **k: edits.append((path, dict(body or {}))))
+    monkeypatch.setattr(mod, "status_ai_info", lambda *a, **k: ("ויוי", "big-pickle", "☁️ ענן"))
+    st = mod.StatusMsg("sonnet", "g@g.us", wa=False)
+    st.timer.cancel()
+
+    class Done:
+        def __init__(self):
+            self.waits = 0
+
+        def is_set(self):
+            return self.waits > 0  # false at the start, true once the loop asked to stop
+
+        def wait(self, seconds):
+            self.waits += 1
+            return True
+
+    st.done = Done()  # skip the 10 s edit loop; check the id it would edit with
+    st._start()
+    assert asked == [True] and st.mid == "FRESH1", "the send response id is used as-is"
+    assert edits and all(b.get("id") == "FRESH1" for p, b in edits if p == "/edit_message")
+
+
 def test_quick_answer_gets_finished_status_only_when_wa(agent, monkeypatch):
     """Owner 17.11 13:55: a quick answer's details go in one finished status message, sent before the answer."""
     mod = agent[0]
