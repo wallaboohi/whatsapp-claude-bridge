@@ -6106,7 +6106,7 @@ def commands_index():
             "", "*🧩 מודלים:* /ספק (הרשימה המלאה) · /N M (מודל M של בינה N) · /מודל (מודלי Claude) · /sonnet /opus /haiku · /מודל חינמי",
             "*🔎 בדיקות:* /זמינות (זמינות) · /בדוק מענה (תשובה אמיתית מכולן) · /יומן (ציונים לפי ימים) · /רמות (איזה מודל אוטו בוחר) · /מצב <בינה>",
             "*⚙️ שליטה:* /ספק כאן איפוס · /ספק מחשב <שם> · /מנוע · /הפעל מחדש · /סשן חדש · /תקרה (שימוש) · /בריאות · /מחכים",
-            "*🖥️ מחשבים וחשבונות:* /חשבונות · /גיבוי (מעבר בין הנייח לנייד) · /גרסה · /🛞 (הקראה)",
+            "*🖥️ מחשבים וחשבונות:* /חשבונות · /גיבוי (מעבר בין הנייח לנייד) · /העבר גשר <חדר|סלון|לפטופ|נייח> · /גרסה · /🛞 (הקראה)",
             "*📑 אחר:* /חפש <מלל> · /כלל בסיס <כלל> · /כרום · /טלפון (מדליק Tailscale בטלפון) · /תוכן (זה)"]
     return "\n".join(out)
 
@@ -6216,6 +6216,9 @@ def owner_command(text, chat=None):
         return usage_report(chat or PRIMARY)
     if re.match(r"^/\s*(כרום|chrome)\s*$", text.strip()):   # owner 10.11: bring the Chrome extension back remotely
         return chrome_start()
+    m = re.match(r"^/\s*העבר\s+(?:את\s+ה)?גשר\b\s*(.*)$", text.strip())
+    if m:  # owner 19.11 11:23: move the bridge on purpose to a chosen PC, and back
+        return handover_cmd(m.group(1))
     if re.match(r"^/\s*(טלפון|פלאפון|phone)\s*$", text.strip()):   # owner 18.11 23:58: Tailscale of the phone on, from WhatsApp (ntfy)
         return phone_up_text()
     m = re.match(r"^\s*/?(כן|אשר|אישור|בטל|לא)\s*$", text.strip())
@@ -8831,6 +8834,159 @@ def session_resume_ok(name):
     return True
 
 
+# ---------- planned hand-over: "/העבר גשר <מחשב>" (owner 19.11.2026 11:23) ----------
+# The owner moves the bridge on purpose to a chosen backup (a drill, or work on the desktop). The host writes
+# store/handover.json {"to", "at", "by"} on every PC and restarts into "away": its bridge leaves the identity, the agent
+# answers nothing and runs nothing (its /brief goes silent, so the backups see it as down). Only the chosen backup takes
+# over, at once and without the chain order; the others stand by. "/העבר גשר נייח" (on the PC that holds the bridge now)
+# removes the file everywhere: the host wakes, waits for the hand-back (the usual failover release) and holds it again.
+HANDOVER_FILE = os.path.join(STORE, "handover.json")
+HANDOVER_NAMES = {"נייח": "נייח", "בית": "נייח", "ברירת מחדל": "נייח", "ברירת-מחדל": "נייח", "ראשי": "נייח", "desktop": "נייח",
+                  "חדר": "חדר שינה", "חדר שינה": "חדר שינה", "חדר נייח": "חדר שינה", "perroom": "חדר שינה", "bedroom": "חדר שינה",
+                  "סלון": "סלון", "סלון נייח": "סלון", "salon": "סלון",
+                  "לפטופ": "לפטופ", "נייד": "לפטופ", "מחשב עבודה": "לפטופ", "laptop": "לפטופ"}
+HANDOVER_SET = r'''import os
+p = C["path"]
+if C["data"] is None:
+    if os.path.exists(p):
+        os.remove(p)
+else:
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p + ".tmp", "w", encoding="utf-8") as f:
+        f.write(C["data"])
+    os.replace(p + ".tmp", p)
+print("@@OK@@")
+'''
+
+
+def handover_read():
+    try:
+        return json.load(open(HANDOVER_FILE, encoding="utf-8")) or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def handover_target(arg):
+    """'סלון' / 'חדר' / 'נייח' / '' (= the default, the desktop) -> the chain name, or None."""
+    a = " ".join(str(arg or "").replace("במחשב", " ").split()).lower()
+    if not a:
+        return "נייח"
+    for cand in (a, a[1:] if a.startswith(("ל", "ב")) else None):  # "לסלון", "בנייח" (but "לפטופ" itself first)
+        if cand and cand.strip() in HANDOVER_NAMES:
+            return HANDOVER_NAMES[cand.strip()]
+    return None
+
+
+def handover_spread(data):
+    """Writes (data = dict) or removes (None) the hand-over file here and on every peer. Returns the peers that failed."""
+    blob = None if data is None else json.dumps(data, ensure_ascii=False)
+    if blob is None:
+        try:
+            os.remove(HANDOVER_FILE)
+        except OSError:
+            pass
+    else:
+        os.makedirs(STORE, exist_ok=True)
+        with open(HANDOVER_FILE, "w", encoding="utf-8") as f:
+            f.write(blob)
+    failed = []
+    for p in CFG.get("peers") or []:
+        pn = p.get("name") or peer_alias(p) or "?"
+        if not peer_alias(p):
+            failed.append(pn)
+            continue
+        try:
+            rc, out, err = _remote_python(p, _remote_script(HANDOVER_SET, {"path": _remote_root(p) + "/whatsapp-bridge/store/handover.json",
+                                                                             "data": blob}), timeout=90)
+        except Exception as e:
+            rc, out, err = 1, "", str(e)
+        if rc or "@@OK@@" not in out:
+            log("handover spread failed", pn, rc, (err or out)[-200:])
+            failed.append(pn)
+    return failed
+
+
+def handover_cmd(arg):
+    """/העבר גשר <מחשב>: the owner's explicit order to move the bridge (owner 19.11)."""
+    target = handover_target(arg)
+    names = [p.get("name") for p in CFG.get("peers") or []]
+    if not target:
+        return ("לא הבנתי לאיזה מחשב. אפשר: */העבר גשר חדר* · */העבר גשר סלון* · */העבר גשר לפטופ* · "
+                "*/העבר גשר נייח* (או בלי שם: חזרה לברירת המחדל, הנייח).")
+    fc = failover_cfg()
+    me = fc["self_name"] if fc else "נייח"
+    if target == "נייח":
+        ho = handover_read()
+        if not ho and not fc:
+            return "הגשר כבר בנייח, אין מה להחזיר."
+        failed = handover_spread(None)
+        return ("🔁 *מחזיר את הגשר לנייח.* הנייח מתעורר תוך כחצי דקה, ואז ההזדהות והאוטומציות חוזרות אליו לבד (כמו בחזרה אחרי נפילה). "
+                "אודיע כשהוא מחזיק."
+                + (f"\n⚠️ לא הצלחתי להגיע אל: {', '.join(failed)}. אם הנייח ביניהם, הוא יישאר בהמתנה עד שאגיע אליו." if failed else ""))
+    if fc:
+        return f"אפשר להעביר את הגשר רק מהנייח. עכשיו אני ב{me}: קודם */העבר גשר נייח*, ואחרי שהוא חוזר להחזיק, להעביר משם."
+    if target not in names:
+        return f"\"{target}\" לא מוגדר כמחשב בשרשרת כאן."
+    if session_cfg() and not lease_held():
+        return "⚠️ הנייח לא מחזיק עכשיו את הזדהות הווצאפ, ולכן אין מה להעביר ממנו."
+    peer = next(p for p in CFG.get("peers") or [] if p.get("name") == target)
+    b = peer_fetch(peer, timeout=10)
+    if not b or b.get("agent_alive", True) is False:
+        return f"⚠️ \"{target}\" לא עונה עכשיו, ולכן לא העברתי. הגשר נשאר בנייח."
+    if session_cfg() and not (b.get("session_lease") or {}).get("copy_at"):
+        return f"⚠️ אין ב\"{target}\" עותק של הזדהות הווצאפ, ולכן לא העברתי. הגשר נשאר בנייח."
+    if (b.get("git") or {}).get("head") and (b.get("git") or {}).get("head") != kv_get("running_head"):
+        note = "\n⚠️ הקוד שם לא זהה לקוד כאן; הוא יתעדכן בסנכרון הבא."
+    else:
+        note = ""
+    failed = handover_spread({"to": target, "at": dt.datetime.now().isoformat(timespec="seconds"), "by": socket.gethostname()})
+    if target in failed:
+        handover_spread(None)
+        return f"⚠️ לא הצלחתי לכתוב את ההוראה ב\"{target}\", ולכן ביטלתי. הגשר נשאר בנייח."
+    with open(RESTART_FILE, "w", encoding="utf-8") as f:
+        f.write(f"העברה יזומה של הגשר ל{target} (/העבר גשר)")
+    return (f"🔀 *מעביר את הגשר ל{target}.* מיד אחרי התשובה הזו הנייח משחרר את הזדהות הווצאפ ונכנס להמתנה, "
+            f"ו{target} לוקח את השיחות והאוטומציות (בערך 1–3 דקות בלי ווצאפ). שאר המחשבים לא מתערבים.\n"
+            f"לחזרה: */העבר גשר נייח* (או */העבר גשר* בלי שם)." + note
+            + (f"\n⚠️ לא הגעתי אל: {', '.join(failed)} (הם לא ייקחו כי הנייח מושבת מרצון רק מבחינת {target})." if failed else ""))
+
+
+def handover_away():
+    """Host at start-up with a hand-over file: release the identity and wait, silent, until the file is gone (owner 19.11)."""
+    if failover_cfg() or not os.path.exists(HANDOVER_FILE):
+        return
+    ho = handover_read()
+    log("planned hand-over: away while", ho.get("to"), "holds the bridge")
+    kv_set("heartbeat", "2000-01-01T00:00:00")  # the dashboard /brief says "agent down" at once
+    if session_cfg():
+        lease_enable()
+        lease_revoke(f"planned hand-over to {ho.get('to')}", wait=30)
+    while os.path.exists(HANDOVER_FILE):
+        time.sleep(15)
+    kv_set("heartbeat", dt.datetime.now().isoformat(timespec="seconds"))
+    log("planned hand-over ended: starting as host again")
+
+
+def handover_mine(fc, peer_st):
+    """On a backup: 'mine' = the owner moved the bridge here; 'other' = moved to another backup (stand by); '' = none.
+    A file left over after the host came back (older than 10 minutes, host up) is removed."""
+    ho = handover_read()
+    if not ho.get("to"):
+        return ""
+    if not (peer_st or {}).get("off_since") and (failover_state(fc["for"]).get("state") or "idle") == "idle":
+        try:
+            old = dt.datetime.now() - dt.datetime.fromisoformat(ho.get("at") or "") > dt.timedelta(minutes=10)
+        except ValueError:
+            old = True
+        if old:
+            try:
+                os.remove(HANDOVER_FILE)
+            except OSError:
+                pass
+            return ""
+    return "mine" if ho["to"] == fc["self_name"] else "other"
+
+
 def failover_tick(peer, name, peer_st):
     """Called by peer_watch after every check of a peer."""
     fc = failover_cfg()
@@ -8840,7 +8996,13 @@ def failover_tick(peer, name, peer_st):
         session_backup_tick(peer, name, peer_st)  # owner 18.11: keep a fresh copy of the one WhatsApp identity
     except Exception:
         log("session backup tick failed", traceback.format_exc())
-    if (failover_state(name).get("state") or "idle") == "idle" and (peer_st or {}).get("off_since") and             (fc.get("defer_to") or len(CFG.get("peers") or []) > 1):
+    planned = handover_mine(fc, peer_st)
+    if planned == "other" and (failover_state(name).get("state") or "idle") == "idle":
+        return  # owner 19.11: the bridge was moved on purpose to another backup
+    if planned == "mine" and (peer_st or {}).get("off_since"):
+        fc = {**fc, "after_minutes": 0, "auto": True}
+        peer_st = {k: v for k, v in peer_st.items() if k != "grace"}
+    if planned != "mine" and (failover_state(name).get("state") or "idle") == "idle" and (peer_st or {}).get("off_since") and             (fc.get("defer_to") or len(CFG.get("peers") or []) > 1):
         why = failover_chain_blocker(fc, name)
         if why:
             if kv_get(f"fo_chain_wait:{name}") != why:
@@ -10809,6 +10971,11 @@ if __name__ == "__main__":
     for d in (OUTBOX, GROUPS_DIR, INBOX, LOCAL_FILES):
         os.makedirs(d, exist_ok=True)
     adb().close()
+    if len(sys.argv) == 1:
+        try:
+            handover_away()  # owner 19.11: the bridge was moved on purpose to a backup; wait silent until it comes back
+        except Exception:
+            log("handover away failed", traceback.format_exc())
     try:
         session_bootstrap()  # owner 18.11: a backup without a store of its own gets the history first
     except Exception:

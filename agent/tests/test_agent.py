@@ -3223,3 +3223,36 @@ def test_no_resume_when_work_done_or_no_restart(agent):
     finally:
         os.remove(mod.RESTART_FILE)
     assert not mod.kv_get("resume_after_restart")
+
+
+def test_handover_target_names(agent):
+    """Owner 19.11 11:23: /העבר גשר <PC>; no name = back to the default (the desktop)."""
+    agent, _ = agent
+    t = agent.handover_target
+    assert t("") == "נייח" and t("ברירת מחדל") == "נייח" and t("במחשב נייח") == "נייח"
+    assert t("חדר") == "חדר שינה" and t("לסלון") == "סלון" and t("לפטופ") == "לפטופ" and t("ללפטופ") == "לפטופ"
+    assert t("מטבח") is None
+
+
+def test_handover_only_chosen_backup_takes_over(agent, monkeypatch, tmp_path):
+    """Owner 19.11: a planned hand-over goes to the chosen backup at once (no chain order, no grace); the others stand by;
+    a file left over after the host came back is removed."""
+    agent, _ = agent
+    monkeypatch.setattr(agent, "HANDOVER_FILE", str(tmp_path / "handover.json"))
+    monkeypatch.setattr(agent, "failover_state", lambda name: {"state": "idle"})
+    fc = {"for": "נייח", "self_name": "סלון"}
+    assert agent.handover_mine(fc, {"off_since": "x"}) == ""
+    now = agent.dt.datetime.now().isoformat(timespec="seconds")
+    (tmp_path / "handover.json").write_text(json.dumps({"to": "סלון", "at": now}), encoding="utf-8")
+    assert agent.handover_mine(fc, {"off_since": "x"}) == "mine"
+    assert agent.handover_mine(fc, {}) == "mine", "fresh file, host still restarting: kept"
+    assert agent.handover_mine({**fc, "self_name": "חדר שינה"}, {"off_since": "x"}) == "other"
+    (tmp_path / "handover.json").write_text(json.dumps({"to": "סלון", "at": "2026-01-01T00:00:00"}), encoding="utf-8")
+    assert agent.handover_mine(fc, {}) == "" and not (tmp_path / "handover.json").exists()
+
+
+def test_handover_cmd_refuses_from_backup_and_unknown(agent, monkeypatch):
+    agent, _ = agent
+    assert "לא הבנתי" in agent.handover_cmd("מטבח")
+    monkeypatch.setattr(agent, "failover_cfg", lambda: {"for": "נייח", "self_name": "סלון"})
+    assert "רק מהנייח" in agent.handover_cmd("חדר")
