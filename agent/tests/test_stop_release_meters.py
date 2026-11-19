@@ -189,3 +189,28 @@ def test_a_hand_back_restart_does_not_wait_forever(agent, monkeypatch):
     assert mod.handback_overdue() is False and mod._handback_wait["since"] == 0.0
     monkeypatch.setattr(mod, "failover_cfg", lambda: None)
     assert mod.handback_overdue() is False
+
+
+def test_a_stale_asked_hold_is_cleared_without_handing_anything_back(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    monkeypatch.setattr(mod, "FAILOVER_DIR", str(tmp_path))
+    name = "נייח"
+    hold = mod._fo_hold_path(name)
+    open(hold, "w", encoding="utf-8").write("{}")
+    st = {"state": "asked", "asked_at": "2026-11-19T17:34:06", "last": {"since": "x", "back": "y"}}
+    mod.failover_save(name, st)
+    handed = []
+    monkeypatch.setattr(mod, "failover_handback", lambda *a, **k: handed.append(a))
+    assert mod.failover_clear_stale(name, st, {}) is True
+    assert not mod.os.path.exists(hold) and mod.failover_state(name)["state"] == "idle" and handed == []
+    assert mod.failover_state(name)["last"] == {"since": "x", "back": "y"}
+    # really holding (plugins loaded here), or the host is down: never touched
+    open(hold, "w", encoding="utf-8").write("{}")
+    mod.failover_save(name, {"state": "asked"})
+    assert mod.failover_clear_stale(name, {"state": "asked"}, {"off_since": "2026-11-19T20:00:00"}) is False
+    mod._failover_loaded.add(name)
+    try:
+        assert mod.failover_clear_stale(name, {"state": "asked"}, {}) is False
+    finally:
+        mod._failover_loaded.discard(name)
+    assert mod.failover_clear_stale(name, {"state": "active"}, {}) is False and mod.os.path.exists(hold)

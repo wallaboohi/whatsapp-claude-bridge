@@ -9853,6 +9853,8 @@ def failover_tick(peer, name, peer_st):
         # 15 s + retries); here only the slow part: the plugins' hand-back after the release restart, and the state copies
         st = failover_state(name)
         state = st.get("state") or "idle"
+        if failover_clear_stale(name, st, peer_st):
+            return
         if state == "releasing" and name not in _failover_loaded:
             to = st.get("to") or name
             tpeer = _fo_peer(to) if to != name else peer
@@ -9928,10 +9930,34 @@ def _failover_idle_pull(peer, name, fc):
         kv_set(f"failover_code_problem:{name}", note)
 
 
+def failover_clear_stale(name, st, peer_st=None):
+    """Owner 19.11 20:15: the bedroom stayed in "asked" from 17:34 (the host came back 4 minutes later) with a hold file:
+    under the chain the "asked" state was never stepped, so it stopped copying the host's automation state (last copy 17:03)
+    and a later take-over would have started from 3-hour-old data. A hold this machine is not really running (its plugins are
+    not loaded here) while the host is up is cleared: state idle, hold file removed, NOTHING handed back (nothing ran here,
+    and the old copy must never overwrite the host's newer state). True when it cleared something."""
+    state = (st or {}).get("state") or "idle"
+    if name in _failover_loaded or (peer_st or {}).get("off_since") or state in ("active", "releasing"):
+        return False
+    hold = _fo_hold_path(name)
+    if state == "idle" and not os.path.exists(hold):
+        return False
+    failover_save(name, {"state": "idle", **({"last": st["last"]} if (st or {}).get("last") else {})})
+    try:
+        os.remove(hold)
+    except OSError:
+        pass
+    kv_set(f"failover_pull:{name}", "")  # copy the host's state again at once
+    log(f"failover: cleared a stale \"{state}\" hold for {name} (plugins not running here, host up) - nothing handed back")
+    return True
+
+
 def failover_resume():
     """At start-up on the backup machine: still holding the peer's plugins -> load them again (our flags are current,
     nothing is imported)."""
     fc = failover_cfg()
+    if fc and (failover_state(fc["for"]).get("state") or "idle") in ("idle", "asked") and os.path.exists(_fo_hold_path(fc["for"])):
+        failover_clear_stale(fc["for"], failover_state(fc["for"]), {})  # a hold file left behind while not holding
     if not fc or (failover_state(fc["for"]).get("state")) != "active":
         return
     if session_cfg() and not session_resume_ok(fc["for"]):
