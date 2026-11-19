@@ -392,7 +392,7 @@ _TABLE = {
         גדול גדולה ענק : 🐘 📏
         קטן קטנה : 🐜 🤏
         חם חמה : 🥵 🌡️
-        קר קרה : 🥶 🧊
+        קר : 🥶 🧊
         יקר יקרה : 💸 💎
         זול זולה : 🏷️ 👛
         נקי ניקיון לנקות : 🧹 ✨
@@ -553,7 +553,8 @@ _MONEY = re.compile(r"^\d[\d,.]*₪$|^₪\d|^\$\d|^\d[\d,.]*\$$")
 _PERCENT = re.compile(r"^\d[\d.]*%$")
 STOP = set("""את של על עם אל אם כי גם או אבל רק עוד כבר לא כן זה זו זאת הוא היא הם הן אני אתה את אנחנו אתם אתן מה מי איך למה מתי איפה
               יש אין כל כמה הרבה מאוד קצת אז פה שם כאן לי לך לו לה לנו לכם להם שלי שלך שלו שלה שלנו שלהם אותו אותה אותם אצל בין
-              לפני אחרי תוך בלי עד מול ליד כמו אחד אחת שתי שני שלוש ארבע חמש""".split())
+              לפני אחרי תוך בלי עד מול ליד כמו אחד אחת שתי שני שלוש ארבע חמש
+              קרה קרו קורה קורים קרתה""".split())  # owner 19.11: "קרה" = happened, not cold (it got a 🧊)
 
 
 def is_emoji(s):
@@ -787,3 +788,29 @@ def iconize(text, ai=None, bold=True):
                     break
                 picks[k] = extra[k]
     return render(text, toks, picks, strong if bold else ())
+
+
+def _load_legend():
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "emoji_legend.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+LEGEND = _load_legend()  # owner 19.11: icon -> Hebrew words that describe it (tools/build_emoji_legend.py)
+
+
+def by_description(desc, used=(), n=1):
+    """Owner 19.11: pick icon(s) BY DESCRIPTION from the legend: the icon whose description words match most of the words of
+    `desc` (a word = exact or a prefix-stripped form), earlier words in the icon's list weigh more. Icons in `used` are skipped."""
+    words = {c for w in re.split(r"[\s,/·]+", desc or "") if w for c in candidates(w)}
+    scored = []
+    for emo, ws in LEGEND.items():
+        if emo in used:
+            continue
+        s = sum(1.0 / (1 + i * 0.05) for i, w in enumerate(ws) if w in words or any(p in words for p in w.split()))
+        if s:
+            scored.append((s, emo))
+    scored.sort(key=lambda t: -t[0])
+    return [e for _, e in scored[:n]]

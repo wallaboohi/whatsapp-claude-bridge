@@ -2534,6 +2534,20 @@ def test_every_hosted_ai_gets_the_hebrew_rule(agent, monkeypatch, tmp_path):
     assert mod.HEBREW_RULE in seen["input"] and seen["input"].rstrip().endswith(mod.HEBREW_TAIL.strip())
 
 
+def test_codex_json_events_drive_live_hebrew_progress(agent):
+    mod, _ = agent
+    raw = '\n'.join([
+        '{"type":"turn.started"}',
+        '{"type":"item.started","item":{"type":"command_execution"}}',
+        '{"type":"item.completed","item":{"type":"file_change"}}',
+        '{"type":"item.completed","item":{"type":"agent_message","text":"הושלם"}}',
+        'banner that is not JSON',
+    ])
+    events = mod._codex_events(raw)
+    assert [mod._codex_stage(e) for e in events] == ["🧠 מתחיל לעבוד", "💻 מריץ פקודה", "✍️ עורך קוד/קבצים", "💬 מנסח תשובה"]
+    assert len(events) == 4
+
+
 def test_watchdog_heals_a_bridge_whose_api_is_down(agent, monkeypatch):
     """Owner 14.11: the bridge process ran but its API did not answer (port held), so nothing was sent: kill it (its loop restarts it),
     and start the task when no loop runs."""
