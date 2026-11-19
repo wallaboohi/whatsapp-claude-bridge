@@ -3664,7 +3664,7 @@ def _detail_of(name, inp):
         c = re.sub(r"\s+", " ", str(inp.get("description") or inp.get("command") or "")).strip()
         return c[:48] + ("…" if len(c) > 48 else "")
     if name == "WebFetch":
-        return re.sub(r"^https?://([^/]+).*$", r"", str(inp.get("url", "")))
+        return re.sub(r"^https?://([^/]+).*$", r"\1", str(inp.get("url", "")))
     if name == "WebSearch":
         return str(inp.get("query", ""))[:40]
     if name not in TOOL_STAGE_HE and name.rsplit("__", 1)[-1] not in TOOL_STAGE_HE and "__" not in name:
