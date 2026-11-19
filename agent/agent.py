@@ -165,7 +165,7 @@ def _migrate(db):
             db.execute("ALTER TABLE claude_runs ADD COLUMN chat TEXT")
         ccols = [r[1] for r in db.execute("PRAGMA table_info(commands)")]
         for col, ddl in (("chat_jid", "TEXT"), ("source", "TEXT DEFAULT 'wa'"), ("sync", "INTEGER DEFAULT 0"), ("attempts", "INTEGER DEFAULT 0"),
-                         ("retry_at", "TEXT")):
+                         ("retry_at", "TEXT"), ("prio", "INTEGER DEFAULT 0")):
             if col not in ccols:  # commands now carry their conversation, where they came from (wa | pc) and whether PC answers go to WhatsApp
                 db.execute(f"ALTER TABLE commands ADD COLUMN {col} {ddl}")
         prev = {}  # rows written before this fix (cum NULL): turn the cumulative figure into this run's share
@@ -7118,7 +7118,7 @@ def claim_next(chat):
     """The next pending command of one conversation, atomically marked running (attempts + 1), or None."""
     with adb() as db:
         row = db.execute("SELECT id, msg_id, text, at, chat_jid, source, sync FROM commands WHERE status = 'pending' "
-                         "AND coalesce(chat_jid, ?) = ? ORDER BY id LIMIT 1", (PRIMARY, chat)).fetchone()
+                         "AND coalesce(chat_jid, ?) = ? ORDER BY coalesce(prio, 0) DESC, id LIMIT 1", (PRIMARY, chat)).fetchone()
         if not row:
             return None
         n = db.execute("UPDATE commands SET status = 'running', attempts = coalesce(attempts, 0) + 1 WHERE id = ? AND status = 'pending'",
@@ -7287,6 +7287,109 @@ def run_timeout_minutes(chat):
     return n if n > 0 else None
 
 
+_stalled = set()  # conversations whose run was stopped for not moving (owner 20.11)
+
+
+def stall_minutes():
+    try:
+        return float(CFG.get("run_stall_minutes", 5))
+    except (TypeError, ValueError):
+        return 5.0
+
+
+def stall_watch(chat, done):
+    """Owner 20.11: a run that shows no movement at all (no output, no stage) for run_stall_minutes (5) is stuck: the bridge
+    stops it, says so, and resumes it when the provider answers again (release_stalled). 0 = off."""
+    lim = stall_minutes() * 60
+    if lim <= 0:
+        return
+    while not done.wait(10):
+        silent = time.time() - _progress_at.get(chat, time.time())
+        if silent < lim:
+            continue
+        with _run_procs_lock:
+            busy = any(p.poll() is None for p in _run_procs.get(chat, ()))
+        if not busy:
+            continue  # nothing of ours to stop (a call inside the agent): its own timeout ends it
+        _stalled.add(chat)
+        log("run stalled", chat, f"{int(silent)}s without movement - stopping it")
+        stop_chat(chat)
+        return
+
+
+def park_stalled(cid, chat, mid, src):
+    """The stopped run waits for its provider (status 'stalled'); after RESUME_MAX_ATTEMPTS stalls it is left to the owner.
+    True when it was parked."""
+    name = getattr(_ctx, "provider_used", None) or active_provider(chat)[0]
+    he = AI_HE.get(name) or name
+    mins = int(stall_minutes())
+    with adb() as db:
+        tries = (db.execute("SELECT coalesce(attempts, 0) FROM commands WHERE id = ?", (cid,)).fetchone() or [0])[0]
+    if tries >= RESUME_MAX_ATTEMPTS:
+        reply(f"⏸ עצרתי את {he}: לא זז {mins} דקות, וזו הפעם ה-{tries} עם ההודעה הזו. לא אמשיך לבד; "
+              "כתוב \"המשך\" או החלף ספק (/ספק).", quoted=mid if src == "wa" else None)
+        return False
+    blocked = _blocked_until(name)
+    retry = blocked or (dt.datetime.now() + dt.timedelta(minutes=2)).isoformat(timespec="seconds")
+    with adb() as db:
+        db.execute("UPDATE commands SET status = 'stalled', retry_at = ? WHERE id = ?", (retry, cid))
+    kv_set(f"stall_provider:{cid}", name)
+    kv_set(f"cut:{cid}", f"הספק לא זז {mins} דקות ונעצר, {dt.datetime.now():%H:%M}")
+    when = f" (המכסה שלו חוזרת ב-{_reset_at(blocked)})" if blocked else ""
+    reply(f"⏸ עצרתי את {he}: לא זז {mins} דקות ברצף, בלי פלט ובלי שלב חדש{when}. "
+          "אמשיך את העבודה הזו לבד, מאותה נקודה, ברגע שהספק יחזור לענות. לביטול: /עצור הכל", quoted=mid if src == "wa" else None)
+    react(mid, "⏸️")
+    return True
+
+
+_stall_probe = {"busy": set(), "at": 0.0}
+
+
+def release_stalled():
+    """Stalled runs go back to the queue once their provider answers again: after its quota reset when the bridge knows it,
+    else after a one-word probe (at most every 5 minutes per run)."""
+    if time.time() - _stall_probe["at"] < 30:
+        return
+    _stall_probe["at"] = time.time()
+    now = dt.datetime.now().isoformat(timespec="seconds")
+    with adb() as db:
+        rows = db.execute("SELECT id, chat_jid, msg_id, source FROM commands WHERE status = 'stalled' AND coalesce(retry_at, '') <= ?",
+                          (now,)).fetchall()
+    for cid, chat, mid, src in rows:
+        if cid in _stall_probe["busy"]:
+            continue
+        _stall_probe["busy"].add(cid)
+        threading.Thread(target=_stall_check, args=(cid, chat or PRIMARY, mid, src or "wa"), daemon=True).start()
+
+
+def _stall_check(cid, chat, mid, src):
+    try:
+        name = kv_get(f"stall_provider:{cid}") or active_provider(chat)[0]
+        blocked = _blocked_until(name)
+        later = (dt.datetime.now() + dt.timedelta(minutes=5)).isoformat(timespec="seconds")
+        if blocked:
+            with adb() as db:
+                db.execute("UPDATE commands SET retry_at = ? WHERE id = ? AND status = 'stalled'", (blocked, cid))
+            return
+        try:
+            ok = name == "auto" or provider_probe(name).get("answered") is True
+        except Exception as e:
+            log("stall probe failed", name, e)
+            ok = False
+        with adb() as db:
+            n = db.execute("UPDATE commands SET status = ?, retry_at = ? WHERE id = ? AND status = 'stalled'",
+                           ("pending" if ok else "stalled", None if ok else later, cid)).rowcount
+        if ok and n:
+            _ctx.chat, _ctx.src, _ctx.sync = chat, src, 0
+            try:
+                reply(f"▶️ {AI_HE.get(name) or name} חזר לענות: ממשיך את העבודה שנעצרה, מאותה נקודה.", quoted=mid if src == "wa" else None)
+            finally:
+                _ctx.chat = None
+            _command_signal.set()
+    finally:
+        _stall_probe["busy"].discard(cid)
+
+
 def run_command(row):
     """Answer one owner command (in the calling thread; _ctx = its conversation)."""
     cid, mid, text, when, chat, src, sync = row
@@ -7407,6 +7510,9 @@ def run_command(row):
         try:
             with _run_procs_lock:
                 _stop_wanted.discard(chat)
+                _stalled.discard(chat)
+            watch_done = threading.Event()
+            threading.Thread(target=stall_watch, args=(chat, watch_done), daemon=True).start()
             answer = claude(prompt + quota_note_for_prompt(chat), model=model,
                             session=not CFG.get("fresh_sessions") and not getattr(_ctx, "side_run", False), on_stage=status.set_stage, chat=chat,
                             raw=raw_text(text.lstrip("!")), timeout=limit_min * 60 if limit_min else None)
@@ -7426,6 +7532,12 @@ def run_command(row):
             return
         finally:
             status.finish()
+            watch_done.set()
+        if chat in _stalled:
+            _stalled.discard(chat)
+            if park_stalled(cid, chat, mid, src):
+                parked = True
+                return
         if cut:
             kv_set(f"cut:{cid}", "")
         stopped = (answer or "").startswith("⛔ עצרתי")
@@ -8125,6 +8237,7 @@ def command_worker():
                     restart_now(reason)
             if not restart_blocks():
                 release_limit_waiters()
+                release_stalled()
                 release_budget_waiters()
                 with adb() as db:
                     chats = [r[0] for r in db.execute("SELECT DISTINCT coalesce(chat_jid, ?) FROM commands WHERE status = 'pending'", (PRIMARY,))]
@@ -11119,6 +11232,49 @@ MODEL_WORDS = {"אופוס": "opus", "opus": "opus", "סונט": "sonnet", "sonn
                "פייבל": "fable", "fable": "fable", "אוטו": "auto", "auto": "auto"}
 
 
+NOW_RE = re.compile(r"^\s*(?:/\s*(?:עכשיו|now|דחוף)|>>)\s*(\S[\s\S]*)$", re.I)
+
+
+def enqueue_front(msg_id, text, chat, prio=2):
+    """A command that runs next in its conversation, before the ones already waiting (owner 20.11)."""
+    with adb() as db:
+        db.execute("INSERT INTO commands (msg_id, text, at, chat_jid, source, sync, prio) VALUES (?, ?, ?, ?, 'wa', 0, ?)",
+                   (msg_id, text, dt.datetime.now().strftime("%Y-%m-%d %H:%M"), chat, prio))
+    _command_signal.set()
+
+
+def jump_queue(cj, mid, content):
+    """Owner 20.11 ("here I can bypass the queue; the bridge does not let me"): /עכשיו <message> or >> <message>. The work running
+    in this conversation stops (its session is kept), this message is answered first, then the stopped work goes on from where it
+    stopped. Nothing running: the message simply runs next. True when the message was one of these."""
+    m = NOW_RE.match(content or "")
+    if not m:
+        return False
+    text = m.group(1).strip()
+    with adb() as db:
+        run = db.execute("SELECT id, text FROM commands WHERE coalesce(chat_jid, ?) = ? AND status = 'running' ORDER BY id LIMIT 1",
+                         (PRIMARY, cj)).fetchone()
+    with _workers_lock:
+        busy = cj in _workers or cj in _side_workers
+    name = active_provider(cj)[0]
+    enqueue_front(mid, text, cj, prio=2)
+    if run and busy:
+        enqueue_front(f"resume-{mid}", "המשך את העבודה שעצרתי כדי לענות על הודעה דחופה, מאותה נקודה בדיוק; בדוק קודם מה כבר בוצע. "
+                      f"העבודה הייתה: «{(run[1] or '').strip()[:300]}»", cj, prio=1)
+        with open(STOP_FILE, "w", encoding="utf-8") as f:
+            f.write(cj)
+        stop_chat(cj)
+        note = f"⏭ עוצר את {AI_HE.get(name) or name} ועונה קודם על ההודעה הזו. אחריה אמשיך את העבודה שנעצרה."
+    else:
+        note = "⏭ ההודעה הזו רצה עכשיו, לפני ההודעות שחיכו בתור."
+    _ctx.chat = cj
+    try:
+        reply(note, quoted=mid)
+    finally:
+        _ctx.chat = None
+    return True
+
+
 def live_control(cj, mid, content):
     """Owner 13.11: the terminal's controls while Claude works, from WhatsApp — handled the moment the message arrives, never queued
     behind the running work:  /עצור = Esc (stop the current action, keep the session, back to listening; queued messages go on)
@@ -11132,13 +11288,14 @@ def live_control(cj, mid, content):
         running = cj in _active_runs
     with _workers_lock:
         running = running or cj in _workers or cj in _side_workers  # owner 19.11: OpenCode / Codex / any CLI too
-    q = ("SELECT id, at, status, text FROM commands WHERE coalesce(chat_jid, ?) = ? AND status IN ('running','pending','waiting_limit','interrupted') "
+    q = ("SELECT id, at, status, text FROM commands WHERE coalesce(chat_jid, ?) = ? AND status IN ('running','pending','waiting_limit','interrupted','stalled') "
          "AND msg_id != ? ORDER BY id")
     with adb() as db:
         rows = db.execute(q, (PRIMARY, cj, mid)).fetchall()
     out = []
     if word in ("תור", "queue"):
-        names = {"running": "▶️ רץ", "pending": "⏳ בתור", "waiting_limit": "⏸️ ממתין למכסה", "interrupted": "⚠️ נקטע"}
+        names = {"running": "▶️ רץ", "pending": "⏳ בתור", "waiting_limit": "⏸️ ממתין למכסה", "interrupted": "⚠️ נקטע",
+                 "stalled": "⏸️ נעצר (תקוע), ממתין לספק"}
         out = [f"{names.get(st, st)} {str(at)[11:16]} · {(tx or '').strip()[:60]}" for _, at, st, tx in rows] or ["אין עבודה פעילה ואין הודעות בתור."]
     else:
         if running:
@@ -11152,7 +11309,7 @@ def live_control(cj, mid, content):
         if rest in ("הכל", "הכול", "all"):
             with adb() as db:
                 n = db.execute("UPDATE commands SET status = 'cancelled', answered = ? WHERE coalesce(chat_jid, ?) = ? "
-                               "AND status IN ('pending','waiting_limit','interrupted') AND msg_id != ?",
+                               "AND status IN ('pending','waiting_limit','interrupted','stalled') AND msg_id != ?",
                                (dt.datetime.now().isoformat(timespec="seconds"), PRIMARY, cj, mid)).rowcount
             out.append(f"🗑️ בוטלו {n} הודעות שחיכו בתור." if n else "לא היו הודעות בתור.")
         elif rest and MODEL_WORDS.get(rest.split()[0].lower()) and len(rest.split()) <= 2:
@@ -11165,9 +11322,8 @@ def live_control(cj, mid, content):
                                 dt.datetime.now().strftime("%Y-%m-%d %H:%M"), cj)
                 out.append("▶️ העבודה שנעצרה ממשיכה מאותה נקודה, על המודל החדש.")
         elif rest:
-            enqueue_command(mid, rest, dt.datetime.now().strftime("%Y-%m-%d %H:%M"), cj)
-            waiting = sum(1 for r in rows if r[2] != "running")
-            out.append("➡️ ההוראה החדשה נכנסה לתור" + (f" אחרי {waiting} הודעות שכבר חיכו." if waiting else " ותרוץ מיד."))
+            enqueue_front(mid, rest, cj)  # owner 20.11: the instruction given with a stop runs next, before the waiting ones
+            out.append("➡️ ההוראה החדשה רצה עכשיו, לפני ההודעות שחיכו בתור.")
         else:
             waiting = sum(1 for r in rows if r[2] != "running")
             if waiting:
@@ -11202,8 +11358,8 @@ def handle(row):
         if content == READ_ALOUD:  # 🛞 = read my last answer aloud (no Claude run)
             work.put(lambda: read_aloud(cj))
             return
-        if me and not mtype and live_control(cj, mid, content):
-            return  # /עצור, /תור: answered at once, not queued behind the running work
+        if me and not mtype and (jump_queue(cj, mid, content) or live_control(cj, mid, content)):
+            return  # /עכשיו, >>, /עצור, /תור: answered at once, not queued behind the running work
         try:
             kv_set(K("last_owner_msg", cj), json.dumps({"ts": ts[:19], "text": content[:300] or f"[{mtype}]"}, ensure_ascii=False))
         except Exception as e:

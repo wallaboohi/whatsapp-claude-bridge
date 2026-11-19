@@ -2046,7 +2046,7 @@ def test_live_control_stop_and_queue(agent, monkeypatch):
     try:
         assert mod.live_control(chat, "X2", "/עצור") and "עוצר" in sent[-1] and "2 הודעות" in sent[-1]
         assert open(mod.STOP_FILE, encoding="utf-8").read() == chat
-        assert mod.live_control(chat, "X3", "/עצור תעשה רק את הראשון") and "אחרי 2 הודעות" in sent[-1]
+        assert mod.live_control(chat, "X3", "/עצור תעשה רק את הראשון") and "לפני ההודעות שחיכו" in sent[-1]  # owner 20.11: it runs first
         assert mod.live_control(chat, "X4", "/עצור הכל") and "בוטלו 3" in sent[-1]
     finally:
         mod._active_runs.pop(chat, None)
