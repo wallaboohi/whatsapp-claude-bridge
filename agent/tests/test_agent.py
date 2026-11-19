@@ -3194,3 +3194,32 @@ def test_process_left_alive_after_the_answer_is_reaped(agent, monkeypatch):
             break
         time.sleep(0.2)
     assert p.poll() is not None
+
+
+def test_work_resumes_after_restart(agent, monkeypatch):
+    """Owner 19.11 14:05: a restart asked by a run that left work must not end the work; the agent queues a continue turn."""
+    mod, _ = agent
+    chat = "1203631111@g.us"
+    open(mod.RESTART_FILE, "w", encoding="utf-8").write("בדיקה")
+    try:
+        mod.note_resume(chat, "סיימתי את 1. את 2 ו-3 אני ממשיך בהודעה הבאה.", time.time() - 30)
+    finally:
+        os.remove(mod.RESTART_FILE)
+    assert mod.kv_get("resume_after_restart")
+    mod.resume_after_restart()
+    assert not mod.kv_get("resume_after_restart")
+    with mod.adb() as db:
+        rows = db.execute("SELECT chat_jid, text FROM commands WHERE msg_id LIKE 'resume-%'").fetchall()
+    assert len(rows) == 1 and rows[0][0] == chat and "המשך אוטומטי" in rows[0][1]
+
+
+def test_no_resume_when_work_done_or_no_restart(agent):
+    mod, _ = agent
+    mod.note_resume("1203631111@g.us", "ממשיך בהודעה הבאה", time.time())  # no restart asked
+    assert not mod.kv_get("resume_after_restart")
+    open(mod.RESTART_FILE, "w", encoding="utf-8").write("בדיקה")
+    try:
+        mod.note_resume("1203631111@g.us", "✅ הכל בוצע.", time.time() - 30)
+    finally:
+        os.remove(mod.RESTART_FILE)
+    assert not mod.kv_get("resume_after_restart")

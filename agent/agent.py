@@ -762,6 +762,58 @@ def report_restart():
         if not chat.endswith("@g.us") or (g or {}).get("guest"):
             continue
         send_group_notice(chat, restart_notice_text(chat, reason))
+    resume_after_restart()
+
+
+# ---------- work goes on after a restart (owner 19.11 14:05 "כל הפעלה מחדש מוציאה אותך משימוש, כבר כמה ימים") ----------
+# A run that asks for a restart (restart.request) and says in its answer that work is still left ("ממשיך בהודעה הבאה",
+# "עוד לא בוצע"...) used to end there: after "✅ עליתי מחדש" nothing went on until the owner wrote again. Now the agent
+# remembers that conversation and, once it is back up, queues a "continue" turn in it by itself. continue.request (optional,
+# written by the AI) = exactly what to continue with; without it the answer's own wording decides.
+CONTINUE_FILE = os.path.join(HERE, "continue.request")
+RESUME_RX = re.compile(r"ממשיך|אמשיך|נמשיך|בהודעה הבאה|עוד לא בוצע|לא בוצע עדיין|טרם בוצע|נשאר לבצע|השלב הבא|"
+                       r"continu(e|ing) (in|with) the next", re.I)
+
+
+def note_resume(chat, answer, started):
+    """After an answer: if this run asked for a restart and left work, remember to continue it after the restart."""
+    try:
+        if not os.path.exists(RESTART_FILE) or os.path.getmtime(RESTART_FILE) < started - 5:
+            return
+        todo = ""
+        if os.path.exists(CONTINUE_FILE):
+            todo = open(CONTINUE_FILE, encoding="utf-8", errors="replace").read().strip()[:1500]
+            os.remove(CONTINUE_FILE)
+        if not todo and not RESUME_RX.search(answer or ""):
+            return
+        kv_set("resume_after_restart", json.dumps({"chat": chat, "todo": todo, "at": dt.datetime.now().isoformat(timespec="seconds"),
+                                                   "tail": (answer or "")[-1500:]}, ensure_ascii=False))
+        log("resume after restart noted for", chat)
+    except Exception as e:
+        log("note_resume failed", e)
+
+
+def resume_after_restart():
+    """Back up after a restart: queue the remembered "continue" turn in its conversation (once, only within 2 hours)."""
+    raw = kv_get("resume_after_restart")
+    if not raw:
+        return
+    kv_set("resume_after_restart", "")
+    try:
+        info = json.loads(raw)
+        if (dt.datetime.now() - dt.datetime.fromisoformat(info["at"])).total_seconds() > 7200:
+            return
+    except Exception:
+        return
+    text = ("🔁 המשך אוטומטי אחרי ההפעלה מחדש: עלית מחדש באמצע עבודה. המשך מהנקודה שעצרת ובצע את מה שכתבת שעוד לא בוצע, "
+            "בלי לחכות שיקיר יבקש שוב. אם הכל כבר בוצע, ענה בשורה אחת."
+            + (f"\nמה להמשיך: {info['todo']}" if info.get("todo") else "")
+            + f"\nסוף התשובה האחרונה שלך לפני ההפעלה מחדש:\n{info.get('tail', '')}")
+    with adb() as db:
+        db.execute("INSERT INTO commands (msg_id, text, at, chat_jid, source, sync) VALUES (?, ?, ?, ?, 'wa', 0)",
+                   (f"resume-{int(time.time())}", text, dt.datetime.now().isoformat(timespec="seconds"), info.get("chat") or PRIMARY))
+    _command_signal.set()
+    log("resume after restart queued for", info.get("chat"))
 
 
 def disconnects_24h():
@@ -6712,6 +6764,8 @@ def run_command(row):
             elif text.startswith(T["voice"]):
                 voice_reply(chat, out)
         react(mid, "✅" if answer else "❌")
+        if answer and not stopped and not guest:
+            note_resume(chat, answer, started)
     except Exception:
         log("command error", traceback.format_exc())
     finally:
