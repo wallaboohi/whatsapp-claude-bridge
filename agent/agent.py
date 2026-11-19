@@ -7881,6 +7881,23 @@ def reap_orphans(min_age=600):
     return len(killed)
 
 
+_handback_wait = {"since": 0.0}
+
+
+def handback_overdue():
+    """Owner 19.11 20:08: a backup that must give the host's automations back restarts without them (threads cannot be
+    stopped). The restart waited for a moment with no work running; the backup kept trying to answer (its bridge is off, every
+    answer failed), so that moment never came and it held the automations for 15+ minutes while the host was up. A hand-back
+    restart waits at most handback_restart_wait_sec (180); the interrupted work is resumed after the restart."""
+    fc = failover_cfg()
+    if not fc or (failover_state(fc["for"]).get("state") or "") != "releasing":
+        _handback_wait["since"] = 0.0
+        return False
+    if not _handback_wait["since"]:
+        _handback_wait["since"] = time.time()
+    return time.time() - _handback_wait["since"] >= float(CFG.get("handback_restart_wait_sec", 180))
+
+
 def command_worker():
     """Dispatcher: one worker thread per conversation with pending commands (serial within a conversation, parallel
     across conversations). A requested restart waits until every running answer has been sent. Conversations the owner
@@ -7891,6 +7908,9 @@ def command_worker():
             reason = restart_wanted()
             with _workers_lock:
                 busy = bool(_workers)
+            if reason and busy and handback_overdue():
+                busy = False  # owner 19.11: a hand-back restart never waits forever behind work that keeps failing here
+                log("restart: hand-back overdue, restarting although work runs (it is resumed after the restart)")
             if reason:
                 if not busy:
                     if os.path.exists(RESTART_FILE):

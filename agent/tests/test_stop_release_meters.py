@@ -174,3 +174,18 @@ def test_a_provider_the_bridge_saw_run_out_is_blocked_in_the_meter(agent, monkey
     assert mod.meter_high("codex_work") == ("חסום", 100)
     mod.kv_set("limit_until:codex_work", "")
     assert mod.meter_high("codex_work") is None
+
+
+def test_a_hand_back_restart_does_not_wait_forever(agent, monkeypatch):
+    mod, _ = agent
+    monkeypatch.setattr(mod, "failover_cfg", lambda: {"for": "נייח"})
+    state = {"state": "releasing"}
+    monkeypatch.setattr(mod, "failover_state", lambda name: state)
+    mod._handback_wait["since"] = 0.0
+    assert mod.handback_overdue() is False, "the first look starts the clock"
+    mod._handback_wait["since"] = mod.time.time() - 200
+    assert mod.handback_overdue() is True
+    state["state"] = "idle"
+    assert mod.handback_overdue() is False and mod._handback_wait["since"] == 0.0
+    monkeypatch.setattr(mod, "failover_cfg", lambda: None)
+    assert mod.handback_overdue() is False
