@@ -73,3 +73,8 @@ agent/watchdog.json
 agent/watchdog_notice.json*
 agent/watchdog.log
 agent/rollback.hold
+# owner 19.11 23:25: the daily sync committed provider.json backups (personal config) and a stray empty file
+*.pre-failover-*
+*.pre-handback-*
+*.own-*
+'*

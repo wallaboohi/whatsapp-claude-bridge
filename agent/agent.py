@@ -648,7 +648,10 @@ def day_sync():
     new_ok, held = [], []
     for f in [x for x in untracked.split("\0") if x]:
         full, low = os.path.join(ROOT, f), f.lower()
-        secretish = any(w in low for w in ("secret", "token", "apikey", "api_key", "password", ".env", "credential", ".pem", ".key"))
+        secretish = any(w in low for w in ("secret", "token", "apikey", "api_key", "password", ".env", "credential", ".pem", ".key",
+                                           ".pre-failover-", ".pre-handback-", ".own-", "provider.json", "model_override.json"))
+        # owner 19.11 23:25: runtime backups of personal config and stray empty files are never saved
+        secretish = secretish or os.path.basename(f).startswith(("'", '"')) or (os.path.isfile(full) and os.path.getsize(full) == 0)
         big = os.path.isfile(full) and os.path.getsize(full) > 5 * 1024 * 1024
         (held if secretish or big or low.endswith((".db", ".db-wal", ".db-shm")) else new_ok).append(f)
     if new_ok:
