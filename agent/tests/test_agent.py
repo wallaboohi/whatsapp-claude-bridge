@@ -306,7 +306,7 @@ def test_pc_message_is_answered_in_the_dashboard_only(multi, monkeypatch):
     assert not [x for x in sent if "התשובה" in x[1]], "a PC-only answer must not be posted to WhatsApp"
     with mod.adb() as db:
         rows = db.execute("SELECT chat, role, text FROM local_messages").fetchall()
-    assert any(r[0] == DEV and r[1] == "tool" and r[2].startswith("🧠 ") and r[2].endswith("התשובה") for r in rows)  # owner 13.11: the answer opens with who answered
+    assert any(r[0] == DEV and r[1] == "tool" and r[2].startswith("🗣️ מדבר: ") and r[2].endswith("התשובה") for r in rows)  # owner 13.11: the answer opens with who answered
     assert calls[0][0] == DEV and "מהמחשב" in calls[0][2]
 
 
@@ -958,7 +958,7 @@ def test_status_hourglass_flips(agent):
     assert mod.pc_he("salon-pc") == "מחשב סלון נייח" and mod.pc_he("lap-yakir") == "מחשב עבודה נייד"
     # owner 15.11/17.11: header line, then the computer is the first detail line
     assert host in a.split(chr(10))[1] and host in st._final().split(chr(10))[1], "the computer is named first"
-    assert a.index("🧠") < a.index("📩 התקבלה הודעה") and "📩 התקבלה הודעה" in a
+    assert a.index("🗣️") < a.index("📩 התקבלה הודעה") and "📩 התקבלה הודעה" in a
     assert "מגבלת" not in st._final() and "$" not in st._final(), "no usage/money line in the regular chat (owner 09.11 07:14)"
     mod._account_cache.update(at=mod.time.time() + 3600, v="me@example.com (Pro)")
     rep = mod.owner_command("/תקרה")
@@ -979,8 +979,8 @@ def test_cli_status_shows_actual_provider_and_remote_location(agent):
     st.finish()
     mod._ctx.chat = None
     # owner 17.11: one detail per line, the label in bold
-    assert "💬 מנסח תשובה" in text and "🧠 *ספק:* קופילוט" in text and "☁️ *מיקום:* ענן" in text and "סונט" not in text
-    assert text.index("🖥️") < text.index("🧠 *ספק:* קופילוט") < text.index("💬 מנסח תשובה")
+    assert "💬 מנסח תשובה" in text and "🗣️ *מדבר:* קופילוט" in text and "☁️ בענן" in text and "סונט" not in text
+    assert text.index("🗣️") < text.index("קופילוט") < text.index("💬 מנסח תשובה")
     assert "קופילוט" in final and "ענן" in final and "סונט" not in final
 
 
@@ -2195,11 +2195,11 @@ def test_switch_words_and_the_answer_tag(agent, monkeypatch, tmp_path):
     mod.owner_command("/ספק כאן איפוס")
     assert "ספק הגשר" in mod.owner_command("/ספק מחשב qwencode") and mod.active_provider() == ("ollama", "qwen2.5-coder:3b")
     tag = mod.ai_tag("opus")
-    assert tag.startswith("🧠 Ollama") and "qwen2.5-coder:3b" in tag and tag.endswith("\n")
+    assert tag.startswith("🗣️ מדבר: Ollama") and "qwen2.5-coder:3b" in tag and tag.endswith("\n")
     assert "ספק הגשר" in mod.owner_command("/ספק מחשב ollama qwen3:8b") and mod.active_provider() == ("ollama", "qwen3:8b")
     assert "לא נמצא" in mod.owner_command("/ספק ollama no-such-model")
     mod.owner_command("/ספק מחשב קלוד")
-    assert mod.ai_tag("opus").startswith("🧠 Claude")
+    assert mod.ai_tag("opus").startswith("🗣️ מדבר: Claude")
     monkeypatch.setitem(mod.CFG, "show_ai_tag", False)
     assert mod.ai_tag("opus") == ""
 
@@ -2338,7 +2338,7 @@ def test_auto_provider_env_and_check(agent, monkeypatch):
     env, model = mod.provider_env("auto")
     assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8799/p/groq" and model == "openai/gpt-oss-120b" and mod._ctx.provider_used == "groq"
     monkeypatch.setattr(mod, "active_provider", lambda *a: ("auto", None))
-    assert mod.ai_tag("opus").startswith("🧠 Groq")  # the tag names the provider that really ran
+    assert mod.ai_tag("opus").startswith("🗣️ מדבר: Groq")  # the tag names the provider that really ran
     monkeypatch.undo()
     c = mod.provider_check("auto")
     assert "מהזול ליקר" in c["detail"]
@@ -2353,7 +2353,7 @@ def test_every_answer_says_where_the_model_runs(agent, monkeypatch, tmp_path):
     mod.set_provider("ollama", "qwen3:8b")
     assert "🏠 לפטופ" in mod.ai_tag("opus")
     mod.set_provider("groq")
-    assert "☁️ ענן" in mod.ai_tag("opus")
+    assert "☁️ בענן" in mod.ai_tag("opus")
     t = mod.providers_text()  # owner 16.11 21:35: four sections (cloud / local × this computer / the other), remote first
     assert "בענן" in t and "מקומי" in t and "מארח מרוחק" not in t  # owner 17.11: no machine is called a remote host
     assert t.index("בענן") < t.index("מקומי") and t.index("גרוק") < t.index("מקומי") < t.index("אולמה")
@@ -2427,7 +2427,7 @@ def test_provider_per_conversation_and_failover_explains(agent, monkeypatch, tmp
         assert "Groq" in mod._ctx.failover_why and "מכסה" in mod._ctx.failover_why
         mod._ctx.provider_used = "nvidia"
         tag = mod.ai_tag("opus")
-        assert tag.startswith("🧠 NVIDIA") and "🔁 Groq לא עבד" in tag and "ולכן עונה NVIDIA" in tag
+        assert tag.startswith("🗣️ מדבר: NVIDIA") and "🔁 Groq לא עבד" in tag and "ולכן עונה NVIDIA" in tag
     finally:
         mod._ctx.chat = mod._ctx.force_provider = mod._ctx.force_engine = mod._ctx.provider_used = None
         mod._ctx.failover_used = False

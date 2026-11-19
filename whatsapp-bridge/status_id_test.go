@@ -8,11 +8,12 @@ import (
 // Owner 19.11: the send result carries the id WhatsApp assigned; the agent uses it for the status message.
 func TestSentIDFromResult(t *testing.T) {
 	cases := map[string]string{
-		"Message sent to 120363@g.us id=ABC123": "ABC123",
-		"Message sent to x id=3EB0A1B2 ":      "3EB0A1B2",
-		"Error sending message: boom":           "",
-		"Message sent to x id=   ":              "",
-		"":                                      "",
+		"Message sent to 120363@g.us id=ABC123":           "ABC123",
+		"Message sent to x id=3EB0A1B2 ":                "3EB0A1B2",
+		"Message sent to x id=ABCD.EF-01_23:45":         "ABCD.EF-01_23:45",
+		"Error sending message: boom":                     "",
+		"Message sent to x id=   ":                        "",
+		"":                                                "",
 	}
 	for in, want := range cases {
 		if got := sentID(in); got != want {
@@ -41,4 +42,18 @@ func TestMarkLocalEdit(t *testing.T) {
 		t.Fatalf("edit landed on the wrong chat: %q", content)
 	}
 	markLocalEdit(nil, chat, "m1", "no store") // never panics when the bridge has no store yet
+
+	// same-user fallback for a phone/LID JID mismatch (same user, different server form), but never across different users
+	dm := "972500000001@s.whatsapp.net"
+	s.StoreMessage("m2", dm, "u", "original", time.Now(), false, "", "", "", nil, nil, nil, 0)
+	markLocalEdit(s, "972500000001@c.us", "m2", "dm edited")
+	s.db.QueryRow("SELECT content FROM messages WHERE id = 'm2'").Scan(&content)
+	if content != "dm edited" {
+		t.Fatalf("same-user fallback did not land: %q", content)
+	}
+	markLocalEdit(s, "972599999999@s.whatsapp.net", "m2", "wrong user")
+	s.db.QueryRow("SELECT content FROM messages WHERE id = 'm2'").Scan(&content)
+	if content != "dm edited" {
+		t.Fatalf("edit landed on a different user: %q", content)
+	}
 }

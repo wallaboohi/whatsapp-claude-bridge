@@ -268,7 +268,7 @@ func makeDraftKind(client *whatsmeow.Client, p SendPolicy, jid types.JID, messag
 	return false, fmt.Sprintf("DRAFT: not sent — draft for %s posted to the control group for approval", name)
 }
 
-var sentIDRe = regexp.MustCompile(`id=([A-Za-z0-9]+)`)
+var sentIDRe = regexp.MustCompile(`id=([A-Za-z0-9._:-]+)`)
 
 // sentID extracts the message id from sendWhatsAppMessage's result ("Message sent to X id=3EB0…").
 func sentID(res string) string {

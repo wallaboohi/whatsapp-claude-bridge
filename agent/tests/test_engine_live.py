@@ -91,7 +91,7 @@ def test_opencode_answers_a_conversation_with_tools(agent, monkeypatch, tmp_path
         assert out and "ZEBRA-4471" in out, (mod.HOME, mod._ctx.engine_used, getattr(mod._ctx, "provider_used", None), out[:300])
         assert mod._ctx.engine_used == "opencode" and mod._ctx.provider_used == "opencode"
         assert any("קורא" in str(s) for s in stages), stages
-        assert mod.ai_tag().startswith("🧠 OpenCode")
+        assert mod.ai_tag().startswith("🗣️ מדבר: OpenCode")
     finally:
         mod._ctx.chat = None
 

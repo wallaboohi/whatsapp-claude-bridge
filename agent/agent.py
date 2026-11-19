@@ -889,16 +889,14 @@ def restart_notice_text(chat, reason=""):
             model = get_override(chat) or CFG.get("claude_model")
         except Exception:
             model = CFG.get("claude_model")
-    lines = [f"🤖 ✅ *עליתי מחדש*", f"🕐 *שעה:* {dt.datetime.now():%H:%M}",
-             f"🖥️ *מחשב:* {pc_he(CFG.get('host_label') or socket.gethostname())}",
-             f"🧠 *ספק:* {short}"]
+    auto = False
     if model:
         try:
             auto = get_override(chat) is None  # owner 17.11 22:55: say that the model was picked by auto
         except Exception:
             auto = False
-        lines.append(f"🎚️ *מודל:* {model_he(model)}" + (" _(נבחר אוטומטית)_" if auto else ""))
-    lines.append(f"{'🏠' if location.startswith('🏠') else '☁️'} *מיקום:* {location.split(' ', 1)[-1]}")
+    lines = [f"🤖 ✅ *עליתי מחדש*", f"🕐 *שעה:* {dt.datetime.now():%H:%M}",
+             speaker_line(short, model, location, auto=auto)]  # owner 19.11 19:30: one "מדבר" line
     lines.append("🔌 *סטטוס:* מחובר כרגע")
     lines.append(f"⏱ *אופליין היום (המחשב הזה):* {hm(down_today_min())}")
     sp = disconnects_split_24h()
@@ -1834,8 +1832,11 @@ def prov_short(name):
 
 def provider_switch_words(name):
     """Owner 16.11: the switch words of a provider — its number, the English spelling and the Hebrew one (/3 /gemini /ג'מיני)."""
+    if name == "auto":  # owner 19.11 15:38: "auto" is not a provider any more; automatic choice is only for the model
+        return []
     p = providers().get(name) or {}
-    out = [f"/{provider_number(name)}"]
+    num = provider_number(name)
+    out = [f"/{num}"] if num else []
     eng = next((str(a) for a in (p.get("aliases") or []) if re.fullmatch(r"[A-Za-z0-9_.-]+", str(a))), name.replace("_", "-"))
     out.append("/" + eng)
     heb = next((str(a) for a in (p.get("aliases") or []) if re.search(r"[\u0590-\u05FF]", str(a))), "")
@@ -2569,10 +2570,12 @@ def provider_names():
 
 
 def provider_order():
-    """The providers in their fixed number order (/1, /2 ...); a provider added later gets the next number."""
+    """The providers in their fixed number order (/1, /2 ...); a provider added later gets the next number.
+    Owner 19.11: "auto" is not a provider and gets no number — /12 used to point at it and end in "אין ספק אוטו".
+    Automatic choice exists only for the model, inside the chosen provider (/מודל אוטו)."""
     allp = providers()
-    order = [n for n in provider_names().get("order", []) if n in allp]
-    return order + [n for n in allp if n not in order]
+    order = [n for n in provider_names().get("order", []) if n in allp and n != "auto"]
+    return order + [n for n in allp if n not in order and n != "auto"]
 
 
 def provider_number(name):
@@ -2785,7 +2788,8 @@ def ai_tag(model=None):
     eng = getattr(_ctx, "engine_used", "claude")
     extra = (f" · מנוע {(ENGINES.get(eng) or {}).get('short', eng)}" if eng not in ("claude", "cli", "opencode") else "") + (f" · 🔁 {getattr(_ctx, 'failover_why', '') or 'מכסת Claude נגמרה'}, ולכן עונה {short}" if getattr(_ctx, "failover_used", False) else "") \
         + (f" · 🎚️ בקשה {TIER_HE.get(getattr(_ctx, 'auto_tier', 0), '')} (מודל אוטומטי)" if getattr(_ctx, "auto_model_used", None) and getattr(_ctx, "auto_tier", 0) else "")
-    return f"🧠 {short}" + (f" · {model_he(m)}" if m else "") + (f" · 🏠 {place}" if kind == "local" else " · ☁️ ענן") + extra + "\n"
+    # owner 19.11 19:30: the same "מדבר" line as everywhere in the bridge
+    return speaker_line(short, m, f"🏠 {place}" if kind == "local" else "☁️ ענן", bold=False) + extra + "\n"
 
 
 SPEED_HINT = {"claude": "⚡ שניות עד דקה (מנוי)", "gemini": "⚡ שניות · מכסה יומית נמוכה", "groq": "⚡ שניות · עד 8,000 טוקנים לדקה: לשיחות קצרות",
@@ -3149,14 +3153,21 @@ def _model_lines(ms, num, cap=8):
     return out
 
 
+def _provider_cmd(k):
+    """The command that reaches a provider: its number, or the word for "auto" (which has no number, owner 19.11)."""
+    num = provider_number(k)
+    return f"/{num}" if num else "/אוטו"
+
+
 def _provider_head(k, label, active=False, icon="☁️", status="", note=""):
     """ONE header line: the provider (Hebrew · English), its command words, status. Nothing else sits between it and its models."""
     he = AI_HE.get(k) or label or k
     en = (label or "").split("·")[0].strip()
     en = "" if not en or en == he or k == "auto" else f" · {en}"
-    alias = [w for w in provider_switch_words(k) if w != f"/{provider_number(k)}"] if k in providers() else []
+    cmd = _provider_cmd(k)
+    alias = [w for w in provider_switch_words(k) if w != cmd] if k in providers() else []
     # owner 18.11 22:58: the provider's command first and bold, a clear separator, then its name; other words at the end
-    return (f"{RLM}{'👉 ' if active else ''}*/{provider_number(k)}* ← {icon} *{he}*{en}{status}{note}"
+    return (f"{RLM}{'👉 ' if active else ''}*{cmd}* ← {icon} *{he}*{en}{status}{note}"
             + (f" · ({' '.join(alias[:2])})" if alias else ""))
 
 
@@ -3222,7 +3233,7 @@ def providers_text():
             peer_brief = peer_fetch(peer, timeout=8) or None
         except Exception:
             peer_brief = None
-    rem = ["auto" if "auto" in names and auto_switch_on() else ""] + [k for k in names if k != "auto" and not provider_is_local(k)]
+    rem = ["auto" if "auto" in allp and auto_switch_on() else ""] + [k for k in names if k != "auto" and not provider_is_local(k)]
     loc = [k for k in names if k != "auto" and provider_is_local(k)]
     lines = ["*🔌 ספק הבינה של הגשר* (כל השיחות עוברות דרכו) · מודל של ספק: /N M"]
     lines += ["", f"*{machine_tag()}* · ☁️ *בענן*"] + [_provider_row(k, cur, cm) for k in rem if k]
@@ -4305,7 +4316,7 @@ def _desktop_ai_cmds(p, args):
     git_ssh = r"C:\Program Files\Git\usr\bin\ssh.exe"
     ssh = git_ssh if os.path.exists(git_ssh) else "ssh"
     aliases = p.get("ssh") if isinstance(p.get("ssh"), list) else [p.get("ssh")]
-    return [[ssh, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", a, line] for a in aliases if a]
+    return [[ssh, "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", *RUN_ALIVE, a, line] for a in aliases if a]
 
 
 def desktop_ai_call(p, args, stdin_text=None, timeout=240):
@@ -4373,12 +4384,19 @@ def _run_desktop_app(name, p, prompt, chat, on_stage, timeout):
 _remote_cli_cache = {}
 
 
+RUN_ALIVE = ["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=8"]
+# Owner 19.11 18:55: a long run on another PC over ssh (Codex / Claude work on the laptop) hung 2+ hours after the link
+# dropped (laptop asleep / Tailscale path change): the remote side was gone, the local ssh waited forever and the group's
+# queue froze behind it ("בתור לפניה: 7"). ServerAlive ends such a dead session within ~2 minutes (exit 255); a live run
+# of any length is not affected.
+
+
 def _remote_cli_cmds(c, line):
     """One ssh command per alias of the CLI's computer (config "cli": {"ssh": "<alias>" | [aliases]}), running line in HOME there."""
     git_ssh = r"C:\Program Files\Git\usr\bin\ssh.exe"
     ssh = git_ssh if os.path.exists(git_ssh) else "ssh"
     aliases = c.get("ssh") if isinstance(c.get("ssh"), list) else [c.get("ssh")]
-    return [[ssh, "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", a, "cd /d %USERPROFILE% && " + line] for a in aliases if a]
+    return [[ssh, "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", *RUN_ALIVE, a, "cd /d %USERPROFILE% && " + line] for a in aliases if a]
 
 
 def remote_cli_ready(c):
@@ -4711,7 +4729,7 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
         if rp.get("kind") == "claude-remote" and not guest and tools is None:  # owner 17.11: the same run, on the other computer's Claude account
             if resume and resume != kv_get(K("rsession:" + _ctx.provider_used, chat or PRIMARY)):
                 resume = None  # owner 19.11: a session id of this computer's Claude does not exist there ("No conversation found", exit in 1 s)
-            cmd = [ssh_exe(), "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", rp.get("ssh"),
+            cmd = [ssh_exe(), "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", *RUN_ALIVE, rp.get("ssh"),
                    f'cd /d {rp.get("home")} && claude -p --output-format stream-json --verbose --permission-mode {mode}'
                    + (" --input-format stream-json --replay-user-messages" if live else "")
                    + (f" --model {model}" if model and re.fullmatch(r"[\w.\[\]-]+", model) else "")]
@@ -5234,6 +5252,18 @@ def machine_tag():
     return "🖥️ " + pc_he(CFG.get("host_label") or socket.gethostname())
 
 
+def speaker_line(short, model=None, location="", bold=True, auto=False):
+    """Owner 19.11 19:30: ONE line says who is talking, the same everywhere in the bridge:
+    "🗣️ מדבר: קלוד עבודה · ☁️ בענן · במחשב יקיר נייח · במודל אופוס". Computer, provider, location and model were four lines."""
+    pc = pc_he(CFG.get("host_label") or socket.gethostname())
+    loc = str(location or "")
+    where = (loc if loc.split(" ", 1)[-1] != loc else "🏠 מקומי") if loc.startswith("🏠") else "☁️ בענן"  # local: "🏠 לפטופ"
+    parts = [short or "?", where, "ב" + pc if pc.startswith("מחשב") else f"במחשב {pc}"]
+    if model:
+        parts.append("במודל " + model_he(model) + (" (נבחר אוטומטית)" if auto else ""))
+    return ("🗣️ *מדבר:* " if bold else "🗣️ מדבר: ") + " · ".join(parts)
+
+
 def status_ai_info(model, chat, use_run_state=False):
     """Return only the selected provider's real model and execution location for a progress message."""
     name, pm = active_provider(chat)
@@ -5690,6 +5720,47 @@ def resolve_model_word(word):
             if w == str(k).lower():
                 return name, v
     return None
+
+
+def _provider_model_pick(provider, arg):
+    """Owner 19.11: resolve a model number or name against one provider's model list (for /מודל while on that provider).
+    Returns (model_id_or_None, err_or_None). err is a user-facing message for "לא מצאתי / דו-משמעי"."""
+    arg = str(arg or "").strip()
+    if not arg:
+        return None, None
+    ms = provider_model_list(provider)
+    p = providers().get(provider) or {}
+    label = AI_HE.get(provider) or p.get("label") or provider
+    if not ms:
+        return None, f"⛔ ל-*{label}* אין רשימת מודלים לבחירה."
+    # 1-based number, like /N M
+    if re.fullmatch(r"\d{1,2}", arg):
+        i = int(arg) - 1
+        if 0 <= i < len(ms):
+            return str(ms[i]), None
+        return None, f"מספר המודל חייב להיות 1 עד {len(ms)} אצל *{label}*."
+    q = arg.lower()
+    exact = [str(m) for m in ms if q == str(m).lower()]
+    if len(exact) == 1:
+        return exact[0], None
+    short = [str(m) for m in ms if q == str(m).lower().split("/")[-1].split(":")[0]]
+    if len(short) == 1:
+        return short[0], None
+    if len(short) > 1:
+        opts = "\n".join(f"• {m}" for m in short[:10])
+        return None, f"השם *{arg}* דו-משמעי אצל *{label}*. בחר במדויק:\n{opts}"
+    sub = [str(m) for m in ms if q in str(m).lower()]
+    if len(sub) == 1:
+        return sub[0], None
+    if 1 < len(sub) <= 10:
+        opts = "\n".join(f"• {m}" for m in sub)
+        return None, f"נמצאו כמה מודלים שמתאימים ל-*{arg}* אצל *{label}*. בחר במדויק:\n{opts}"
+    if len(sub) > 10:
+        return None, f"נמצאו יותר מדי מודלים שמתאימים ל-*{arg}* אצל *{label}* ({len(sub)}). ציין שם מדויק יותר."
+    sample = ", ".join(str(m) for m in ms[:15])
+    return None, f"לא מצאתי מודל *{arg}* אצל *{label}*. יש: {sample}"
+
+
 _rename_lock = threading.Lock()
 
 
@@ -6041,12 +6112,7 @@ class StatusMsg:
         return " · ".join(details)
 
     def _detail_lines(self):
-        lines = [f"{machine_tag().replace('🖥️ ', '🖥️ *מחשב:* ')}", f"🧠 *ספק:* {self.ai_short}" if self.ai_short else ""]
-        if self.ai_model:
-            lines.append(f"🎚️ *מודל:* {model_he(self.ai_model)}")
-        if self.ai_location:
-            lines.append(f"{self.ai_location.split(' ', 1)[0]} *מיקום:* {self.ai_location.split(' ', 1)[-1]}")
-        return [l for l in lines if l]
+        return [speaker_line(self.ai_short, self.ai_model, self.ai_location or "☁️ ענן")]
 
     def _text(self):
         # the hourglass flips (⏳ ↔ ⌛) on every edit so the owner sees it is alive (owner request 08.11); owner 17.11: one detail per line
@@ -6104,7 +6170,8 @@ class StatusMsg:
         about 15 minutes and a limited length; on failure the caller sends the answer separately."""
         self.finish()
         if self.mid and self.wa:
-            self.loop_done.wait(30)
+            base = float(CFG.get("status_edit_seconds", 10))
+            self.loop_done.wait(max(30, 3 * base + 15))
         elif self.wa and answer:  # a quick answer never had a status message: one message with the finished details and the answer
             return bool(send(self.chat, self._full(answer)))
         if not self.mid or not self.wa:
@@ -6129,14 +6196,19 @@ class StatusMsg:
         """Owner 19.11 08:35: the bridge said "success" for edits that never reached WhatsApp, and six answers were lost inside
         'in progress' messages. An edit counts only when its echo shows the new text in messages.db; otherwise the caller sends
         the answer as its own message (an answer seen twice beats an answer lost)."""
+        def _norm(s):
+            # strip RTL/LRM marks and WhatsApp/markdown decoration so probe matches the stored echo
+            return re.sub(r"[\u200e\u200f*_~`]", "", s or "")
+
         first = next((l for l in (answer or "").splitlines() if l.strip()), "")
-        probe = first.strip().strip("_*~ ‏")[:30]
+        probe = _norm(first).strip()[:30]
         end = time.time() + wait
         while time.time() < end:
             try:
                 with mdb() as db:
                     r = db.execute("SELECT content FROM messages WHERE id = ?", (self.mid,)).fetchone()
-                if r and probe and probe in (r[0] or ""):
+                body = r[0] or "" if r else ""
+                if r and "בהכנה" not in body and probe and probe in _norm(body):
                     return True
             except Exception:
                 pass
@@ -6154,11 +6226,14 @@ class StatusMsg:
             self.mid = mid
         else:
             log("status send id missing: falling back to echo lookup")
+            since = dt.datetime.fromtimestamp(self.t0 - 5).strftime("%Y-%m-%d %H:%M:%S")
             for _ in range(8):  # fallback for an older bridge that does not return an id yet
                 try:
                     with mdb() as db:
-                        r = db.execute("SELECT id FROM messages WHERE chat_jid = ? AND is_from_me = 1 AND content = ? ORDER BY timestamp DESC LIMIT 1",
-                                       (self.chat, text)).fetchone()
+                        r = db.execute(
+                            "SELECT id FROM messages WHERE chat_jid = ? AND is_from_me = 1 AND content = ? "
+                            "AND replace(substr(timestamp,1,19),'T',' ') >= ? ORDER BY timestamp DESC LIMIT 1",
+                            (self.chat, text, since)).fetchone()
                     if r:
                         self.mid = r[0]
                         break
@@ -6488,13 +6563,30 @@ def owner_command(text, chat=None):
         n = int(arg.split()[0])
         if cur == "auto":
             return "בספק אוטומטי הגשר בוחר לבד ספק ומודל. לבחירת מודל קבע קודם ספק: /ספק"
-        if cur not in ("claude", "claude_work"):
-            return switch_provider(cur, str(n), chat=cur_chat())
+        if cur not in ("claude", "claude_work"):  # owner 19.11: the number is resolved to the model's real id, never stored as "2"
+            picked, err = _provider_model_pick(cur, str(n))
+            return err if err else switch_provider(cur, picked, chat=cur_chat())
         keys = [k for k in MODELS if k != "auto"]
         if not 1 <= n <= len(keys):
             return f"מספר המודל חייב להיות 1 עד {len(keys)}.\n\n" + models_guide(chat)
         arg = keys[n - 1] + (" hour" if len(arg.split()) > 1 else "")
     parts = arg.replace("שעה", "hour").split()
+    cur = active_provider(chat)[0]
+    if cur not in ("claude", "claude_work", "auto"):
+        # owner 19.11: /מודל on a non-Claude provider picks that provider's model by number or name (not a Claude model)
+        name_guess = {"אוטו": "auto", "אופוס": "opus", "סונט": "sonnet", "הייקו": "haiku", "חייקו": "haiku", "פייבל": "fable"}.get(parts[0], parts[0])
+        if name_guess in MODELS and name_guess != "auto":
+            return model_not_in_provider(name_guess, chat)  # Claude-only model on a non-Claude provider
+        if name_guess == "auto" or parts[0] in ("אוטו", "auto"):
+            # clear a fixed model so the provider picks automatically within itself
+            return switch_provider(cur, None, chat=cur_chat())
+        raw_parts = [p for p in parts if p not in ("hour", "שעה")]
+        raw = " ".join(raw_parts).strip()
+        picked, err = _provider_model_pick(cur, raw)
+        if err:
+            return err
+        if picked:
+            return switch_provider(cur, picked, chat=cur_chat())
     name = {"אוטו": "auto", "אופוס": "opus", "סונט": "sonnet", "הייקו": "haiku", "חייקו": "haiku", "פייבל": "fable"}.get(parts[0], parts[0])  # חייקו: how the owner types it
     if name not in MODELS:
         return "לא מכיר את המודל הזה. אפשרויות: " + ", ".join(MODELS) + "\n\n" + models_guide(chat)

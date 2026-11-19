@@ -51,7 +51,53 @@ func markLocalEdit(store *MessageStore, chat, id, text string) {
 	if store == nil || id == "" {
 		return
 	}
-	store.db.Exec("UPDATE messages SET content = ?, edited = 1 WHERE id = ? AND chat_jid = ?", text, id, chat)
+	res, err := store.db.Exec("UPDATE messages SET content = ?, edited = 1 WHERE id = ? AND chat_jid = ?", text, id, chat)
+	if err == nil {
+		if n, _ := res.RowsAffected(); n > 0 {
+			return
+		}
+	}
+	// same-user fallback for LID/phone JID mismatch (keep exact-chat primary so a same id in a different chat is never touched)
+	rows, err := store.db.Query("SELECT chat_jid FROM messages WHERE id = ?", id)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	var chats []string
+	for rows.Next() {
+		var cj string
+		if rows.Scan(&cj) == nil {
+			chats = append(chats, cj)
+		}
+	}
+	if len(chats) != 1 || chats[0] == chat {
+		return
+	}
+	other := chats[0]
+	isGroup := func(j string) bool {
+		return strings.HasSuffix(j, "@g.us") || strings.HasSuffix(j, "@newsletter") || strings.HasSuffix(j, "@broadcast")
+	}
+	if isGroup(chat) || isGroup(other) {
+		return
+	}
+	// same conversation with a different JID form (phone/LID/server mismatch)
+	if cj, err1 := types.ParseJID(chat); err1 == nil {
+		if oj, err2 := types.ParseJID(other); err2 == nil && globalClient != nil {
+			if normalizeChat(globalClient, cj).String() == normalizeChat(globalClient, oj).String() {
+				store.db.Exec("UPDATE messages SET content = ?, edited = 1 WHERE id = ? AND chat_jid = ?", text, id, other)
+				return
+			}
+		}
+	}
+	user := func(j string) string {
+		if i := strings.Index(j, "@"); i >= 0 {
+			return j[:i]
+		}
+		return j
+	}
+	if user(chat) != "" && user(chat) == user(other) {
+		store.db.Exec("UPDATE messages SET content = ?, edited = 1 WHERE id = ? AND chat_jid = ?", text, id, other)
+	}
 }
 
 func jidList(b map[string]any, k string) ([]types.JID, error) {

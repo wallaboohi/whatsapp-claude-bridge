@@ -1,6 +1,6 @@
 {
   "_doc": "Owner 16.11: numbers and spellings for the provider switch words. order = the number of each provider (/1, /2 ...; new providers are appended at the end). words = a spelling (lower case, without spaces / hyphens / apostrophes / dots) -> provider. Add the owner's mistakes here, one line each.",
-  "order": ["claude", "ollama", "gemini", "groq", "openrouter_free", "nvidia", "cloudflare", "opencode", "gemini_cli", "copilot", "codex", "auto"],
+  "order": ["claude", "ollama", "gemini", "groq", "openrouter_free", "nvidia", "cloudflare", "opencode", "gemini_cli", "copilot", "codex"],
   "words": {
     "claude": "claude", "cloude": "claude", "claud": "claude", "clod": "claude", "claudcode": "claude", "claudecode": "claude", "קלוד": "claude", "קלאוד": "claude", "קלאודה": "claude", "קלוד": "claude", "מנוי": "claude",
     "ollama": "ollama", "olama": "ollama", "ollamma": "ollama", "אולמה": "ollama", "אולאמה": "ollama", "אולמא": "ollama", "אולאמא": "ollama", "אוללמה": "ollama",
