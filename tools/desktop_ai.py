@@ -36,6 +36,8 @@ APPS = {  # key -> (window title regex, Start-menu name regex used to launch it;
     "jan": (r"^Jan$", r"^Jan$"),
     "lmstudio": (r"LM Studio", r"^LM Studio$"),
     "antigravity": (r"Antigravity", r"^Antigravity$"),
+    "vscode": (r"Visual Studio Code", r"^Visual Studio Code$"),
+    "cursor": (r"Cursor", r"^Cursor$"),
 }
 
 

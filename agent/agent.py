@@ -968,7 +968,8 @@ def claude_account_type():
 
 AI_HE = {"claude": "קלוד " + claude_account_type(), "claude_work": "קלוד עבודה", "codex": "קודקס", "copilot": "קופילוט", "gemini": "גמיני", "gemini_cli": "גמיני CLI", "ollama": "אולמה מקומי",
          "groq": "גרוק", "cloudflare": "קלאודפלייר", "nvidia": "אנבידיה", "openrouter_free": "אופןראוטר", "opencode": "אופנקוד",
-         "antigravity": "אנטיגרביטי", "antigravity_app": "אנטיגרביטי אפליקציה"}
+         "antigravity": "אנטיגרביטי", "antigravity_app": "אנטיגרביטי אפליקציה", "lmstudio": "LM Studio", "lmstudio_app": "LM Studio אפליקציה",
+         "vscode_app": "VS Code", "github_copilot_app": "גיטהאב קופילוט", "cursor_app": "Cursor"}
 
 
 def hm(minutes):
