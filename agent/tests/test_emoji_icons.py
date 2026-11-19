@@ -17,7 +17,27 @@ def strip_added(text):
 
 
 def test_owner_example_exactly():
-    assert ei.iconize("מחר ב-8 פגישה עם הספק על המשאית") == "מחר ב-8 ⏰ פגישה 🤝 עם הספק 🏭 על המשאית 🚚"
+    assert ei.iconize("מחר ב-8 פגישה עם הספק על המשאית", bold=False) == "מחר ב-8 ⏰ פגישה 🤝 עם הספק 🏭 על המשאית 🚚"
+    # owner 19.11: the important word (the time) is also bold
+    assert ei.iconize("מחר ב-8 פגישה עם הספק על המשאית") == "מחר *ב-8* ⏰ פגישה 🤝 עם הספק 🏭 על המשאית 🚚"
+
+
+def test_cldr_layer_reaches_almost_every_emoji():
+    """Owner 19.11 11:23: a context for all the icons, also those the hand table does not use."""
+    d = json.load(open(os.path.join(HERE, "emoji_he.json"), encoding="utf-8"))
+    assert d["covered"] >= 1900
+    assert ei.lookup("קרח")[0][0] == "🧊" and ei.lookup("לישראל")[0][0] == "🇮🇱" and ei.lookup("פיצה")[0][0] == "🍕"
+    assert ei.lookup("משאית")[1] != "cldr"  # the hand table stays first
+
+
+def test_bold_is_light_and_idempotent():
+    t = "הגענו עם הכלב בשעה 14:00 ושילמנו 300₪ על הכל"
+    out = ei.iconize(t)
+    assert "*14:00*" in out and out.count("*") <= 8
+    assert ei.iconize(out) == out
+    assert ei.iconize("*דחוף* מחר בבוקר רופא").startswith("*דחוף*")  # existing formatting untouched
+    assert "*" not in ei.iconize("```מחר ב-8 פגישה עם הספק```").replace("```", "")
+    assert ei.iconize("מחר ב-8") .count("*") == 0  # too short to bold
 
 
 def test_prefixes_plurals_and_construct_forms():
@@ -26,13 +46,14 @@ def test_prefixes_plurals_and_construct_forms():
 
 
 def test_short_stems_do_not_misfire():
-    assert ei.lookup("שקר") is None and ei.lookup("בקר") is None and ei.lookup("האם") is None
+    assert ei.lookup("בקר") is None and ei.lookup("האם") is None
+    assert ei.lookup("שקר")[0][0] == "🤥"  # a word of its own (CLDR), never "קר" -> cold
     assert ei.lookup("הים")[0][0] == "🌊"
 
 
 def test_text_and_order_kept_and_no_repeats():
     t = "תזמין 3 משאיות לגדר, והקסדות הגיעו למחסן.\n*דחוף* לבדוק את המצלמות והמשאית בשער"
-    out = ei.iconize(t)
+    out = ei.iconize(t, bold=False)
     assert out != t
     added = [w for w in out.split() if ei.is_emoji(w)]
     assert len(added) == len(set(added))  # the same emoji never twice in one message
@@ -54,7 +75,7 @@ def test_twice_adds_nothing_twice():
 
 def test_phrases_and_times():
     assert "ארוחת בוקר 🍳" in ei.iconize("ארוחת בוקר בשעה 7:30")
-    assert "7:30 ⏰" in ei.iconize("ארוחת בוקר בשעה 7:30")
+    assert "*7:30* ⏰" in ei.iconize("ארוחת בוקר בשעה 7:30")
     assert "ב-18.11 📅" in ei.iconize("ב-18.11 נסיעה")
 
 
@@ -66,7 +87,7 @@ def test_ai_fallback_only_adds_valid_emoji():
         return 'here: {"0": "🦒", "2": "not emoji", "4": "🦒", "9": "🐙"}'
     out = ei.iconize("ג'ירפה נחמדה מאוד בגן החיות", ai=ai)
     assert out.startswith("ג'ירפה 🦒 ") and out.count("🦒") == 1 and "🐙" not in out and "not" not in out
-    assert ei.iconize("ג'ירפה נחמדה", ai=lambda p: 1 / 0) == "ג'ירפה נחמדה"  # a broken AI = the table result
+    assert ei.iconize("זלמנובסקי נחמדה", ai=lambda p: 1 / 0) == "זלמנובסקי נחמדה"  # a broken AI = the table result
 
 
 def test_table_is_large_and_valid():
@@ -90,7 +111,7 @@ def test_fire_edits_a_fresh_own_message(agent, monkeypatch):
     chat = "972500000001@s.whatsapp.net"
     _own(db, "F1", chat, "מחר ב-8 פגישה עם הספק על המשאית", 2)
     mod.fire_icons(chat, "F1")
-    assert calls == [("/edit_message", {"jid": chat, "id": "F1", "text": "מחר ב-8 ⏰ פגישה 🤝 עם הספק 🏭 על המשאית 🚚"})]
+    assert calls == [("/edit_message", {"jid": chat, "id": "F1", "text": "מחר *ב-8* ⏰ פגישה 🤝 עם הספק 🏭 על המשאית 🚚"})]
     assert not sent
     assert mod.fire_is_ours(chat, "F1")
 
@@ -105,7 +126,7 @@ def test_fire_old_message_is_answered_not_edited(agent, monkeypatch):
     other = "972500000001@s.whatsapp.net"
     _own(db, "F2", other, "פגישה עם הספק", 40)
     mod.fire_icons(other, "F2")
-    assert not calls and sent[0][0][0] == mod.PRIMARY and "פגישה 🤝 עם הספק 🏭" in sent[0][0][1]  # never to the other person
+    assert not calls and sent[0][0][0] == mod.PRIMARY and "*פגישה* 🤝 עם הספק 🏭" in sent[0][0][1]  # never to the other person
     _own(db, "F3", mod.PRIMARY, "פגישה עם הספק", 40)
     mod.fire_icons(mod.PRIMARY, "F3")
     assert sent[1][0][0] == mod.PRIMARY and sent[1][1].get("quoted") == "F3"

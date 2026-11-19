@@ -6,6 +6,7 @@ possessive) stemming, a density limit (about one emoji per two words), no emoji 
 AI fallback (a callable the agent passes in) for words the table does not know. The text itself is never rewritten: the
 code only inserts " <emoji>" after a word, so whatever the table or the AI returns, the owner's words stay exactly as written."""
 import json
+import os
 import re
 
 # ---------------------------------------------------------------------------------------------------------------------------
@@ -425,6 +426,8 @@ _TABLE = {
         תשובה תשובות : 💬 ✅
         נשיקה נשיקות : 😘 💋
         חיבוק חיבוקים : 🤗 🫂
+        טוב טובה מעולה מצוין מצויין סבבה : 👍 👌
+        בסדר אוקיי אוקי : 👌 🆗
     """,
     ("action", 1): """
         עזרה לעזור עוזר : 🆘 🤝
@@ -513,6 +516,27 @@ def _build():
 
 
 WORDS, PHRASES = _build()
+
+
+def _load_cldr():
+    """Owner 19.11 11:23: a context table for ALL the icons, not only the ~500 of the hand table. emoji_he.json (built by
+    tools/build_emoji_he.py from the Unicode CLDR Hebrew keywords) reaches ~1,950 emoji; it is the second layer: it answers
+    only words / phrases the hand table does not know, at the lowest priority."""
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "emoji_he.json"), encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return {}, {}
+    words = {w: (tuple(e), "cldr", 1) for w, e in (d.get("words") or {}).items() if e}
+    phrases = {tuple(p.split()): (tuple(e), "cldr", 1) for p, e in (d.get("phrases") or {}).items() if e and '"' not in p}
+    return words, phrases
+
+
+CLDR_WORDS, _CLDR_PHRASES = _load_cldr()
+# CLDR keywords that are mostly another word in a message (בקר = "visited / control" far more than "cattle")
+CLDR_SKIP = set("בקר מקום רגיל סוף שם ראש גוף צד".split())
+for _k, _v in _CLDR_PHRASES.items():
+    PHRASES.setdefault(_k, _v)
 MAX_PHRASE = max((len(p) for p in PHRASES), default=1)
 
 _EMOJI_RE = re.compile("[\U0001F000-\U0001FAFF☀-➿⬀-⯿⌀-⏿←-⇿™ℹ〰〽"
@@ -575,11 +599,15 @@ def candidates(word):
 
 def lookup(word):
     """(emojis, category, priority) for a word, or None."""
-    for c in candidates(word):
+    cands = candidates(word)
+    for c in cands:
         if c in STOP and c == word:
             return None
         if c in WORDS:
             return WORDS[c]
+    for c in cands:  # second layer: the CLDR keywords of every emoji (only what the hand table does not know)
+        if c in CLDR_WORDS and c not in STOP and c not in CLDR_SKIP:
+            return CLDR_WORDS[c]
     return None
 
 
@@ -608,8 +636,36 @@ def _tokens(text):
     return out
 
 
+BOLD_CATS = {"time", "money", "health"}  # besides any priority-3 word (time, meeting, vehicle, work)
+
+
+def _bold_pick(text, toks, hits, nwords):
+    """Owner 19.11 11:23: "the sign should also shape the font, bold the important words". Important = when, how much and
+    the main subject: times / dates / money / percent and the priority-3 words (meeting, vehicle, work), at most one word in
+    five (1-4 per message). Never inside a quote / code block, never a word that already carries * _ ~ formatting."""
+    if "```" in text or nwords < 3:
+        return set()
+    out = []
+    for k, (emojis, cat, prio) in hits.items():
+        start, end, core, _ = toks[k]
+        tok = text[start:end]
+        if any(m in tok for m in "*_~`") or not core or is_emoji(core):
+            continue
+        line_start = text.rfind("\n", 0, start) + 1
+        if text[line_start:start].lstrip().startswith(">"):
+            continue
+        if prio >= 3 or cat in BOLD_CATS:
+            out.append((-prio, k))
+    cap = max(1, min(4, nwords // 5))
+    picked = set()
+    for _, k in sorted(out):
+        if len(picked) < cap and k - 1 not in picked and k + 1 not in picked:  # "*שלושה* *ימים*" reads as noise
+            picked.add(k)
+    return picked
+
+
 def plan(text):
-    """The table pass. Returns (tokens, picks, used): picks = {token index: emoji}; used = emoji already in the text or picked."""
+    """The table pass. Returns (tokens, picks, used, budget, bold): bold = token indexes to wrap in *...*; picks = {token index: emoji}; used = emoji already in the text or picked."""
     toks = _tokens(text)
     used = {t[2] for t in toks if is_emoji(t[2])}
     words = [i for i, t in enumerate(toks) if _LETTERS.search(t[2]) or re.search(r"\d", t[2])]
@@ -646,6 +702,7 @@ def plan(text):
     for k in list(hits):
         if k + 1 < len(toks) and is_emoji(toks[k + 1][2]):
             del hits[k]
+    bold = _bold_pick(text, toks, hits, len(words))
     if len(hits) > budget:
         keep = sorted(hits, key=lambda k: (-hits[k][2], k))[:budget]
         hits = {k: hits[k] for k in keep}
@@ -655,7 +712,7 @@ def plan(text):
         if e:
             picks[k] = e
             used.add(e)
-    return toks, picks, used, budget
+    return toks, picks, used, budget, bold
 
 
 def ai_prompt(text, toks, idxs, used):
@@ -689,23 +746,32 @@ def parse_ai(out, allowed, used):
     return res
 
 
-def render(text, toks, picks):
+def render(text, toks, picks, bold=()):
+    """Inserts " <emoji>" after each picked word and wraps the bold words' core in *...* (owner 19.11). Nothing else of the
+    text changes: same words, same order, same punctuation."""
+    ins = []  # (position, order at that position, string)
+    for k in picks:
+        ins.append((toks[k][3], 1, " " + picks[k]))
+    for k in bold:
+        start, end, core, _ = toks[k]
+        at = start + text[start:end].find(core)
+        ins.append((at, 2, "*"))
+        ins.append((at + len(core), 0, "*"))  # closes before the emoji that follows the same word
     out, last = [], 0
-    for k in sorted(picks):
-        pos = toks[k][3]
-        out.append(text[last:pos] + " " + picks[k])
+    for pos, _, s in sorted(ins):
+        out.append(text[last:pos] + s)
         last = pos
     out.append(text[last:])
     return "".join(out)
 
 
-def iconize(text, ai=None):
+def iconize(text, ai=None, bold=True):
     """The owner's text with emoji inserted after the words they fit. ai(prompt) -> str (optional): a small model for the
     words the table does not know; its answer can only add emoji, never change a word. Returns the text unchanged when
-    nothing fits."""
+    nothing fits. bold: also wrap the important words in *...* (owner 19.11 11:23)."""
     if not (text or "").strip():
         return text
-    toks, picks, used, budget = plan(text)
+    toks, picks, used, budget, strong = plan(text)
     if ai and len(picks) < budget:
         near = set(picks) | {k + 1 for k in picks} | {k - 1 for k in picks}
         idxs = [k for k, t in enumerate(toks) if k not in near and len(t[2]) >= 3 and _LETTERS.search(t[2])
@@ -720,4 +786,4 @@ def iconize(text, ai=None):
                 if len(picks) >= budget:
                     break
                 picks[k] = extra[k]
-    return render(text, toks, picks)
+    return render(text, toks, picks, strong if bold else ())
