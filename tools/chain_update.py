@@ -32,24 +32,31 @@ $ErrorActionPreference = 'Continue'
 $env:Path = 'C:\msys64\ucrt64\bin;' + $env:Path
 Set-Location "C:\Users\walla\whatsapp-mcp"
 # over ssh Windows will not pass uv's junction (cpython-3.11-...): "untrusted mount point" (os error 448). Use the real folder.
-$d = Get-ChildItem "$env:APPDATA\uv\python" -Directory -EA 0 | Where-Object Name -match '^cpython-3[.]11[.][0-9]+-' | Sort-Object Name | Select-Object -Last 1
-if ($d) { $PY = $d.FullName + '\python.exe' } else { $PY = (uv python find 3.11) }
+# PowerShell variables are case-insensitive: $PY and $py would be the SAME variable. Owner 19.11: that
+# collision silently ran the python code as a command, so a Go change was reported as rebuilt without being built.
+$pyexe = "C:\Users\walla\whatsapp-mcp\agent\.venv\Scripts\python.exe"
+if (-not (Test-Path $pyexe)) {
+  $d = Get-ChildItem "$env:APPDATA\uv\python" -Directory -EA 0 | Where-Object Name -match '^cpython-3[.][0-9]+[.][0-9]+-' | Sort-Object Name | Select-Object -Last 1
+  if ($d) { $pyexe = $d.FullName + '\python.exe' } else { $pyexe = (Get-Command python -EA SilentlyContinue).Source }
+}
 $before = git rev-parse HEAD
 if ($env:DRY) { git fetch -q hub 2>&1 | Out-Null; $pull = 'dry-run: fetched only' } else { $pull = git pull --ff-only hub main 2>&1 | Select-Object -Last 1 }
 $after = git rev-parse HEAD
 $hub = git rev-parse hub/main
 $go = git diff --name-only $before $after -- whatsapp-bridge | Where-Object { $_ -like '*.go' }
 $rb = ''
+$rbok = $true
 if ($go -and -not $env:DRY) {
   Push-Location agent
-  $py = "import sys; sys.path.insert(0,'.'); import agent; print(repr(agent._rebuild_bridge()))"
-  $rb = (& $PY -I -X utf8 -c $py 2>&1 | Select-Object -Last 1) -join ' '
+  $pycode = "import sys; sys.path.insert(0,'.'); import agent; print(repr(agent._rebuild_bridge()))"
+  $rb = (& $pyexe -I -X utf8 -c $pycode 2>&1 | Select-Object -Last 1) -join ' '
+  $rbok = ($rb -eq "''" -or $rb -eq '')
   Pop-Location
 }
 if ($after -ne $before -and -not $env:DRY) {
   [IO.File]::WriteAllText("C:\Users\walla\whatsapp-mcp\agent\restart.request", "עדכון מדורג בשרשרת: $($after.Substring(0,7))", [Text.UTF8Encoding]::new($false))
 }
-@{before=$before; after=$after; hub=$hub; pull="$pull"; go=[bool]$go; rebuild=$rb; restart=($after -ne $before)} | ConvertTo-Json -Compress
+@{before=$before; after=$after; hub=$hub; pull="$pull"; go=[bool]$go; rebuild=$rb; rebuild_ok=$rbok; restart=($after -ne $before)} | ConvertTo-Json -Compress
 """
 HB = r"""
 import os, subprocess
@@ -113,6 +120,8 @@ def update_peer(pc, dry):
         return {**res, "ok": True, "behind": res.get("after") != res.get("hub"), "restart": False}
     if res.get("after") != res.get("hub"):
         return {**res, "ok": False, "why": "not on hub/main after pull (local commits or not fast-forward) - stopped"}
+    if res.get("go") and res.get("rebuild_ok") is False:
+        return {**res, "ok": False, "why": "bridge rebuild failed on this PC - chain stopped"}
     if dry or not res.get("restart"):
         return {**res, "ok": True}
     end = time.time() + 6 * 60
