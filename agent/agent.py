@@ -2636,6 +2636,12 @@ def switch_provider(name, model=None, chat=None):
     succeeded; a refused switch says "המעבר נכשל כי: <reason>" and keeps the last provider/model and the name as they are."""
     before = active_provider(chat)
     _ctx.switch_ok = False
+    if name == "auto" or (providers().get(name) or {}).get("kind") == "auto":
+        # owner 19.11 15:38: no "auto" provider — the bridge never picks the provider; automatic choice exists only for the model
+        keep = prov_short(before[0]) + (f" · {before[1]}" if before[1] else "")
+        return ("⛔ *אין ספק אוטו.* הגשר לא בוחר ספק לבד; ספק מחליפים רק בפקודה שלך.\n"
+                "בחירה אוטומטית יש רק למודל, בתוך הספק שבחרת: */מודל אוטו* (או /מודל auto).\n"
+                f"↩️ נשארתי על: *{keep}*")
     res = _switch_provider(name, model, chat)
     if getattr(_ctx, "switch_ok", False):
         if chat and str(chat).endswith("@g.us"):
@@ -2825,7 +2831,7 @@ def free_menu_text(chat):
     lines = ["*🆓 בינות חינמיות לבחירה*", "🏠 = רצה על המחשבים שלך (זמן לפי החומרה) · ☁️ = אצל הספק (זמן לפי הרשת)", ""]
     for i, e in enumerate(menu, 1):
         lines.append(f"{i}. {'✅' if e['ready'] else '⚪'} {e['line']}")
-    lines += ["", "לבחירה: */מודל חינמי <מספר>* · אוטומטי לפי עלות: /אוטו · חזרה ל-Claude: /קלוד"]
+    lines += ["", "לבחירה: */מודל חינמי <מספר>* · חזרה ל-Claude: /קלוד"]
     return "\n".join(lines)
 
 
@@ -6102,8 +6108,7 @@ def commands_index():
     for head, group in split_by_place([n for n in provider_order() if n != "auto"]):
         out.append(head)
         out += [f"  {provider_line(n)}" for n in group]
-    out += ["", "🔀 */אוטו* הגשר בוחר לבד לפי היומן",
-            "", "*🧩 מודלים:* /ספק (הרשימה המלאה) · /N M (מודל M של בינה N) · /מודל (מודלי Claude) · /sonnet /opus /haiku · /מודל חינמי",
+    out += ["", "*🧩 מודלים:* /מודל אוטו (מודל לפי מורכבות, בתוך הספק שבחרת) · /ספק (הרשימה המלאה) · /N M (מודל M של בינה N) · /מודל (מודלי Claude) · /sonnet /opus /haiku · /מודל חינמי",
             "*🔎 בדיקות:* /זמינות (זמינות) · /בדוק מענה (תשובה אמיתית מכולן) · /יומן (ציונים לפי ימים) · /רמות (איזה מודל אוטו בוחר) · /מצב <בינה>",
             "*⚙️ שליטה:* /ספק כאן איפוס · /ספק מחשב <שם> · /מנוע · /הפעל מחדש · /סשן חדש · /תקרה (שימוש) · /בריאות · /מחכים",
             "*🖥️ מחשבים וחשבונות:* /חשבונות · /גיבוי (מעבר בין הנייח לנייד) · /העבר גשר <חדר|סלון|לפטופ|נייח> · /גרסה · /🛞 (הקראה)",
@@ -6158,7 +6163,7 @@ def routing_note(name):
 
 def routing_report():
     """/רמות: for every provider, which model "auto" gives a light / regular / complex request, and what the journal learned of each."""
-    out = ["🎚️ *בחירת מודל אוטומטית לפי מורכבות* (בספק אוטו או בספק בלי מודל קבוע)",
+    out = ["🎚️ *בחירת מודל אוטומטית לפי מורכבות* (/מודל אוטו, בתוך הספק שבחרת)",
            "קלה = שאלה קצרה · רגילה = סיכום, טיוטה, אקסל · מורכבת = תכנון, ניתוח לעומק, בקשה ארוכה או `!!`", ""]
     for n in provider_order():
         if n == "auto":
@@ -6175,7 +6180,7 @@ def routing_report():
             rec = model_record(n, m)
             if rec:
                 out.append(f"   {_model_name_he(m)}: למדתי מ-{rec[0]} הרצות · ענה {round(rec[1] * 100)}%" + (f" · חציון {rec[2]:g} שנ׳" if rec[2] else ""))
-    out += ["", "המנגנון לומד מכל הרצה ובדיקה (agent.db ai_journal). קביעת מודל: /N M · חזרה לאוטו: /ספק N"]
+    out += ["", "המנגנון לומד מכל הרצה ובדיקה (agent.db ai_journal). קביעת מודל: /N M · חזרה לאוטו: /מודל אוטו"]
     return "\n".join(out)
 
 
