@@ -35,6 +35,7 @@ APPS = {  # key -> (window title regex, Start-menu name regex used to launch it;
     "codex": (r"^(Codex|ChatGPT)$", r"^Codex"),  # desktop 19.11: the Codex app (OpenAI.Codex package) is the window titled ChatGPT
     "jan": (r"^Jan$", r"^Jan$"),
     "lmstudio": (r"LM Studio", r"^LM Studio$"),
+    "antigravity": (r"Antigravity", r"^Antigravity$"),
 }
 
 

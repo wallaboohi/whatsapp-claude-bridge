@@ -1,6 +1,6 @@
 {
   "_doc": "Owner 16.11: numbers and spellings for the provider switch words. order = the number of each provider (/1, /2 ...; new providers are appended at the end). words = a spelling (lower case, without spaces / hyphens / apostrophes / dots) -> provider. Add the owner's mistakes here, one line each.",
-  "order": ["claude", "ollama", "gemini", "groq", "openrouter_free", "nvidia", "cloudflare", "opencode", "gemini_cli", "copilot", "codex"],
+  "order": ["claude", "ollama", "gemini", "groq", "openrouter_free", "nvidia", "cloudflare", "opencode", "gemini_cli", "copilot", "codex", "antigravity", "antigravity_app"],
   "words": {
     "claude": "claude", "cloude": "claude", "claud": "claude", "clod": "claude", "claudcode": "claude", "claudecode": "claude", "קלוד": "claude", "קלאוד": "claude", "קלאודה": "claude", "קלוד": "claude", "מנוי": "claude",
     "ollama": "ollama", "olama": "ollama", "ollamma": "ollama", "אולמה": "ollama", "אולאמה": "ollama", "אולמא": "ollama", "אולאמא": "ollama", "אוללמה": "ollama",
@@ -13,6 +13,8 @@
     "geminicli": "gemini_cli", "geminicl": "gemini_cli", "גמיניcli": "gemini_cli", "גמיניסיאלאיי": "gemini_cli", "גמיניקלי": "gemini_cli", "גמינישורתפקודה": "gemini_cli",
     "copilot": "copilot", "copilott": "copilot", "copilet": "copilot", "קופיילוט": "copilot", "קופילוט": "copilot", "קופיילט": "copilot", "קופליט": "copilot", "קפילוט": "copilot", "קופילט": "copilot",
     "codex": "codex", "codeks": "codex", "kodex": "codex", "קודקס": "codex", "קודקס": "codex", "קודס": "codex",
+    "antigravity": "antigravity", "antigravty": "antigravity", "antigraviti": "antigravity", "agy": "antigravity", "ag": "antigravity", "אנטיגרביטי": "antigravity", "אנטיגרוויטי": "antigravity", "גרביטי": "antigravity", "גרוויטי": "antigravity", "אנטיגרביטיcli": "antigravity", "אגיי": "antigravity", "אגי": "antigravity",
+    "antigravityapp": "antigravity_app", "agyapp": "antigravity_app", "גרביטיאפ": "antigravity_app", "גרביטיאפליקציה": "antigravity_app", "אנטיגרביטיאפ": "antigravity_app", "אנטיגרביטיאפליקציה": "antigravity_app", "אפליקצייתגרביטי": "antigravity_app", "אפליקצייתאנטיגרביטי": "antigravity_app",
     "auto": "auto", "אוטו": "auto", "אוטומטי": "auto"
   }
 }

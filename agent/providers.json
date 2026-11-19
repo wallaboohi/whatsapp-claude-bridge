@@ -166,6 +166,7 @@
    "copilot",
    "opencode",
    "gemini_cli",
+   "antigravity",
    "openrouter_free",
    "nvidia"
   ],
@@ -447,5 +448,52 @@
   "cost": "חינם (מודל מקומי)",
   "where": "local",
   "how": "אפליקציית Jan בנייח, מודל מקומי שרץ במחשב: הגשר מקליד בחלון האפליקציה (tools/desktop_ai.py דרך ssh ומשימה בסשן המשתמש) וקורא את התשובה. נבדק 19.11 14:13: עונה תוך כ-10 שניות, אבל המודל המקומי הקטן טועה גם בשאלות פשוטות. בלי כלי הגשר."
+ },
+ "antigravity": {
+  "label": "Antigravity · Google DeepMind (AGY CLI)",
+  "short": "Antigravity",
+  "kind": "cli",
+  "model": "",
+  "models": [],
+  "cli": {
+   "bin": "agy",
+   "args": [
+    "--dangerously-skip-permissions"
+   ],
+   "model_flag": "--model",
+   "prompt": "arg:-p",
+   "out": "text"
+  },
+  "aliases": [
+   "antigravity",
+   "agy",
+   "גרביטי",
+   "אנטיגרביטי",
+   "אנטי גרביטי",
+   "אנטיגרוויטי"
+  ],
+  "cost": "Google",
+  "where": "local",
+  "how": "Google Antigravity CLI (agy) — סוכן הפיתוח של גוגל המורץ ישירות במחשב דרך פקודת agy -p."
+ },
+ "antigravity_app": {
+  "label": "Antigravity app · לפטופ",
+  "short": "Antigravity app",
+  "kind": "desktop-app",
+  "app": "antigravity",
+  "host": "lap-yakir",
+  "pc": "לפטופ",
+  "timeout": 240,
+  "aliases": [
+   "antigravity app",
+   "גרביטי אפליקציה",
+   "אנטיגרביטי אפליקציה",
+   "אפליקציית אנטיגרביטי",
+   "אפליקציית גרביטי",
+   "גרביטי אפ"
+  ],
+  "cost": "Google",
+  "where": "local",
+  "how": "אפליקציית Antigravity למחשב בלפטופ: הגשר מקליד בחלון האפליקציה (tools/desktop_ai.py דרך משימה בסשן המשתמש) וקורא את התשובה. בלי כלי הגשר."
  }
 }

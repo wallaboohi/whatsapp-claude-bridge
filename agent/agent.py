@@ -967,7 +967,8 @@ def claude_account_type():
 
 
 AI_HE = {"claude": "קלוד " + claude_account_type(), "claude_work": "קלוד עבודה", "codex": "קודקס", "copilot": "קופילוט", "gemini": "גמיני", "gemini_cli": "גמיני CLI", "ollama": "אולמה מקומי",
-         "groq": "גרוק", "cloudflare": "קלאודפלייר", "nvidia": "אנבידיה", "openrouter_free": "אופןראוטר", "opencode": "אופנקוד"}
+         "groq": "גרוק", "cloudflare": "קלאודפלייר", "nvidia": "אנבידיה", "openrouter_free": "אופןראוטר", "opencode": "אופנקוד",
+         "antigravity": "אנטיגרביטי", "antigravity_app": "אנטיגרביטי אפליקציה"}
 
 
 def hm(minutes):
@@ -5662,7 +5663,8 @@ def claude_status_report():
 AI_ALIASES = {"claude": "claude", "קלוד": "claude", "codex": "codex", "קודקס": "codex", "copilot": "copilot", "קופילוט": "copilot", "קפילו": "copilot",
               "קפילוט": "copilot", "גמיני": "gemini", "gemini": "gemini", "גמיני cli": "gemini_cli", "groq": "groq", "גרוק": "groq",
               "openrouter": "openrouter_free", "אופנראוטר": "openrouter_free", "nvidia": "nvidia", "אנבידיה": "nvidia", "cloudflare": "cloudflare",
-              "קלאודפלייר": "cloudflare", "opencode": "opencode", "אופנקוד": "opencode", "ollama": "ollama", "אולמה": "ollama"}
+              "קלאודפלייר": "cloudflare", "opencode": "opencode", "אופנקוד": "opencode", "ollama": "ollama", "אולמה": "ollama",
+              "antigravity": "antigravity", "אנטיגרביטי": "antigravity", "גרביטי": "antigravity", "agy": "antigravity"}
 
 
 def codex_limits():
