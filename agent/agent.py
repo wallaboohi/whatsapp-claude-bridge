@@ -7034,20 +7034,43 @@ def fire_icons(chat, mid):
     like 🛞 — quoting it in a control chat, and in the control group (never to the other person) for any other chat.
     🔥 on someone else's message, a voice note / image or one of the bot's own answers is an ordinary reaction: nothing happens."""
     kv_set(f"fire_done:{mid}", dt.datetime.now().isoformat(timespec="seconds"))  # fire_catch_up skips it after a restart
-    try:
-        with mdb() as db:
-            r = db.execute("SELECT content, is_from_me, media_type, timestamp FROM messages WHERE id = ? AND chat_jid = ?",
-                           (mid, chat)).fetchone()
-    except sqlite3.Error as e:
-        log("fire db", e)
+    control = chat == PRIMARY or chat in load_groups()
+    r = None
+    for _ in range(8):  # owner 19.11: the 🔥 often arrives before the message itself is stored (reacted right after sending)
+        try:
+            with mdb() as db:
+                r = db.execute("SELECT content, is_from_me, media_type, timestamp FROM messages WHERE id = ? AND chat_jid = ?",
+                               (mid, chat)).fetchone()
+        except sqlite3.Error as e:
+            log("fire db", e)
+            return
+        if r:
+            break
+        time.sleep(1.5)
+
+    def tell(text):  # owner 19.11 "האש לא עובדת": a 🔥 that changes nothing must not be silent
+        if control:
+            send(chat, CFG["reply_prefix"] + "🔥 _" + text + "_", quoted=mid)
+        else:
+            send(PRIMARY, CFG["reply_prefix"] + f"🔥 _בשיחה עם {chat_title(chat)}: " + text + "_")
+
+    if not r:
+        log("fire: message not found", chat, mid)
+        tell("לא מצאתי את ההודעה שסימנת, לא שיניתי כלום.")
         return
-    if not r or not r[1] or r[2] or not (r[0] or "").strip():
+    if not r[1]:
+        log("fire: not the owner's message", chat, mid)
+        if not control:
+            tell("ה-🔥 היה על הודעה של מישהו אחר. אייקונים נוספים רק להודעות שלך (את שלו אי אפשר לערוך), אז נשאר כתגובה רגילה.")
+        return
+    if r[2] or not (r[0] or "").strip():
+        if not control:
+            tell("🔥 מוסיף אייקונים רק להודעת טקסט, לא להקלטה/תמונה/קובץ.")
         return
     content, ts = r[0], r[3]
     prefix = (CFG.get("reply_prefix") or "🤖").strip()
     if content.lstrip().startswith(prefix):
         return
-    control = chat == PRIMARY or chat in load_groups()
     try:
         new = emoji_icons.iconize(content, ai=fire_ai)
     except Exception as e:
@@ -7055,8 +7078,7 @@ def fire_icons(chat, mid):
         return
     if new == content:
         log("fire: no fitting icon", chat, mid)
-        if control:
-            send(chat, CFG["reply_prefix"] + "🔥 _לא מצאתי אייקון שמתאים להודעה הזו._", quoted=mid)
+        tell(f"לא מצאתי אייקון שמתאים ל\"{content.strip()[:60]}\" (המילים לא בטבלה). ההודעה לא שונתה.")
         return
     age = message_age(ts)
     why = "עברו יותר מ-15 דקות, ווצאפ כבר לא מאפשר לערוך אותה"

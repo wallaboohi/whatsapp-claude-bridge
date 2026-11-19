@@ -121,9 +121,14 @@ def test_fire_ignores_others_media_and_bot_answers(agent, monkeypatch):
     db.commit()
     _own(db, "O2", chat, "", 1, media="image")
     _own(db, "O3", chat, mod.CFG["reply_prefix"] + "פגישה עם הספק", 1)
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
     for m in ("O1", "O2", "O3", "missing"):
         mod.fire_icons(chat, m)
-    assert not calls
+    # owner 19.11 "האש לא עובדת": nothing is edited and nothing goes to the other person, but a 🔥 that changes nothing
+    # is explained in the control group (others' message, media, missing); the bot's own answer stays silent
+    assert not [c for c in calls if c and c[0] == "/edit_message"]
+    assert all(c[0] == mod.PRIMARY for c in calls)
+    assert len(calls) == 3
 
 
 def test_fire_reaction_is_queued_once(agent, monkeypatch):
