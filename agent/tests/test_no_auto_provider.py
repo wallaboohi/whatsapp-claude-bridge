@@ -15,3 +15,10 @@ def test_switch_to_auto_provider_refused(agent, monkeypatch):
 def test_commands_index_has_no_auto_provider_command(agent):
     agent = agent[0]
     assert "*/אוטו*" not in agent.commands_index()
+
+
+def test_backup_computer_prefix_is_not_kept_in_the_name(agent):
+    agent = agent[0]
+    """Owner 19.11: after the living room (SL) held the bridge, the desktop's name still showed 'SL'."""
+    assert "SL" not in agent.name_core("SL Claude עבודה YB אוטומציה 4M-D").split()
+    assert "PR" not in agent.name_core("PR Claude עבודה YB אוטומציה 4M-D").split()

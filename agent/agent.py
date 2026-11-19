@@ -5583,7 +5583,7 @@ def group_name_template(chat):
 
 
 _MODEL_WORDS = {"קלאוד", "{model}", *MODEL_HE.values()}
-_COMPUTER_PREFIXES = {"LP", "LAP", "HW"}  # owner 16.11: LAP = laptop (LP is the old form), HW = desktop; a prefix of the other computer is never part of the name
+_COMPUTER_PREFIXES = {"LP", "LAP", "HW", "SL", "PR", "SA", "PE"}  # owner 19.11: SL = living room, PR = bedroom (a backup's prefix stayed in the name after the hand-back). owner 16.11: LAP = laptop (LP is the old form), HW = desktop; a prefix of the other computer is never part of the name
 
 
 def name_prefix():
