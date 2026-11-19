@@ -7418,7 +7418,10 @@ def _backup():
     cutoff = (dt.datetime.now() - dt.timedelta(days=30)).strftime("%Y-%m-%d")
     with mdb() as db:
         todo = db.execute("SELECT id, chat_jid FROM messages WHERE media_type IN ('image','video','audio','document') AND timestamp > ?", (cutoff,)).fetchall()
-    fetched = sum(1 for mid, cj in todo if media_path(cj, mid))
+    # owner 19.11 "fix the media download in the bedroom": a backup PC waiting at the lease gate has no connected bridge
+    # (connection refused) and no phone on its USB, so each missing file cost ~12 s of failures for hundreds of files.
+    # The host downloads them; a standby PC only mirrors what is already on its disk.
+    fetched = 0 if lease_standby() else sum(1 for mid, cj in todo if media_path(cj, mid))
     copied = 0
     mroot = os.path.join(root, "media")
     for d in os.listdir(STORE):
