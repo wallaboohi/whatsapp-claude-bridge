@@ -77,8 +77,8 @@ def test_handover_request_file_runs_the_command_once(agent, monkeypatch, tmp_pat
     assert calls == ["סלון"] and not req.exists() and len(sent) == 1
 
 
-def test_backup_code_pull_never_restarts_by_itself(agent, monkeypatch, tmp_path):
-    """Owner 20.11 12:15: nobody restarts without his explicit order - new agent code on a backup waits for the relay."""
+def test_backup_code_pull_restarts_only_when_not_holding(agent, monkeypatch, tmp_path):
+    """Owner 20.11 12:15 + 12:25: a backup standing by restarts on new code; the PC holding the bridge waits for the relay."""
     mod, _ = agent
     import subprocess as sp
     git = lambda cwd, *a: sp.run(["git", "-C", str(cwd), "-c", "user.email=t@t", "-c", "user.name=t", *a], capture_output=True, text=True)
@@ -95,4 +95,28 @@ def test_backup_code_pull_never_restarts_by_itself(agent, monkeypatch, tmp_path)
     fc = {"mirror": [], "git_pull": [{"path": str(backup), "remote": str(host), "branch": "master", "restart": True}]}
     assert mod.failover_code_pull(fc) == []
     assert (backup / "agent" / "agent.py").read_text(encoding="utf-8") == "v2"
-    assert not (tmp_path / "restart.request").exists() and mod.kv_get("code_waiting")
+    assert (tmp_path / "restart.request").exists(), "a backup standing by restarts freely (owner 12:25)"
+    (tmp_path / "restart.request").unlink()
+    (host / "agent" / "agent.py").write_text("v3", encoding="utf-8")
+    git(host, "commit", "-q", "-am", "3")
+    monkeypatch.setattr(mod, "lease_held", lambda: True)
+    assert mod.failover_code_pull(fc) == []
+    assert not (tmp_path / "restart.request").exists() and mod.kv_get("code_waiting"), "the PC holding the bridge waits"
+
+
+def test_scheduled_restart_of_the_holder_goes_through_the_relay(agent, monkeypatch):
+    mod, _ = agent
+    launched = []
+    monkeypatch.setattr(mod, "chain_active", lambda: True)
+    monkeypatch.setattr(mod, "session_cfg", lambda: {"enabled": True})
+    monkeypatch.setattr(mod.subprocess, "Popen", lambda cmd, **k: launched.append(cmd))
+    monkeypatch.setattr(mod, "failover_cfg", lambda: None)
+    monkeypatch.setattr(mod, "lease_held", lambda: False)
+    assert mod.relay_restart("x") == "" and not launched  # the desktop not holding: restart as usual
+    monkeypatch.setattr(mod, "lease_held", lambda: True)
+    assert mod.relay_restart("שמירה") == "relay" and "chain_relay.py" in " ".join(launched[0]) and "--auto" in launched[0]
+    monkeypatch.setattr(mod, "failover_cfg", lambda: {"for": "נייח", "self_name": "סלון"})
+    assert mod.relay_restart("x") == "defer"  # a backup holding the host's bridge waits
+    monkeypatch.setattr(mod, "lease_held", lambda: False)
+    monkeypatch.setattr(mod, "failover_state", lambda n: {"state": "idle"})
+    assert mod.relay_restart("x") == ""  # a backup standing by restarts freely

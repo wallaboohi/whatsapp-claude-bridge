@@ -144,19 +144,44 @@ def report(text):
                    capture_output=True, timeout=120)
 
 
+def rebuild_desktop_bridge(since, hub):
+    """While the desktop is away (its bridge at the gate, nobody depends on it): rebuild its bridge when Go code changed since the
+    code it ran (agent._rebuild_bridge: the version stamp, swap, the run loop starts the new exe)."""
+    go = [f for f in subprocess.run(["git", "-C", ROOT, "diff", "--name-only", since or hub, hub, "--", "whatsapp-bridge"],
+                                    capture_output=True, text=True).stdout.split() if f.endswith(".go")]
+    if not go:
+        return "▫️ נייח: אין שינוי בקוד הגשר, אין בנייה"
+    py = os.path.join(ROOT, "agent", ".venv", "Scripts", "python.exe")
+    r = subprocess.run([py, "-I", "-X", "utf8", "-c", "import sys; sys.path.insert(0, '.'); import agent; print(repr(agent._rebuild_bridge()))"],
+                       cwd=os.path.join(ROOT, "agent"), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=1200,
+                       env=dict(os.environ, PATH=r"C:\msys64\ucrt64\bin;" + os.environ.get("PATH", "")))
+    res = (r.stdout.strip().splitlines() or ["?"])[-1]
+    ok = res in ("''", "")
+    log("desktop bridge rebuild", ok, res[:200])
+    return ("🔧 נייח: הגשר נבנה מחדש בזמן ההמתנה" if ok else "⚠️ נייח: בניית הגשר נכשלה: " + res[:150])
+
+
 def main(a):
     dry = "--dry-run" in a
+    auto = "--auto" in a  # owner 20.11 12:25: a scheduled restart (nightly save / update) of the PC holding the bridge
+    reason = a[a.index("--reason") + 1] if "--reason" in a and a.index("--reason") + 1 < len(a) else ""
     lines = []
+    subprocess.run(["git", "-C", ROOT, "fetch", "-q", "hub"], capture_output=True, timeout=120)
     hub = subprocess.run(["git", "-C", ROOT, "rev-parse", "--short", "hub/main"], capture_output=True, text=True).stdout.strip()
-    log("relay start", "dry" if dry else "LIVE", "hub", hub)
-    # 0. preflight
-    states = {n: state(n) for n in ORDER}
+    log("relay start", "dry" if dry else "LIVE", "auto" if auto else "ordered", "hub", hub, reason)
+    # 0. preflight (scheduled: a run in progress is waited for, up to 30 minutes)
+    end = time.time() + (30 * 60 if auto else 0)
+    while True:
+        states = {n: state(n) for n in ORDER}
+        if not any(st.get("busy") for st in states.values()) or time.time() >= end:
+            break
+        time.sleep(60)
     bad = []
     for n, st in states.items():
         if st.get("error"):
             bad.append(f"{n}: לא עונה")
-        elif st.get("head") != hub:
-            bad.append(f"{n}: קוד {st.get('head')} ולא {hub}")
+        elif n == ORDER[0] and st.get("head") != hub:
+            bad.append(f"{n}: קוד {st.get('head')} ולא {hub}")  # the backups are pulled in step 1
         elif st.get("dirty"):
             bad.append(f"{n}: שינויים לא שמורים")
         elif st.get("busy"):
@@ -210,8 +235,10 @@ def main(a):
             report("⛔ *סבב ההפעלה מחדש נעצר*, הגשר ב" + taker + " (מחזיק אבל ניסוי הכלים נכשל):\n" + "\n".join(lines)
                    + "\nלחזרה: */העבר גשר נייח*")
             return 1
+        if giver == ORDER[0]:
+            lines.append(rebuild_desktop_bridge(states[ORDER[0]].get("running_head") or "", hub))
     subprocess.run([sys.executable, "-I", "-X", "utf8", os.path.join(ROOT, "tools", "pending.py"), "live"], capture_output=True, timeout=60)
-    report("🔁 *סבב הפעלה מחדש עם מסירת הגשר הושלם* (קוד " + hub + "):\n" + "\n".join(lines))
+    report("🔁 *סבב הפעלה מחדש עם מסירת הגשר הושלם* (קוד " + hub + (f", {reason}" if reason else "") + "):\n" + "\n".join(lines))
     return 0
 
 

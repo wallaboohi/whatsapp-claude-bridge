@@ -684,6 +684,12 @@ def day_sync():
     changed_since_start = [p for p in diff.splitlines() if p]
     _, _, rebuild = day_sync_plan(changed_since_start)
     restart = bool(changed_since_start)
+    how = relay_restart("שמירה יומית: קוד חדש") if restart else ""
+    if how:  # owner 20.11 12:25: the PC holding the bridge restarts through the relay (it rebuilds the bridge on its way)
+        broadcast_system_notice(f"🌙 *שמירה יומית · {host}*\n" + ("\n".join(notes) if notes else "אין שינויים היום.")
+                                + ("\n🔁 הקוד החדש ייכנס בסבב מסירה: הגשר עובר בין המחשבים עם בדיקה בכל אחד וחוזר לנייח."
+                                   if how == "relay" else "\n⏸️ המחשב הזה מחזיק עכשיו את הגשר: הפעלה מחדש תחכה עד שהגשר יחזור לנייח."))
+        return
     if rebuild:
         err = _rebuild_bridge()
         notes.extend(REBUILD_NOTES)
@@ -692,6 +698,32 @@ def day_sync():
                             + ("\n🔄 הסוכן עולה מחדש עם הקוד החדש." if restart else ""))
     if restart:
         RESTART_REQ.set()
+
+
+def relay_restart(why):
+    """Owner 20.11 12:25: a scheduled restart of the PC that holds the bridge goes through the relay (tools/chain_relay.py --auto):
+    the backups restart on the new code, the bridge passes along the chain with a tool check at every hop, and comes back here.
+    Returns "relay" (launched, detached), "defer" (a backup holding the host's bridge: its restart waits) or "" (restart as usual:
+    no chain, or this PC does not hold the bridge, so nobody depends on it)."""
+    if not chain_active() or not session_cfg():
+        return ""
+    if failover_cfg():
+        return "defer" if lease_held() or (failover_state(failover_cfg()["for"]).get("state") or "idle") == "active" else ""
+    if not lease_held():
+        return ""
+    uvx = shutil.which("uv") or os.path.expanduser("~/.local/bin/uv.exe")
+    base = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    for flags in (base | 0x01000000, base):  # outlives this agent's restart (0x01000000 = CREATE_BREAKAWAY_FROM_JOB)
+        try:
+            subprocess.Popen([uvx, "run", "-q", "--no-project", "python", "-I", "-X", "utf8",
+                              os.path.join(ROOT, "tools", "chain_relay.py"), "--auto", "--reason", why], cwd=ROOT,
+                             creationflags=flags, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             close_fds=True)
+            log("relay restart launched:", why)
+            return "relay"
+        except OSError as e:
+            log("relay launch retry", e)
+    return ""
 
 
 def auto_update():
@@ -715,6 +747,12 @@ def auto_update():
     dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
     if dirty:
         broadcast_system_notice(f"⚠️ עדכון אוטומטי לגרסה {res.get('latest')} לא בוצע: יש שינויים לא שמורים בקבצי הכלי במחשב הזה. שמור אותם בגיט ואעדכן מחר (או עכשיו מהלוח).")
+        return
+    how = relay_restart(f"עדכון אוטומטי לגרסה {res.get('latest')}")
+    if how:  # owner 20.11 12:25: never stop the bridge that everybody depends on; the relay pulls, rebuilds and restarts in turn
+        broadcast_system_notice(f"🔄 עדכון אוטומטי לגרסה {res.get('latest')}: " + (
+            "בסבב מסירה בין המחשבים (הגשר לא נשאר בלי מחזיק)." if how == "relay" else
+            "המחשב הזה מחזיק עכשיו את הגשר, העדכון יחכה עד שהגשר יחזור לנייח."))
         return
     broadcast_system_notice(f"🔄 עדכון אוטומטי: גרסה {res.get('current')} ← {res.get('latest')}. הגשר והסוכן יופעלו מחדש בעוד רגע; אודיע כשסיימתי.")
     kv_set("auto_update_pending", json.dumps({"from": res.get("current"), "to": res.get("latest"),
@@ -9491,9 +9529,15 @@ def failover_code_pull(fc):
             log("failover code pull:", path, g("rev-parse", "--short", "HEAD").stdout.strip())
             changed = g("diff", "--name-only", before, "HEAD").stdout.split()
             if spec.get("restart") and any(f.startswith(("agent/", "dash/")) and f.endswith(".py") for f in changed):
-                # owner 20.11 12:15: nobody restarts without his explicit order - the new code waits for the ordered relay
-                kv_set("code_waiting", g("rev-parse", "--short", "HEAD").stdout.strip())
-                log("failover code pull: new agent code waits for the owner's restart order (no restart)")
+                # owner 20.11 12:15 + 12:25: a backup standing by restarts freely (nobody depends on it); only the PC that holds the
+                # bridge waits - its restart goes through the relay (tools/chain_relay.py), so the bridge is never left alone
+                holding = lease_held() or (failover_state(fc.get("for") or "").get("state") or "idle") in ("active", "releasing")
+                if holding:
+                    kv_set("code_waiting", g("rev-parse", "--short", "HEAD").stdout.strip())
+                    log("failover code pull: holding the bridge - the new agent code waits for the relay")
+                else:
+                    with open(RESTART_FILE, "w", encoding="utf-8") as f:
+                        f.write("קוד חדש של הגשר נמשך מה-hub לגיבוי; עולה מחדש כדי שהגיבוי יריץ אותו")
     return problems
 
 
