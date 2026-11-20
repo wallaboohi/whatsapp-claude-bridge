@@ -90,3 +90,49 @@ def test_the_detach_command_parses_in_powershell(monkeypatch):
     r.detach_from_ssh(["--reason", "יישור קו 'בדיקה'"])  # parse only below: no process is ever started
     check = "$e = $null; [void][System.Management.Automation.Language.Parser]::ParseInput(" +         "'" + seen["cmd"][-1].replace("'", "''") + "', [ref]$null, [ref]$e); if ($e.Count) { exit 1 } else { exit 0 }"
     assert real_run(["powershell", "-NoProfile", "-Command", check], capture_output=True).returncode == 0
+
+
+def test_nightly_uses_one_backup_and_the_ordered_run_is_the_full_round():
+    r = _relay()
+    assert r.plan_hops(True) == [("נייח", "חדר שינה"), ("חדר שינה", "נייח")], "nightly: one backup holds, then back"
+    full = r.plan_hops(False)
+    assert [g for g, _ in full] == ["נייח", "חדר שינה", "סלון", "לפטופ"] and full[-1] == ("לפטופ", "נייח"), "ordered: all four, back to the desktop"
+
+
+def _clock(r, monkeypatch):
+    t = [1000.0]
+    monkeypatch.setattr(r.time, "time", lambda: t[0])
+    monkeypatch.setattr(r.time, "sleep", lambda s: t.__setitem__(0, t[0] + s))
+    return t
+
+
+def test_the_desktop_gets_the_bridge_back_only_after_a_full_minute_of_activity(monkeypatch):
+    r = _relay()
+    _clock(r, monkeypatch)
+    monkeypatch.setattr(r, "state", lambda n: {"running_head": "abc1234", "lease": "waiting 21:00"})
+    ok, why = r.wait_stable("נייח", "abc1234", 60)
+    assert ok and "60" in why
+
+
+def test_a_failed_check_restarts_the_minute(monkeypatch):
+    r = _relay()
+    t = _clock(r, monkeypatch)
+    seen = []
+
+    def st(n):
+        seen.append(t[0])
+        if len(seen) == 8:  # one bad answer 35 s in
+            return {"error": "no answer"}
+        return {"running_head": "abc1234", "lease": "waiting"}
+    monkeypatch.setattr(r, "state", st)
+    ok, _ = r.wait_stable("נייח", "abc1234", 60)
+    assert ok and t[0] - 1000.0 >= 35 + 60, "the count restarted after the failed check"
+
+
+def test_old_code_or_a_bridge_not_waiting_never_counts_as_stable(monkeypatch):
+    r = _relay()
+    _clock(r, monkeypatch)
+    monkeypatch.setattr(r, "state", lambda n: {"running_head": "old0000", "lease": "waiting"})
+    assert r.wait_stable("נייח", "abc1234", 60, timeout=120)[0] is False
+    monkeypatch.setattr(r, "state", lambda n: {"running_head": "abc1234", "lease": "holding x"})
+    assert r.wait_stable("נייח", "abc1234", 60, timeout=120)[0] is False

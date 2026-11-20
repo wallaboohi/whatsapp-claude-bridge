@@ -135,6 +135,39 @@ def wait_holding(name, minutes=5):
     return False
 
 
+def holders():
+    """The PCs whose bridge holds the identity right now (live, over ssh). Exactly one is correct."""
+    return [n for n in ORDER if str(state(n).get("lease", "")).startswith("holding")]
+
+
+def wait_stable(name, hub, seconds=60, timeout=420):
+    """Owner 20.11 22:10: a PC earlier in the chain gets the bridge back only after ONE FULL MINUTE of continuous activity: its
+    agent runs the hub code and its bridge waits at the gate, with no failed check in between (a failed check restarts the count)."""
+    since, end = None, time.time() + timeout
+    while time.time() < end:
+        st = state(name)
+        rh = str(st.get("running_head") or "")
+        good = (not st.get("error") and str(st.get("lease", "")).startswith("waiting")
+                and (not rh or hub.startswith(rh) or rh.startswith(hub)))
+        if good:
+            since = since or time.time()
+            if time.time() - since >= seconds:
+                return True, f"פעיל ברציפות {int(time.time() - since)} שנ'"
+        else:
+            since = None
+        time.sleep(5)
+    return False, f"לא היה פעיל ברציפות {seconds} שנ' תוך {timeout} שנ' ({st.get('lease') or st.get('error')})"
+
+
+def plan_hops(auto):
+    """Owner 20.11 22:10. Ordered restart (the owner's approval): the full live round desktop -> bedroom -> living room -> laptop ->
+    desktop, so every planned restart validates the whole chain. Nightly (--auto): ONE backup (bedroom) holds while the desktop
+    restarts, then the bridge returns; the other backups only get the new code while they stand by."""
+    if auto:
+        return [(ORDER[0], ORDER[1]), (ORDER[1], ORDER[0])]
+    return list(zip(ORDER, ORDER[1:] + ORDER[:1]))
+
+
 def report(text):
     path = os.path.join(ROOT, "agent", "tmp", "chain_relay_report.txt")
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -273,8 +306,15 @@ def main(a):
         report("⛔ *סבב ההפעלה מחדש נעצר* לפני המסירה, הגשר ב" + ORDER[0] + ":\n" + "\n".join(lines))
         return 1
     # 2. the relay
-    hops = list(zip(ORDER, ORDER[1:] + ORDER[:1]))
+    hops = plan_hops(auto)
     for giver, taker in hops:
+        if taker == ORDER[0]:  # the desktop is back on the new code: a full minute of activity before it gets the bridge
+            ok_s, why_s = wait_stable(ORDER[0], hub)
+            log("stable", ORDER[0], ok_s, why_s)
+            lines.append(f"{'✅' if ok_s else '❌'} {ORDER[0]}: {why_s}")
+            if not ok_s:
+                report("⛔ *סבב ההפעלה מחדש נעצר*, הגשר נשאר ב" + giver + ":\n" + "\n".join(lines) + "\nלחזרה: */העבר גשר נייח*")
+                return 1
         t0 = time.time()
         if not request(giver, taker if taker != ORDER[0] else "נייח"):
             lines.append(f"❌ {giver} ← {taker}: לא הצלחתי לכתוב את בקשת המסירה")
@@ -287,9 +327,12 @@ def main(a):
             report("⛔ *סבב ההפעלה מחדש נעצר.* בדוק איפה הגשר (/מצב). " + "\n".join(lines))
             return 1
         ok, why = tool_check(taker, True)
+        now_holding = holders()  # live: exactly one connection on the identity after every hop
+        if now_holding != [taker]:
+            ok, why = False, f"חיבור לא תקין: מחזיקים עכשיו {now_holding or 'אף אחד'}"
         log("hop", giver, "->", taker, secs, "s", ok, why)
         lines.append(f"{'✅' if ok else '⚠️'} {giver} → {taker}: מחזיק אחרי {secs} שנ' · {why}")
-        if not ok and taker != ORDER[0]:
+        if not ok and (taker != ORDER[0] or len(holders()) != 1):
             report("⛔ *סבב ההפעלה מחדש נעצר*, הגשר ב" + taker + " (מחזיק אבל ניסוי הכלים נכשל):\n" + "\n".join(lines)
                    + "\nלחזרה: */העבר גשר נייח*")
             return 1

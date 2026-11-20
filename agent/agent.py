@@ -10935,6 +10935,14 @@ def handover_away():
         lease_revoke(f"planned hand-over to {ho.get('to')}", wait=30)
     while os.path.exists(HANDOVER_FILE):
         time.sleep(15)
+        try:  # owner 20.11 21:50: a hand-over nobody took must not keep the desktop away for good
+            away_view = {}
+            for p in CFG.get("peers") or []:
+                d = peer_alive(p, timeout=3) if p.get("url") else None
+                away_view[p.get("name") or peer_alias(p)] = {"status": "up" if d is not None else "down", "data": d}
+            handover_expire(away_view)
+        except Exception:
+            log("handover_away expiry", traceback.format_exc())
     kv_set("heartbeat", dt.datetime.now().isoformat(timespec="seconds"))
     for chat in load_groups():  # owner 20.11 12:01: the context pack after the bridge comes back here
         kv_set(K("gap", chat), "1")
@@ -11127,7 +11135,12 @@ def failover_resume():
 #   net_check: a backup without internet never takes over (its bridge could not connect; it would only fight later).
 
 CHAIN_DEFAULTS = {"check_seconds": 2, "http_timeout": 1.5, "machine_timeout": 1.5, "misses": 2, "agent_grace_seconds": 180,
-                  "net_check": True, "pass_marker_seconds": 120, "bridge_stop_seconds": 8, "fence_seconds": 8}
+                  "net_check": True, "pass_marker_seconds": 120, "bridge_stop_seconds": 8, "fence_seconds": 8,
+                  # owner 20.11 21:50 (Switcher): a PC earlier in the chain gets the bridge back only after this long UP without a
+                  # miss; a fence that was undone is not repeated on the same PC for fence_backoff_seconds; a planned hand-over whose
+                  # target did not take the bridge expires after handover_ttl_seconds (file moved aside, the desktop returns).
+                  "stable_seconds": 60, "fence_backoff_seconds": 90, "handover_ttl_seconds": 300}
+_chain_recent_unfence = {}  # pn -> when a fence of it was last undone (no fence/unfence loop: owner 20.11 21:30)
 _chain = {}  # peer name -> {"data", "last", "misses", "since", "machine", "probing", "seen", "via"}
 _chain_lock = threading.Lock()
 _chain_wake = threading.Event()
@@ -11250,10 +11263,12 @@ def _chain_note(name, data, cc, now=None):
         before = chain_status(v, cc)
         probe = False
         if data is not None:
-            v.update(data=data, last=data, misses=0, since=None, machine=True, seen=now, via="http")
+            v.update(data=data, last=data, misses=0, since=None, machine=True, seen=now, via="http",
+                     up_since=v.get("up_since") or now)
         else:
             if not (v.get("via") == "ssh" and now - v.get("seen", 0) < 10):  # an answer over ssh stands for 10 s
                 v["data"] = None
+                v["up_since"] = None  # a miss ends the "continuously up" count (stable_seconds)
                 v["misses"] = v.get("misses", 0) + 1
                 v["since"] = v.get("since") or now
                 if not v.get("probing"):
@@ -11287,7 +11302,8 @@ def _chain_machine(name, peer, cc):
             if v.get("data") is None:  # no fresh answer through the tunnel meanwhile
                 v["machine"] = up
                 if alt:
-                    v.update(data=alt, last=alt, misses=0, since=None, seen=time.time(), via="ssh")
+                    v.update(data=alt, last=alt, misses=0, since=None, seen=time.time(), via="ssh",
+                             up_since=v.get("up_since") or time.time())
             after = chain_status(v, cc)
         if before != after:
             log(f"chain: \"{name}\" {before} -> {after}")
@@ -11317,7 +11333,18 @@ def chain_view():
     cc = chain_cfg()
     with _chain_lock:
         return {n: {"status": chain_status(v, cc), "data": v.get("data"), "last": v.get("last") or {}, "since": v.get("since"),
-                    "machine": v.get("machine")} for n, v in _chain.items()}
+                    "machine": v.get("machine"), "up_since": v.get("up_since")} for n, v in _chain.items()}
+
+
+def _chain_stable(v, now=None):
+    """Owner 20.11 21:50: up for chain 'stable_seconds' (default 60) without a miss. No up_since in the view (old shape): stable."""
+    if "up_since" not in v:
+        return True
+    return bool(v.get("up_since")) and (now or time.time()) - v["up_since"] >= float(chain_cfg()["stable_seconds"])
+
+
+def _recently_unfenced(pn, now=None):
+    return (now or time.time()) - _chain_recent_unfence.get(pn, 0) < float(chain_cfg()["fence_backoff_seconds"])
 
 
 def peer_fetch_chain(peer, name):
@@ -11370,10 +11397,15 @@ def chain_take_blocker(fc, host, view, now=None, passed_from="", fenced=()):
         return f"\"{host}\" זמין", None
     if hs == "unknown":
         return f"\"{host}\" עוד לא נבדק", None
-    planned_here = handover_read().get("to") == fc.get("self_name")  # owner 20.11 12:01: a planned hand-over waits for nothing
-    if hs == "agent_down" and host not in fenced:
+    planned = handover_read().get("to")
+    planned_here = planned == fc.get("self_name")  # owner 20.11 12:01: a planned hand-over waits for nothing
+    # owner 20.11 21:50: a host that is away on purpose (planned hand-over) shows "agent_down" (its heartbeat is reset). Only the
+    # PC the bridge was handed to fences it; the others leave it alone (fence, "someone holds the work", unfence looped every 2 s)
+    if hs == "agent_down" and host not in fenced and not (planned and not planned_here):
         if now - (hv.get("since") or now) < grace and not planned_here:
             return f"\"{host}\" מפעיל מחדש את הסוכן (המחשב עונה)", None
+        if _recently_unfenced(host, now):
+            return f"\"{host}\": הסוכן לא עונה והגשר שלו נעצר לאחרונה ובוטל; ממתין", None
         return f"\"{host}\": הסוכן לא עונה {int(now - hv['since'])} שנ' והמחשב כן", host
     for pn, v in view.items():
         if pn == host or pn == passed_from or pn in fenced:
@@ -11390,6 +11422,8 @@ def chain_take_blocker(fc, host, view, now=None, passed_from="", fenced=()):
             known = bool(v.get("last"))
             if known and now - (v.get("since") or now) < grace:
                 return f"\"{pn}\" החזיק ומפעיל מחדש את הסוכן", None
+            if _recently_unfenced(pn, now):
+                return f"\"{pn}\": הגשר שלו נעצר לאחרונה ובוטל; ממתין", None
             return f"\"{pn}\": הסוכן לא עונה והמחשב כן; אולי הגשר שלו מחובר", pn
     return "", None
 
@@ -11414,6 +11448,8 @@ def chain_handback_target(fc, host, view):
         v = view.get(pn) or {}
         if v.get("status") != "up":
             continue
+        if not _chain_stable(v):
+            continue  # owner 20.11 21:50: back for less than stable_seconds: the holder keeps the bridge
         d = v.get("data") or {}
         lease = d.get("lease") or {}
         if not lease.get("mode"):
@@ -11536,7 +11572,9 @@ def chain_backup_step(fc, host, st, view, now=None):
         fenced.add(fence)
     if why and fenced:
         for pn in fenced:  # owner 19.11: fenced and then not taking over left NOBODY connected for 20 minutes
-            peer_unfence(_fo_peer(pn), pn, why)
+            if not handover_read().get("to"):  # away by a planned hand-over: must stay fenced, its bridge would clash with the holder
+                peer_unfence(_fo_peer(pn), pn, why)
+            _chain_recent_unfence[pn] = time.time()
     if why:
         _chain_note_wait(host, why)
         if unfenced and kv_get(f"fo_chain_fence_said:{host}") != unfenced:
@@ -11560,7 +11598,9 @@ def chain_backup_step(fc, host, st, view, now=None):
         f"{secs:.1f}s after the first missed check" + (f" (handed by {passed})" if passed else ""))
     if not took:
         for pn in fenced:
-            peer_unfence(_fo_peer(pn), pn, msg)
+            if not handover_read().get("to"):
+                peer_unfence(_fo_peer(pn), pn, msg)
+            _chain_recent_unfence[pn] = time.time()
         _chain_backoff[host] = time.time() + 30
         _chain_note_wait(host, msg)
         if kv_get(f"fo_chain_fail_said:{host}") != msg:
@@ -11663,6 +11703,36 @@ def chain_host_step(view, now=None):
     lease_grant("no PC in the chain holds the identity")
 
 
+def handover_expire(view, now=None):
+    """Owner 20.11 21:50: a planned hand-over (store/handover.json) whose target did not take the bridge within handover_ttl_seconds
+    is moved aside (not deleted) so the desktop returns and the normal chain order applies; at 21:21 a relay hop to the laptop was
+    never taken and the file stayed on all four PCs. A hand-over the target DID take (the owner parks the bridge there) stays."""
+    ho = handover_read()
+    to = ho.get("to")
+    if not to:
+        return False
+    try:
+        age = (dt.datetime.now() - dt.datetime.fromisoformat(ho.get("at") or "")).total_seconds()
+    except ValueError:
+        age = float("inf")
+    if age < float(chain_cfg()["handover_ttl_seconds"]):
+        return False
+    fc = failover_cfg()
+    if (fc and to == fc.get("self_name")) or (not fc and to not in view):
+        holds = lease_held()
+    else:
+        v = view.get(to) or {}
+        holds = v.get("status") == "up" and _alive_holds_lease(v.get("data"))
+    if holds:
+        return False
+    try:
+        os.replace(HANDOVER_FILE, HANDOVER_FILE + ".expired-" + time.strftime("%Y%m%d-%H%M%S"))
+    except OSError:
+        return False
+    log(f"hand-over to \"{to}\" expired: not taken within {int(age)}s, file moved aside")
+    return True
+
+
 def chain_decide(view=None, now=None):
     """One decision round (chain_watch: every second, and at once when a peer's status changes)."""
     if not chain_active():
@@ -11670,6 +11740,7 @@ def chain_decide(view=None, now=None):
     view = chain_view() if view is None else view
     with _take_lock:
         fc = failover_cfg()
+        handover_expire(view, now)
         if not fc:
             return chain_host_step(view, now)
         host = fc["for"]
