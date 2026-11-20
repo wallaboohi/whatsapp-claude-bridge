@@ -75,3 +75,24 @@ def test_handover_request_file_runs_the_command_once(agent, monkeypatch, tmp_pat
     mod.handover_request_check()
     mod.handover_request_check()
     assert calls == ["סלון"] and not req.exists() and len(sent) == 1
+
+
+def test_backup_code_pull_never_restarts_by_itself(agent, monkeypatch, tmp_path):
+    """Owner 20.11 12:15: nobody restarts without his explicit order - new agent code on a backup waits for the relay."""
+    mod, _ = agent
+    import subprocess as sp
+    git = lambda cwd, *a: sp.run(["git", "-C", str(cwd), "-c", "user.email=t@t", "-c", "user.name=t", *a], capture_output=True, text=True)
+    host, backup = tmp_path / "host", tmp_path / "backup"
+    (host / "agent").mkdir(parents=True)
+    git(host, "init", "-q", "-b", "master")
+    (host / "agent" / "agent.py").write_text("v1", encoding="utf-8")
+    git(host, "add", ".")
+    git(host, "commit", "-q", "-m", "1")
+    sp.run(["git", "clone", "-q", str(host), str(backup)], capture_output=True)
+    (host / "agent" / "agent.py").write_text("v2", encoding="utf-8")
+    git(host, "commit", "-q", "-am", "2")
+    monkeypatch.setattr(mod, "RESTART_FILE", str(tmp_path / "restart.request"))
+    fc = {"mirror": [], "git_pull": [{"path": str(backup), "remote": str(host), "branch": "master", "restart": True}]}
+    assert mod.failover_code_pull(fc) == []
+    assert (backup / "agent" / "agent.py").read_text(encoding="utf-8") == "v2"
+    assert not (tmp_path / "restart.request").exists() and mod.kv_get("code_waiting")

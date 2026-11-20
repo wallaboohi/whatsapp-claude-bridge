@@ -9488,8 +9488,9 @@ def failover_code_pull(fc):
             log("failover code pull:", path, g("rev-parse", "--short", "HEAD").stdout.strip())
             changed = g("diff", "--name-only", before, "HEAD").stdout.split()
             if spec.get("restart") and any(f.startswith(("agent/", "dash/")) and f.endswith(".py") for f in changed):
-                with open(RESTART_FILE, "w", encoding="utf-8") as f:
-                    f.write("קוד חדש של הגשר נמשך מה-hub לגיבוי; עולה מחדש כדי שהגיבוי יריץ אותו")
+                # owner 20.11 12:15: nobody restarts without his explicit order - the new code waits for the ordered relay
+                kv_set("code_waiting", g("rev-parse", "--short", "HEAD").stdout.strip())
+                log("failover code pull: new agent code waits for the owner's restart order (no restart)")
     return problems
 
 
