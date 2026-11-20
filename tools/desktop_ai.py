@@ -378,6 +378,141 @@ def _new_part(before, after, question):
     return "\n".join(lines).strip()
 
 
+# ---------- Google Antigravity: its own local agent API, no typing on the screen (owner 19.11: "חבר את אנטי גרויטי") ----------
+# Antigravity runs a local agent server (language_server.exe) while the app is open; it writes ~/.gemini/antigravity/daemon/hub_<port>.json
+# ({"pid", "httpPort", "csrfToken"}). Its own CLI `language_server.exe agentapi new-conversation` (env ANTIGRAVITY_LS_ADDRESS /
+# ANTIGRAVITY_CSRF_TOKEN) starts an agent conversation and returns its id at once; the answer is read from the server's Connect-JSON
+# endpoint GetCascadeTrajectory (the last PLANNER_RESPONSE once the run is no longer RUNNING/BUSY). Uses the account signed in to
+# the app; the conversation shows up in the app's list like any other.
+API_APPS = {"antigravity"}
+AGY_HOME = os.path.join(os.path.expanduser("~"), ".gemini", "antigravity")
+AGY_EXE = os.path.join(os.environ.get("LOCALAPPDATA") or "", "Programs", "antigravity", "Antigravity.exe")
+AGY_LS = os.path.join(os.path.dirname(AGY_EXE), "resources", "bin", "language_server.exe")
+AGY_SVC = "/exa.language_server_pb.LanguageServerService/"
+
+
+def _pid_alive(pid):
+    import ctypes
+    k = ctypes.windll.kernel32
+    h = k.OpenProcess(0x1000, False, int(pid or 0))  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return False
+    try:
+        code = ctypes.c_ulong()
+        return bool(k.GetExitCodeProcess(h, ctypes.byref(code))) and code.value == 259  # STILL_ACTIVE
+    finally:
+        k.CloseHandle(h)
+
+
+def agy_rpc(hub, method, body, timeout=20):
+    import urllib.request
+    req = urllib.request.Request(f"http://127.0.0.1:{hub['httpPort']}{AGY_SVC}{method}", data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json", "x-codeium-csrf-token": hub.get("csrfToken") or ""})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8") or "{}")
+
+
+def agy_hub():
+    """The live Antigravity agent server (newest hub file whose process runs and whose port answers), or None. Old hub files of
+    earlier runs stay in the folder (desktop 19.11: three of them), so every one is checked."""
+    d = os.path.join(AGY_HOME, "daemon")
+    try:
+        files = sorted((os.path.join(d, f) for f in os.listdir(d) if f.startswith("hub_") and f.endswith(".json")),
+                       key=os.path.getmtime, reverse=True)
+    except OSError:
+        return None
+    for f in files:
+        try:
+            hub = json.load(open(f, encoding="utf-8"))
+            if hub.get("httpPort") and _pid_alive(hub.get("pid")):
+                agy_rpc(hub, "GetAuthStatus", {}, timeout=5)
+                return hub
+        except Exception:
+            continue
+    return None
+
+
+def agy_signed_in(hub):
+    try:
+        return bool((agy_rpc(hub, "GetAuthStatus", {}).get("authResult") or {}).get("hasValidAuth"))
+    except Exception:
+        return False
+
+
+def agy_start():
+    """Open the Antigravity app (its agent server starts with it) and wait for the server. Needs the user's desktop session."""
+    if not os.path.exists(AGY_EXE):
+        return None
+    subprocess.Popen([AGY_EXE], cwd=os.path.dirname(AGY_EXE))
+    while True:
+        time.sleep(2)
+        hub = agy_hub()
+        if hub:
+            return hub
+
+
+def agy_answer(traj):
+    """(done, answer, error) from a GetCascadeTrajectory reply."""
+    t = traj.get("trajectory") or {}
+    steps = t.get("steps") or []
+    busy = traj.get("status") in ("CASCADE_RUN_STATUS_RUNNING", "CASCADE_RUN_STATUS_BUSY", "CASCADE_RUN_STATUS_CANCELING")
+    answer, err, waiting = "", "", False
+    for s in steps:
+        if s.get("type") == "CORTEX_STEP_TYPE_PLANNER_RESPONSE":
+            pr = s.get("plannerResponse") or {}
+            txt = (pr.get("modifiedResponse") or pr.get("response") or "").strip()
+            if txt:
+                answer = txt
+        if s.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE" or s.get("status") == "CORTEX_STEP_STATUS_ERROR":
+            em = s.get("errorMessage") or {}
+            err = str(em.get("errorMessage") or em.get("userErrorMessage") or em or s.get("status"))[:300]
+        if s.get("status") == "CORTEX_STEP_STATUS_WAITING":
+            waiting = True
+    if busy or not steps:
+        return False, answer, ""
+    if waiting and not answer:
+        return False, "", "האייג'נט של Antigravity מחכה לאישור פעולה בחלון האפליקציה"
+    return True, answer, err
+
+
+def cmd_has_api(key):
+    hub = agy_hub()
+    installed = bool(hub) or os.path.exists(AGY_EXE)
+    if hub and not agy_signed_in(hub):
+        return out(ok=False, app=key, running=True, installed=True, error="Antigravity פתוחה אבל לא מחוברת לחשבון גוגל")
+    out(ok=installed, app=key, running=bool(hub), installed=installed,
+        **({} if installed else {"error": "Antigravity לא מותקנת במחשב הזה"}))
+
+
+def cmd_ask_api(key, question, timeout=None, model="flash"):
+    hub = agy_hub() or agy_start()
+    if not hub:
+        return out(ok=False, app=key, error="השרת המקומי של Antigravity לא עלה (האפליקציה לא מותקנת או לא נפתחה)")
+    if not agy_signed_in(hub):
+        return out(ok=False, app=key, error="Antigravity לא מחוברת לחשבון גוגל: צריך להיכנס פעם אחת בחלון האפליקציה")
+    env = dict(os.environ, ANTIGRAVITY_LS_ADDRESS=f"127.0.0.1:{hub['httpPort']}", ANTIGRAVITY_CSRF_TOKEN=hub.get("csrfToken") or "")
+    title = "WhatsApp · " + re.sub(r"\s+", " ", question.strip())[:40]
+    r = subprocess.run([AGY_LS, "agentapi", "new-conversation", f"--model={model}", f"--title={title}", question], env=env,
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
+    try:
+        cid = json.loads(r.stdout or "{}")["response"]["newConversation"]["conversationId"]
+    except (ValueError, KeyError, TypeError):
+        return out(ok=False, app=key, error="agentapi: " + ((r.stdout or "") + (r.stderr or "")).strip()[-300:])
+    t0, answer, err = time.time(), "", ""
+    while True:
+        time.sleep(2)
+        try:
+            done, answer, err = agy_answer(agy_rpc(hub, "GetCascadeTrajectory", {"cascadeId": cid}))
+        except Exception as e:
+            err = f"{type(e).__name__}: {e}"
+            continue
+        if done:
+            break
+    if not answer:
+        return out(ok=False, app=key, error=err or "Antigravity סיימה בלי תשובה", conversation=cid)
+    out(ok=True, app=key, answer=answer, seconds=int(time.time() - t0), how="api", conversation=cid)
+
+
 def via_task(argv):
     """Re-run in the interactive user session (from ssh) and relay the output."""
     # the ssh session's %TEMP% is not reachable the same way from the desktop session (desktop 18.11): a shared folder
@@ -439,7 +574,26 @@ def main(argv):
         sys.stderr = sys.stdout
         argv = argv[:i] + argv[i + 2:]
     if "--via-task" in argv:
-        return via_task([a for a in argv if a != "--via-task"])
+        rest = [a for a in argv if a != "--via-task"]
+        # an app with a local API needs the desktop session only to open its window: with its server up, run right here (also over ssh)
+        if not (len(rest) >= 2 and rest[1].lower() in API_APPS and (rest[0] == "has" or agy_hub())):
+            return via_task(rest)
+        argv = rest
+    if argv and argv[0] in ("has", "ask") and len(argv) >= 2 and argv[1].lower() in API_APPS:
+        key = argv[1].lower()
+        if argv[0] == "has":
+            return cmd_has_api(key)
+        if len(argv) < 3:
+            return print(__doc__)
+        q = open(argv[2], encoding="utf-8").read()
+        if os.path.basename(argv[2]).startswith("q_") and os.path.basename(os.path.dirname(argv[2])) == "desktop_ai":
+            try:
+                os.remove(argv[2])
+            except OSError:
+                pass
+        to = int(argv[argv.index("--timeout") + 1]) if "--timeout" in argv else 180
+        model = argv[argv.index("--model") + 1] if "--model" in argv else "flash"
+        return cmd_ask_api(key, q, to, model)
     if argv and argv[0] == "tree":
         return cmd_tree(argv[1].lower())
     if argv and argv[0] == "wake" and len(argv) >= 2:  # (test) start the app again with its page tree on

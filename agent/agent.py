@@ -4814,10 +4814,11 @@ def _desktop_ai_cmds(p, args):
 def desktop_ai_call(p, args, stdin_text=None, timeout=240):
     """desktop_ai.py on the app's PC: its JSON line as a dict ({"ok": False, "error", "unreachable"} when the PC is not reached)."""
     last = {"ok": False, "error": "אין דרך להגיע למחשב של האפליקציה (חסר ssh בהגדרה)", "unreachable": True}
+    call_timeout = None if p.get("app") == "antigravity" and args and args[0] == "ask" else timeout
     for cmd in _desktop_ai_cmds(p, args):
         try:
             r = subprocess.run(cmd, input=stdin_text if stdin_text is not None else "", capture_output=True, text=True, encoding="utf-8",
-                               errors="replace", timeout=timeout, creationflags=NO_WINDOW)
+                               errors="replace", timeout=call_timeout, creationflags=NO_WINDOW)
         except subprocess.TimeoutExpired:
             return {"ok": False, "error": f"האפליקציה לא סיימה לענות תוך {timeout} שניות"}
         except OSError as e:
@@ -4857,12 +4858,14 @@ def desktop_app_ready(p):
 def _run_desktop_app(name, p, prompt, chat, on_stage, timeout):
     """Owner 18.11: the owner's message is typed into an AI desktop app (Claude / ChatGPT / Copilot ... app) on one of his computers and
     the app's answer comes back. No bridge tools there: only the message (and the Hebrew rule) is sent. ProviderDown when it fails."""
-    wait = int(min(timeout or 300, p.get("timeout") or 240))
+    unbounded = p.get("app") == "antigravity"
+    wait = 0 if unbounded else int(min(timeout or 300, p.get("timeout") or 240))
     text = (prompt or "").strip()[-8000:] + HEBREW_TAIL
     if on_stage:
         on_stage(f"🧠 {p.get('short') or name} חושב", "")
     t0 = time.time()
-    d = desktop_ai_call(p, ["ask", p.get("app") or "", "-", "--timeout", str(wait)], stdin_text=text, timeout=wait + 150)
+    d = desktop_ai_call(p, ["ask", p.get("app") or "", "-", "--timeout", str(wait)], stdin_text=text,
+                        timeout=None if unbounded else wait + 150)
     ans = (d.get("answer") or "").strip() if d.get("ok") else ""
     if not ans:
         _desktop_cache.pop((p.get("host"), p.get("app")), None)
@@ -6046,19 +6049,56 @@ def speaker_line(short, model=None, location="", bold=True, auto=False):
     return ("🗣️ *מדבר:* " if bold else "🗣️ מדבר: ") + " · ".join(parts)
 
 
-def status_ai_info(model, chat, use_run_state=False):
-    """Return only the selected provider's real model and execution location for a progress message."""
-    name, pm = active_provider(chat)
-    if name == "auto" or (use_run_state and getattr(_ctx, "failover_used", False)):
-        name = getattr(_ctx, "provider_used", None) or (auto_pick() if name == "auto" else None) or "claude"
-        pm = None
+def run_provider(chat, use_run_state=False):
+    """Return the selected provider, pinned model, and the provider that actually handled this run."""
+    chosen, pinned = active_provider(chat)
+    used = getattr(_ctx, "provider_used", None)
+    if used in providers() and (use_run_state or chosen == "auto"):
+        return chosen, pinned, used
+    if chosen == "auto":
+        return chosen, None, auto_pick() or "claude"
+    return chosen, pinned, chosen
+
+
+def run_model(name, chosen, pinned, model, use_run_state=False):
+    """Return the model used by the selected or fallback provider, without borrowing another provider's model name."""
+    reported = getattr(_ctx, "model_reported", None) if use_run_state else None
+    if reported:
+        return reported
     p = providers().get(name) or {}
-    actual_model = pm or p.get("model")
-    if p.get("kind") not in ("cli", "opencode", "desktop-app"):
-        actual_model = actual_model or model
+    if name == "claude" or p.get("kind") in ("claude", "claude-remote", "anthropic-key"):
+        return model or None
+    if name == chosen and pinned:
+        return pinned
+    if use_run_state and getattr(_ctx, "provider_used", None) == name:
+        actual = getattr(_ctx, "force_model", None) or getattr(_ctx, "auto_model_used", None)
+        if actual:
+            return actual
+    return p.get("model") or None
+
+
+def switch_note(chosen, used):
+    """Explain an automatic account or provider switch in the status line."""
+    switched = getattr(_ctx, "account_switched", None)
+    if switched and switched[1] == used:
+        return f"_(מעבר אוטומטי מחשבון {prov_short(switched[0])})_"
+    if used != chosen and chosen != "auto" and getattr(_ctx, "failover_used", False):
+        return f"_({getattr(_ctx, 'failover_why', '') or 'הספק שנבחר לא זמין'}, מעבר אוטומטי)_"
+    return ""
+
+
+def status_ai_info(model, chat, use_run_state=False):
+    """Return the provider, real model, and execution location for a progress message."""
+    chosen, pinned, name = run_provider(chat, use_run_state)
+    p = providers().get(name) or {}
+    actual_model = run_model(name, chosen, pinned, model, use_run_state)
     kind, place = where_of(name, actual_model)
     short = AI_HE.get(name) or p.get("short") or name
-    location = f"🏠 {place}" if kind == "local" else "☁️ ענן"
+    note = switch_note(chosen, name) if use_run_state else ""
+    if note:
+        short = f"{short} {note}"
+    via = p.get("ssh") or (p.get("cli") or {}).get("ssh")
+    location = f"🏠 {place}" if kind == "local" else "☁️ ענן" + (f", דרך {pc_he(str(via).split('@')[-1])}" if via else "")
     return short, actual_model, location
 
 
@@ -7040,11 +7080,15 @@ class StatusMsg:
         note_progress(self.chat)
         text = f"{st} · {detail}" if detail else st
         self.stage = text
-        self.ai_short, self.ai_model, self.ai_location = status_ai_info(self.model, self.chat, use_run_state=True)
+        self.refresh_ai()
         self._react_stage(st)
         if not self.steps or self.steps[-1]["text"] != text:
             self.steps.append({"at": dt.datetime.now().isoformat(timespec="seconds"), "ts": time.time(), "text": text})
             self._save(False)
+
+    def refresh_ai(self):
+        """Keep the route row aligned with the provider that actually handled the current run."""
+        self.ai_short, self.ai_model, self.ai_location = status_ai_info(self.model, self.chat, use_run_state=True)
 
     def _react_stage(self, st):
         """The stage's icon as a reaction on the owner's message: progress visible right on it (at most every 4 s)."""
@@ -7157,6 +7201,7 @@ class StatusMsg:
         """Owner 17.11 15:15 (third request): ONE message for the whole exchange. The status message gets its last edit with the
         steps AND the answer pasted at its end, instead of a second message. True when the answer went in. WhatsApp allows edits for
         about 15 minutes and a limited length; on failure the caller sends the answer separately."""
+        self.refresh_ai()
         self.finish()
         if self.mid and self.wa:
             base = float(CFG.get("status_edit_seconds", 10))
