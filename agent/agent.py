@@ -5374,6 +5374,27 @@ def session_active(chat, raw=""):
     return bool(kv_get(K("session_id", chat or PRIMARY))) and not session_rotates(chat or PRIMARY, raw) and not CFG.get("fresh_sessions")
 
 
+def _ctx_token(chosen, sid):
+    """Owner 20.11 10:55: what identifies the AI's current session, for every provider alike. None = no continuity (a CLI that starts fresh each run)."""
+    kind = (providers().get(chosen) or {}).get("kind")
+    if kind == "desktop-app":
+        return "d:" + dt.date.today().isoformat()
+    if kind == "cli":
+        return None
+    return sid or None
+
+
+def ctx_select(chat, chosen, sid, blocks):
+    """Owner 20.11 10:55: the standing context blocks (open asks, learned rules) go in full only to a NEW session of the chosen AI;
+    inside the session only a block that changed is sent again. Returns (texts to send, hashes of all blocks, session token)."""
+    import hashlib
+    hashes = {n: hashlib.sha1(t.encode("utf-8")).hexdigest()[:12] for n, t in blocks.items()}
+    tok = _ctx_token(chosen, sid)
+    if chosen == "auto" or tok is None or kv_get(K("ctx_tok", chat)) != f"{chosen}:{tok}":
+        return dict(blocks), hashes, tok
+    return {n: t for n, t in blocks.items() if kv_get(K("ctxh:" + n, chat)) != hashes[n]}, hashes, tok
+
+
 def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=None, raw=None, tools=None, max_budget=None,
            budget_check=False):
     """Run Claude Code headless in HOME. Each conversation (group / local chat) has its own session, resumed until it is
@@ -5431,6 +5452,13 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
         # id stayed and every following message wrote a hand-off again (12 in 5 minutes). The rotated session is closed here, once.
         kv_set(K("session_id" if not remote_sess else "rsession:" + chosen, chat), "")
         kv_set(K("session_runs", chat), "0")
+    ctx_blocks = getattr(_ctx, "ctx_blocks", None) or {}
+    _ctx.ctx_blocks = None
+    ctx_hashes, ctx_tok = {}, None
+    if ctx_blocks:
+        send, ctx_hashes, ctx_tok = ctx_select(chat, chosen, sid if session else None, ctx_blocks)
+        if send:
+            prompt += "\n\n" + "\n\n".join(send.values())
     # owner 16.11: a short message on "auto" goes to a fast free provider; the Claude subscription is kept for real work
     light = bool(CFG.get("light_routing", True)) and chosen == "auto" and is_light_task(raw if raw is not None else prompt)
     _ctx.task_text = raw if raw is not None else prompt
@@ -5487,6 +5515,11 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
         kv_set(K("session_runs", chat), str(int(kv_get(K("session_runs", chat)) or 0) + 1))
         if model and getattr(_ctx, "auto_pick", False):
             kv_set(K("session_model", chat), model)  # automatic routing stays on this model for the rest of the session
+    if ctx_hashes and res.get("result") and chosen != "auto" and pu == chosen and not getattr(_ctx, "failover_used", False):
+        tok_after = ctx_tok if (providers().get(chosen) or {}).get("kind") in ("desktop-app", "cli") else (res.get("session_id") or ctx_tok)
+        kv_set(K("ctx_tok", chat), f"{chosen}:{tok_after}" if tok_after else "")
+        for n, h in ctx_hashes.items():
+            kv_set(K("ctxh:" + n, chat), h)
     return res.get("result")
 
 
@@ -7407,7 +7440,7 @@ def run_command(row):
     text = re.sub(r"^(\s*!*)\s*/\s+", r"\1/", text or "")  # "/ מודל" == "/מודל" for every slash command (owner 09.11)
     if src == "pc":
         text = pc_voice_to_text(text)
-    _ctx.chat, _ctx.src, _ctx.sync, _ctx.auto_pick = chat, src, sync, False
+    _ctx.chat, _ctx.src, _ctx.sync, _ctx.auto_pick, _ctx.ctx_blocks = chat, src, sync, False, None
     _ctx.automation_cmd = str(mid or "").startswith("att-")  # owner 15.11: Dolev's / Zion's messages (queued by the automation) may go to any free AI
     g = load_groups().get(chat) or {}
     parked = False
@@ -7486,6 +7519,7 @@ def run_command(row):
         hints = None if guest else dictionary_hints(body)
         if hints:
             prompt += "\n\n" + hints
+        ctx_blocks = {}  # owner 20.11 10:55: standing context, sent once per AI session (claude() decides), not with every message
         if not guest and not getattr(_ctx, "automation_cmd", False):  # owner 19.11 21:14: every request is kept until it is done
             try:
                 ask_id = asks.record(chat, mid, when, raw_text(body), path=AGENT_DB)
@@ -7494,13 +7528,17 @@ def run_command(row):
                 if ask_id:
                     prompt += f"\n\n(ההודעה הזו נשמרה כנושא פתוח #{ask_id}; כשתסיים אותה סגור אותו כמתואר למטה.)"
                 if block:
-                    prompt += "\n\n" + block
+                    ctx_blocks["asks"] = block
             except Exception as e:
                 log("owner asks failed", e)
         if not guest:  # owner 17.11 07:54: learned preferences + the order to record a new correction
-            for extra in (learned_hints(), correction_prompt(raw_text(body))):
-                if extra:
-                    prompt += "\n\n" + extra
+            hints_txt = learned_hints()
+            if hints_txt:
+                ctx_blocks["learned"] = hints_txt
+            extra = correction_prompt(raw_text(body))
+            if extra:
+                prompt += "\n\n" + extra
+        _ctx.ctx_blocks = ctx_blocks
         if src == "wa" and came_back_from_pc(chat, cid):
             prompt = (T_BACK_HE if LANG == "he" else T_BACK_EN) + prompt
         cut = kv_get(f"cut:{cid}")

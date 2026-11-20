@@ -63,3 +63,26 @@ def test_the_gap_note_brings_claude_up_to_date_after_a_failover(agent, monkeypat
     assert mod.kv_get(mod.K("gap", c)) == ""  # told once
     mod.claude("עוד הודעה", chat=c, on_stage=lambda *a: None)
     assert "בינה או חשבון אחרים" not in seen[1]
+
+
+def test_standing_context_goes_once_per_session_then_only_what_changed(agent, monkeypatch):
+    """Owner 20.11 10:55: the same rule for every provider: full context in a new session, later only a changed block."""
+    mod, _ = agent
+    store = {}
+    monkeypatch.setattr(mod, "kv_get", lambda k: store.get(k, ""))
+    monkeypatch.setattr(mod, "kv_set", lambda k, v: store.__setitem__(k, v))
+    monkeypatch.setattr(mod, "providers", lambda: {"claude": {"kind": "claude"}, "gemini": {"kind": "cli"}, "app": {"kind": "desktop-app"}})
+    c = "chat@g.us"
+    blocks = {"asks": "A1", "learned": "L1"}
+    send, hashes, tok = mod.ctx_select(c, "claude", None, blocks)
+    assert send == blocks and tok is None  # no session yet: everything
+    store[mod.K("ctx_tok", c)] = "claude:sid1"
+    for n, h in hashes.items():
+        store[mod.K("ctxh:" + n, c)] = h
+    assert mod.ctx_select(c, "claude", "sid1", blocks)[0] == {}  # same session, nothing changed
+    assert mod.ctx_select(c, "claude", "sid1", {"asks": "A2", "learned": "L1"})[0] == {"asks": "A2"}  # only the changed block
+    assert mod.ctx_select(c, "claude", "sid2", blocks)[0] == blocks  # new session: everything again
+    assert mod.ctx_select(c, "gemini", None, blocks)[0] == blocks  # a CLI without continuity always gets it
+    assert mod.ctx_select(c, "auto", "sid1", blocks)[0] == blocks  # provider unknown: safe side
+    store[mod.K("ctx_tok", c)] = "app:" + mod._ctx_token("app", None)
+    assert mod.ctx_select(c, "app", None, blocks)[0] == {}  # a desktop app keeps its window session for the day
