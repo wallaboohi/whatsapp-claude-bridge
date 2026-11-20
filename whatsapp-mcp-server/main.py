@@ -16,7 +16,14 @@ from whatsapp import (
 )
 
 # Initialize FastMCP server
-mcp = FastMCP("whatsapp")
+from fastmcp.server.middleware.rate_limiting import TokenBucketRateLimiter
+
+# Increase token bucket to allow more burst requests (30) and refill faster (20 per second)
+# This mitigates 429 errors caused by FastMCP's default rate‑limiting.
+mcp = FastMCP(
+    "whatsapp",
+    middleware=[TokenBucketRateLimiter(capacity=30, refill_rate=20)],
+)
 
 @mcp.tool()
 def search_contacts(query: str) -> List[Dict[str, Any]]:
