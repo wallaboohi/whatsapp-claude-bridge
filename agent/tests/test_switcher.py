@@ -226,3 +226,51 @@ def test_a_pc_without_a_policy_is_neither_ready_nor_a_handback_target(agent, mon
     fc = {"for": "נייח", "self_name": "סלון", "defer_to": ["חדר שינה"]}
     view = {"נייח": {"status": "up", "data": {**bad, "chain": {"for": "נייח"}}, "last": {}}}
     assert mod.chain_handback_target(fc, "נייח", view) == "", "the bridge never goes to a PC without a send policy"
+
+
+# ---- owner 21.11 00:26: the live round failed. The host's agent restarted, this backup covered the restart (work, no identity), the
+# host then released the identity for the planned hand-over, and nobody took it: the bridge sat offline for ~5 minutes.
+
+def _holder_env(mod, monkeypatch, tmp_path, planned="חדר שינה", holding=False):
+    _env(mod, monkeypatch, tmp_path, {"to": planned, "at": "2026-11-21T00:25:55", "by": "YB-PC-HW"} if planned else None)
+    monkeypatch.setattr(mod, "lease_held", lambda: False)
+    monkeypatch.setattr(mod, "lease_replaced", lambda *a: False)
+    monkeypatch.setattr(mod, "kv_get", lambda k, d=None: ("2026-11-21T00:25:53" if (holding and k == "session_taken_at") else ""))
+    monkeypatch.setattr(mod, "kv_set", lambda *a: None)
+    taken = []
+    monkeypatch.setattr(mod, "session_take", lambda why: taken.append(why) or "ok")
+    return taken
+
+
+HOLDER_FC = {"for": "נייח", "self_name": "חדר שינה", "defer_to": []}
+HOST_AWAY = {"נייח": {"status": "agent_down", "data": None, "last": {}, "since": 1.0}}
+
+
+def test_a_planned_handover_takes_the_identity_when_the_work_is_already_here(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    taken = _holder_env(mod, monkeypatch, tmp_path)
+    assert mod.chain_holder_step(HOLDER_FC, "נייח", {"state": "active"}, HOST_AWAY) is True
+    assert len(taken) == 1, "nobody holds the identity and it was handed to this PC: take it"
+
+
+def test_the_identity_is_not_taken_while_someone_still_holds_it(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    taken = _holder_env(mod, monkeypatch, tmp_path)
+    view = {"נייח": {"status": "up", "data": {"lease": {"held": True}}, "last": {}}}
+    mod.chain_holder_step(HOLDER_FC, "נייח", {"state": "active"}, view)
+    assert taken == [], "never two connections: the desktop has not released yet"
+
+
+def test_no_take_when_the_handover_names_another_pc_or_none(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    for planned in ("סלון", None):
+        taken = _holder_env(mod, monkeypatch, tmp_path, planned=planned)
+        mod.chain_holder_step(HOLDER_FC, "נייח", {"state": "active"}, HOST_AWAY)
+        assert taken == [], planned
+
+
+def test_a_pc_that_already_took_the_identity_is_left_alone(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    taken = _holder_env(mod, monkeypatch, tmp_path, holding=True)
+    mod.chain_holder_step(HOLDER_FC, "נייח", {"state": "active"}, HOST_AWAY)
+    assert taken == []

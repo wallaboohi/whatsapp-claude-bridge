@@ -164,6 +164,32 @@ def wait_stable(name, hub, seconds=60, timeout=420):
     return False, f"לא היה פעיל ברציפות {seconds} שנ' תוך {timeout} שנ' ({st.get('lease') or st.get('error')})"
 
 
+ABORT_HANDOVER = r"""
+import os, time
+d = "C:/Users/walla/whatsapp-mcp/whatsapp-bridge/store/handover.json"
+if os.path.exists(d):
+    os.replace(d, d + ".aborted-" + time.strftime("%Y%m%d-%H%M%S"))
+print("@@OK@@")
+"""
+
+
+def recover_desktop(why):
+    """Owner 21.11 00:30 (the bridge sat offline for ~5 minutes after a failed hop): when a hop fails and nobody holds the identity,
+    the planned hand-over is cancelled on every PC (the file is moved aside, never deleted) and the desktop - the default holder -
+    resumes and takes the bridge back. Returns True when the desktop holds again."""
+    if holders():
+        return False
+    log("recover: nobody holds the identity after", why, "- cancelling the hand-over, the desktop returns")
+    for n in ORDER[1:] + ORDER[:1]:  # the desktop last: its agent waits "away" while the file exists
+        try:
+            run_py(n, ABORT_HANDOVER, 60)
+        except Exception as e:
+            log("recover: could not reach", n, e)
+    ok = wait_holding(ORDER[0], 3)
+    log("recover: desktop holds again" if ok else "recover: the desktop did NOT take the bridge back")
+    return ok
+
+
 def plan_hops(auto):
     """Owner 20.11 22:10. Ordered restart (the owner's approval): the full live round desktop -> bedroom -> living room -> laptop ->
     desktop, so every planned restart validates the whole chain. Nightly (--auto): ONE backup (bedroom) holds while the desktop
@@ -329,7 +355,9 @@ def main(a):
         secs = int(time.time() - t0)
         if not held:
             lines.append(f"❌ {giver} ← {taker}: לא קיבל את הגשר תוך {secs} שנ'")
-            report("⛔ *סבב ההפעלה מחדש נעצר.* בדוק איפה הגשר (/מצב). " + "\n".join(lines))
+            back = recover_desktop(f"{giver} -> {taker}")
+            lines.append("↩️ הנייח לקח את הגשר חזרה" if back else "⚠️ הגשר לא חזר לנייח אוטומטית: בדוק /מצב")
+            report("⛔ *סבב ההפעלה מחדש נעצר.* " + "\n".join(lines))
             return 1
         ok, why = tool_check(taker, True)
         now_holding = holders()  # live: exactly one connection on the identity after every hop

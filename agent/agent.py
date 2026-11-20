@@ -11673,6 +11673,20 @@ def chain_holder_step(fc, host, st, view, now=None):
     state = st.get("state") or "idle"
     holding = bool(kv_get("session_taken_at"))
     target = chain_handback_target(fc, host, view)
+    planned_here = handover_read().get("to") == fc.get("self_name")
+    if (not target and planned_here and state == "active" and not holding and not lease_held() and not lease_replaced(None)
+            and not any(v["status"] == "up" and _alive_holds_lease(v.get("data")) for v in view.values())):
+        # owner 21.11 00:26: the live round failed here. The host's agent restarted a moment before the planned hand-over, so this
+        # PC had already taken the host's WORK without the identity (restart cover: take_session=False), the host then released
+        # the identity, and nobody took it (only a PC that "holds" gets a grant): the bridge sat offline. A planned hand-over to
+        # this PC with the work already here takes the identity as soon as nobody holds it.
+        try:
+            log("chain: planned hand-over to this PC, the work is here and nobody holds the identity: taking it")
+            session_take("planned hand-over (the work was already here)")
+            kv_set("session_taken_at", kv_get("session_taken_at") or dt.datetime.now().isoformat(timespec="seconds"))
+        except Exception:
+            log("planned take failed", traceback.format_exc())
+        return True
     if not target:
         # a hand-over that failed half-way left the identity with nobody: take it back if no one else holds it
         if state == "active" and holding and not lease_held() and not lease_replaced(None) and not any(

@@ -154,3 +154,20 @@ def test_a_scratch_worktree_gitlink_is_not_dirty_code():
     assert ".claude/worktrees/" in r.STATE and 'not in l' in r.STATE
     import ast
     ast.parse(r.STATE)  # the snippet that runs on every PC must stay valid Python
+
+
+def test_a_failed_hop_brings_the_desktop_back(monkeypatch):
+    r = _relay()
+    ran = []
+    monkeypatch.setattr(r, "holders", lambda: [])
+    monkeypatch.setattr(r, "run_py", lambda n, code, timeout=0: ran.append(n) or (0, "@@OK@@"))
+    monkeypatch.setattr(r, "wait_holding", lambda n, m=5: n == "נייח")
+    assert r.recover_desktop("נייח -> חדר שינה") is True
+    assert ran[-1] == "נייח" and set(ran) == set(r.ORDER), "the hand-over file is moved aside on all four, the desktop last"
+
+
+def test_no_recovery_when_someone_holds_the_bridge(monkeypatch):
+    r = _relay()
+    monkeypatch.setattr(r, "holders", lambda: ["חדר שינה"])
+    monkeypatch.setattr(r, "run_py", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not touch anything")))
+    assert r.recover_desktop("x") is False
