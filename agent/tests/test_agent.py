@@ -3134,6 +3134,7 @@ def test_session_take_and_handback_roundtrip(agent, monkeypatch, tmp_path):
     monkeypatch.setitem(agent.CFG, "session_share", {"enabled": True})
     monkeypatch.setattr(agent, "_bridge_running", lambda: False)
     store = agent.STORE
+    open(agent.SEND_POLICY, "w", encoding="utf-8").write('{"control_group": "x@g.us"}')  # owner 20.11 23:45: no grant without a send policy
     _fake_session(os.path.join(store, "whatsapp.db"), "972500000000:51@s.whatsapp.net")  # the backup's own former device
     open(os.path.join(store, "whatsapp.db-wal"), "wb").write(b"stale")
     os.makedirs(agent.SESSION_COPY, exist_ok=True)
@@ -3249,6 +3250,7 @@ def test_session_resume_stands_by_when_successor_holds(agent, monkeypatch):
     loaded = []
     monkeypatch.setattr(agent, "load_plugins", lambda p=None: loaded.append(p))
     agent.failover_save("נייח", {"state": "active", "since": "2026-11-18T10:00:00"})
+    open(agent.SEND_POLICY, "w", encoding="utf-8").write('{"control_group": "x@g.us"}')  # owner 20.11 23:45: no grant without a send policy
     agent.lease_grant("old")
     agent.failover_resume()
     assert agent.failover_state("נייח").get("state") == "idle" and not loaded and not agent.lease_held()

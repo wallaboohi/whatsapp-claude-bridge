@@ -136,3 +136,14 @@ def test_old_code_or_a_bridge_not_waiting_never_counts_as_stable(monkeypatch):
     assert r.wait_stable("נייח", "abc1234", 60, timeout=120)[0] is False
     monkeypatch.setattr(r, "state", lambda n: {"running_head": "abc1234", "lease": "holding x"})
     assert r.wait_stable("נייח", "abc1234", 60, timeout=120)[0] is False
+
+
+def test_the_tool_check_fails_for_a_pc_without_a_send_policy(monkeypatch):
+    r = _relay()
+    monkeypatch.setattr(r, "state", lambda n: {"policy": False, "lease": "waiting", "busy": [], "head": "abc"})
+    ok, why = r.tool_check("חדר שינה", False)
+    assert not ok and "send_policy.json" in why
+    ok, why = r.tool_check("חדר שינה", True)
+    assert not ok and "send_policy.json" in why
+    monkeypatch.setattr(r, "state", lambda n: {"policy": True, "lease": "waiting", "busy": [], "head": "abc"})
+    assert r.tool_check("חדר שינה", False)[0]
