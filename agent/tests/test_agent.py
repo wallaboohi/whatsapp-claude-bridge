@@ -3088,6 +3088,7 @@ def test_session_take_and_handback_roundtrip(agent, monkeypatch, tmp_path):
     """Owner 18.11: one WhatsApp identity. Take-over installs the copied session (own one kept once, stale WAL removed) and
     grants the lease; the hand-back writes it to the host (backup kept) with the messages received meanwhile."""
     agent, _ = agent
+    monkeypatch.setattr(agent, "_boot_time", lambda: 0)  # real file mtimes vs FAKE_NOW clock
     monkeypatch.setitem(agent.CFG, "session_share", {"enabled": True})
     monkeypatch.setattr(agent, "_bridge_running", lambda: False)
     store = agent.STORE
@@ -3196,6 +3197,7 @@ def test_session_resume_stands_by_when_successor_holds(agent, monkeypatch):
     """Owner 18.11: a backup that died while holding comes back: the host is up or the next PC holds it now -> stand by,
     no plugins, no identity."""
     agent, _ = agent
+    monkeypatch.setattr(agent, "_boot_time", lambda: 0)  # real file mtimes vs FAKE_NOW clock
     monkeypatch.setitem(agent.CFG, "session_share", {"enabled": True})
     monkeypatch.setitem(agent.CFG, "failover", {"for": "נייח", "plugins": ["x.py"]})
     monkeypatch.setitem(agent.CFG, "peers", [{"name": "נייח"}, {"name": "סלון"}])
@@ -3348,6 +3350,7 @@ def test_work_resumes_after_restart(agent, monkeypatch):
     mod, _ = agent
     chat = "1203631111@g.us"
     open(mod.RESTART_FILE, "w", encoding="utf-8").write("בדיקה")
+    os.utime(mod.RESTART_FILE, (time.time(), time.time()))  # real mtime vs FAKE_NOW clock
     try:
         mod.note_resume(chat, "סיימתי את 1. את 2 ו-3 אני ממשיך בהודעה הבאה.", time.time() - 30)
     finally:
