@@ -321,3 +321,31 @@ def test_without_a_planned_handover_the_earlier_ready_pc_still_has_priority(agen
             "חדר שינה": {"status": "up", "data": ready, "last": {}}}
     why, fence = mod.chain_take_blocker(fc, "נייח", view, now=10_000.0)
     assert why and "לפניי בשרשרת" in why, "the normal order is unchanged when nothing was handed over on purpose"
+
+
+# ---- owner 21.11 01:10 (live round 3): the salon's agent, standing by, tried to answer old pending commands from the copied history;
+# every send failed (its bridge waits at the gate), the run never ended and the restart request waited 6 minutes.
+
+def test_a_standby_serves_only_local_commands(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    monkeypatch.setattr(mod, "lease_standby", lambda: True)
+    chats = ["120363431750792742@g.us", mod.LOCAL, "972500000001@s.whatsapp.net"]
+    assert mod.serve_chats(chats) == [mod.LOCAL], "no identity here: WhatsApp conversations wait in the queue"
+
+
+def test_the_holder_serves_every_conversation(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    monkeypatch.setattr(mod, "lease_standby", lambda: False)
+    chats = ["120363431750792742@g.us", mod.LOCAL]
+    assert mod.serve_chats(chats) == chats
+
+
+def test_the_dispatcher_does_not_wait_for_work_a_standby_cannot_deliver():
+    import inspect
+    src = inspect.getsource(__import__("agent").command_worker) if False else None
+    import importlib, os, sys
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    text = open(os.path.join(here, "agent.py"), encoding="utf-8").read()
+    i = text.index("def command_worker():")
+    body = text[i:i + 2500]
+    assert "handback_overdue() or lease_standby()" in body and "serve_chats(chats)" in body

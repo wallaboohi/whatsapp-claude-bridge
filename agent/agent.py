@@ -8966,6 +8966,16 @@ def handback_overdue():
     return time.time() - _handback_wait["since"] >= float(CFG.get("handback_restart_wait_sec", 180))
 
 
+def serve_chats(chats):
+    """Owner 21.11 01:10 (live round 3): a PC without the WhatsApp identity (its bridge waits at the gate, REST down) can neither
+    receive nor send. Its agent still answered old pending commands from the copied history, every send failed (connection
+    refused), the run never ended and the salon's restart request waited 6 minutes. A standby serves only local (dashboard)
+    commands; WhatsApp conversations wait in the queue until this PC holds the identity."""
+    if lease_standby():
+        return [c for c in chats if c == LOCAL]
+    return list(chats)
+
+
 def command_worker():
     """Dispatcher: one worker thread per conversation with pending commands (serial within a conversation, parallel
     across conversations). A requested restart waits until every running answer has been sent. Conversations the owner
@@ -8976,7 +8986,7 @@ def command_worker():
             reason = restart_wanted()
             with _workers_lock:
                 busy = bool(_workers)
-            if reason and busy and handback_overdue():
+            if reason and busy and (handback_overdue() or lease_standby()):
                 busy = False  # owner 19.11: a hand-back restart never waits forever behind work that keeps failing here
                 log("restart: hand-back overdue, restarting although work runs (it is resumed after the restart)")
             if reason:
@@ -8993,7 +9003,7 @@ def command_worker():
                 release_budget_waiters()
                 with adb() as db:
                     chats = [r[0] for r in db.execute("SELECT DISTINCT coalesce(chat_jid, ?) FROM commands WHERE status = 'pending'", (PRIMARY,))]
-                for chat in chats:
+                for chat in serve_chats(chats):
                     paused = listening_paused(chat)
                     if paused:
                         pause_notice(chat, paused)
