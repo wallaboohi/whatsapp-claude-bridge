@@ -316,7 +316,14 @@
    ],
    "model_flag": "-m",
    "prompt": "stdin:-",
-   "out": "file:-o"
+   "out": "file:-o",
+   "resume": {
+    "id": "event",
+    "resume_sub": [
+     "resume",
+     "{id}"
+    ]
+   }
   },
   "aliases": [
    "codex",
@@ -385,7 +392,14 @@
    "model_flag": "-m",
    "prompt": "stdin:-",
    "out": "file:-o",
-   "ssh": "4-MINE"
+   "ssh": "4-MINE",
+   "resume": {
+    "id": "event",
+    "resume_sub": [
+     "resume",
+     "{id}"
+    ]
+   }
   },
   "aliases": [
    "codex_work",
@@ -413,7 +427,14 @@
    "model_flag": "-m",
    "prompt": "stdin:-",
    "out": "file:-o",
-   "ssh": "PERROOM"
+   "ssh": "PERROOM",
+   "resume": {
+    "id": "event",
+    "resume_sub": [
+     "resume",
+     "{id}"
+    ]
+   }
   },
   "aliases": [
    "codex_bedroom",

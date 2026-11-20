@@ -3489,9 +3489,7 @@ def chat_topics(chat):
             g = json.load(f).get(chat or PRIMARY) or {}
     except (OSError, ValueError):
         g = {}
-    t = g.get("topics")
-    if t is None and g.get("purpose") == "dev":
-        t = ["dev"]
+    t = g.get("topics")  # owner 20.11 11:51: no conversation is cut by itself (he works on code in all three groups today)
     return set(t) if t else None
 
 
@@ -4725,7 +4723,7 @@ HEBREW_RULE = "הוראה קריטית: ענה תמיד אך ורק בעברית
 HEBREW_TAIL = "\n\n(חשוב: כתוב את כל התשובה בעברית בלבד.)"  # owner 14.11: the last line of the message, where models follow it best
 
 
-def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
+def _run_cli_core(name, p, prompt, model, append, chat, on_stage, timeout, sess=None):
     """Owner 14.11: any agent CLI installed on this computer answers a conversation (providers.json kind "cli"): Gemini CLI, GitHub Copilot
     CLI, Codex. It runs in HOME with its own tools; the prompt goes on stdin or as an argument; the answer is read as JSON, a file or text.
     Returns a Claude-shaped result; ProviderDown on a limit / sign-in / connection error so the next AI answers."""
@@ -4734,10 +4732,19 @@ def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
     exe = c.get("bin") if remote else shutil.which(c.get("bin") or "")
     if not exe or (remote and not remote_cli_ready(c)):
         raise ProviderDown(name, "unreachable", 30)
-    append = ((append or "") + "\n\n" + HEBREW_RULE).strip()  # owner 14.11: the CLIs never got the Hebrew rule (they leave before it is added)
-    pack = "" if getattr(_ctx, "probe", False) else conversation_pack(chat or PRIMARY) + "\n\n---\nההודעה הנוכחית (ענה עליה):\n"
+    resuming = bool(sess and sess.get("resume"))  # owner 20.11 11:22: a continued CLI session already holds the rules and the conversation
+    append = (HEBREW_RULE if resuming else ((append or "") + "\n\n" + HEBREW_RULE)).strip()  # owner 14.11: the CLIs never got the Hebrew rule (they leave before it is added)
+    pack = "" if resuming or getattr(_ctx, "probe", False) else conversation_pack(chat or PRIMARY) + "\n\n---\nההודעה הנוכחית (ענה עליה):\n"
     full = ((append + "\n\n") if append else "") + pack + prompt + HEBREW_TAIL
-    cmd = ([exe] if remote else npm_direct(exe)) + list(c.get("args") or [])
+    cli_args = list(c.get("args") or [])
+    cmd = [exe] if remote else npm_direct(exe)
+    spec = (sess or {}).get("spec") or {}
+    sid_flags = [x.replace("{id}", str(sess["id"])) for x in (spec.get("resume" if resuming else "new") or [])] if sess and sess.get("id") else []
+    if resuming and spec.get("resume_sub"):  # a sub-command after the first argument: codex exec resume <id>
+        cmd += cli_args[:1] + [x.replace("{id}", str(sess["id"])) for x in spec["resume_sub"]] + cli_args[1:]
+    else:
+        cmd += cli_args
+    cmd += sid_flags
     codex_stream = os.path.basename(str(c.get("bin") or "")).lower().startswith("codex") and (c.get("args") or [""])[0] == "exec"
     if codex_stream and "--json" not in cmd:
         cmd.append("--json")  # Codex emits item.started/completed events; consume them for live progress.
@@ -4924,7 +4931,94 @@ def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
                    (dt.datetime.now().isoformat(), None, 0, 0, 0, time.time() - t0, 1, m or name, 0, chat))
     text = unwrap_provider_event_stream(text)[0]  # owner 19.11 23:34: a CLI's JSON event stream never reaches any caller as an answer
     _note_answer(name, time.time() - t0)
-    return {"type": "result", "result": text, "is_error": False, "session_id": None, "usage": {}, "total_cost_usd": 0}
+    thread = next((str(e.get("thread_id")) for e in codex_events if e.get("type") == "thread.started" and e.get("thread_id")), None)
+    return {"type": "result", "result": text, "is_error": False, "session_id": None, "usage": {}, "total_cost_usd": 0, "cli_session": thread}
+
+
+def cli_resume_spec(name, p):
+    """How this CLI continues a session of its own (None = it cannot). providers.json cli.resume wins (false = off); otherwise the CLI's
+    own --help is read once when it is first used (so every newly connected CLI gets it automatically, by its own rules) and cached."""
+    c = p.get("cli") or {}
+    if "resume" in c:
+        return c["resume"] or None
+    if c.get("ssh") or kv_get("cli_resume_off:" + name):
+        return None
+    hit = kv_get("cli_resume:" + name)
+    if hit:
+        return None if hit == "none" else json.loads(hit)
+    spec = None
+    exe = shutil.which(c.get("bin") or "")
+    if exe:
+        try:
+            r = subprocess.run(npm_direct(exe) + ["--help"], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                               timeout=30, stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
+            h = (r.stdout or "") + "\n" + (r.stderr or "")
+        except (OSError, subprocess.TimeoutExpired):
+            return None  # not cached: try again next time
+        m = re.search(r"--session-id[^\n]*(?:\n(?!\s*-)[^\n]*)*", h)
+        if m:
+            resume = ["--session-id", "{id}"] if "resume" in m.group(0).lower() else (["--resume", "{id}"] if re.search(r"--resume\b", h) else None)
+            spec = {"id": "preset", "new": ["--session-id", "{id}"], "resume": resume} if resume else None
+    kv_set("cli_resume:" + name, json.dumps(spec) if spec else "none")
+    log("cli resume spec", name, spec or "none")
+    return spec
+
+
+def cli_session_get(name, chat):
+    """The id of this CLI's current session for the conversation: today's, and below the same message cap as every other session."""
+    try:
+        st = json.loads(kv_get(K("csession:" + name, chat)) or "{}")
+    except ValueError:
+        return None
+    if not st.get("id") or st.get("date") != dt.date.today().isoformat() or int(st.get("runs") or 0) >= int(CFG.get("session_max_runs", 15)):
+        return None
+    return st["id"]
+
+
+def cli_sessions_clear(chat):
+    for n, p in providers().items():
+        if isinstance(p, dict) and p.get("kind") == "cli":
+            kv_set(K("csession:" + n, chat), "")
+
+
+def _new_cli_session(spec):
+    import uuid
+    return {"spec": spec, "resume": False, "id": str(uuid.uuid4()) if spec.get("id") == "preset" else None}
+
+
+def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
+    """Owner 20.11 11:22: the CLI's own session continues between messages (rules and conversation are sent only in a new session);
+    when a continued run fails the same message is sent once more in a fresh session, and a CLI whose resume fails is not resumed again."""
+    chat = chat or PRIMARY
+    spec = None if getattr(_ctx, "probe", False) or CFG.get("fresh_sessions") else cli_resume_spec(name, p)
+    sid = cli_session_get(name, chat) if spec else None
+    sess = None
+    if spec:
+        sess = _new_cli_session(spec)
+        if sid:
+            sess.update(resume=True, id=sid)
+    try:
+        res = _run_cli_core(name, p, prompt, model, append, chat, on_stage, timeout, sess)
+    except RuntimeError as e:
+        if not (sess and sess["resume"]) or str(e).startswith("closed:"):
+            raise
+        log("cli resume failed, fresh session:", name, str(e)[:150])
+        kv_set(K("csession:" + name, chat), "")
+        sess = _new_cli_session(spec)
+        res = _run_cli_core(name, p, prompt, model, append, chat, on_stage, timeout, sess)
+        kv_set("cli_resume_off:" + name, "1")  # fresh worked where the continued one did not: this CLI does not resume the way its help says
+        log("cli resume switched off for", name)
+        sess = None
+    if sess is not None:
+        new_id = res.get("cli_session") or (sess["id"] if spec.get("id") == "preset" else None)
+        if new_id:
+            try:
+                runs = int(json.loads(kv_get(K("csession:" + name, chat)) or "{}").get("runs") or 0) if sess["resume"] else 0
+            except ValueError:
+                runs = 0
+            kv_set(K("csession:" + name, chat), json.dumps({"id": new_id, "date": dt.date.today().isoformat(), "runs": runs + 1}))
+            res["cli_session"] = new_id
+    return res
 
 
 def _codex_events(output):
@@ -5015,6 +5109,9 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
             raise RuntimeError("אין ספק זמין למנוע Qwen Code")
         _ctx.force_provider = alt[1]
         penv, pmodel = provider_env()
+    rules_back = group_prompt(chat) if getattr(_ctx, "rules_dropped", False) and not guest else None  # owner 20.11 11:22: see claude()
+    if rules_back and not append and (penv is not None or eng != "claude" or not resume):
+        append = rules_back
     if penv is not None and resume:  # owner 14.11: a hosted AI never gets Claude's whole session: it was too long for Cloudflare
         resume = None                # ("Prompt is too long" → 400); it gets the conversation pack instead (below)
     if penv is not None:  # owner 14.11: nothing English reaches the owner
@@ -5032,6 +5129,7 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
         if rp.get("kind") == "claude-remote" and not guest and tools is None:  # owner 17.11: the same run, on the other computer's Claude account
             if resume and resume != kv_get(K("rsession:" + _ctx.provider_used, chat or PRIMARY)):
                 resume = None  # owner 19.11: a session id of this computer's Claude does not exist there ("No conversation found", exit in 1 s)
+                append = append or rules_back
             cmd = [ssh_exe(), "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", *RUN_ALIVE, rp.get("ssh"),
                    f'cd /d {rp.get("home")} && claude -p --output-format stream-json --verbose --permission-mode {mode}'
                    + (" --input-format stream-json --replay-user-messages" if live else "")
@@ -5421,13 +5519,13 @@ def session_active(chat, raw=""):
     return bool(kv_get(K("session_id", chat or PRIMARY))) and not session_rotates(chat or PRIMARY, raw) and not CFG.get("fresh_sessions")
 
 
-def _ctx_token(chosen, sid):
-    """Owner 20.11 10:55: what identifies the AI's current session, for every provider alike. None = no continuity (a CLI that starts fresh each run)."""
-    kind = (providers().get(chosen) or {}).get("kind")
-    if kind == "desktop-app":
+def _ctx_token(chosen, sid, chat=None):
+    """Owner 20.11 10:55: what identifies the AI's current session, for every provider alike. None = no continuity (a CLI that cannot resume)."""
+    p = providers().get(chosen) or {}
+    if p.get("kind") == "desktop-app":
         return "d:" + dt.date.today().isoformat()
-    if kind == "cli":
-        return None
+    if p.get("kind") == "cli":
+        return cli_session_get(chosen, chat or PRIMARY) if cli_resume_spec(chosen, p) else None
     return sid or None
 
 
@@ -5436,7 +5534,7 @@ def ctx_select(chat, chosen, sid, blocks):
     inside the session only a block that changed is sent again. Returns (texts to send, hashes of all blocks, session token)."""
     import hashlib
     hashes = {n: hashlib.sha1(t.encode("utf-8")).hexdigest()[:12] for n, t in blocks.items()}
-    tok = _ctx_token(chosen, sid)
+    tok = _ctx_token(chosen, sid, chat)
     if chosen == "auto" or tok is None or kv_get(K("ctx_tok", chat)) != f"{chosen}:{tok}":
         return dict(blocks), hashes, tok
     return {n: t for n, t in blocks.items() if kv_get(K("ctxh:" + n, chat)) != hashes[n]}, hashes, tok
@@ -5586,6 +5684,16 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
         ctx_skipped = sum(len(t) for t in ctx_blocks.values()) - ctx_sent
         if send:
             prompt += "\n\n" + "\n\n".join(send.values())
+    # owner 20.11 11:22: the bridge rules go to a session once (Claude keeps its appended system prompt when it resumes: tested 20.11);
+    # a run that lands on a fresh session of another AI gets them back in _run_claude
+    rules = group_prompt(chat)
+    rules_hash = __import__("hashlib").sha1((rules or "").encode("utf-8")).hexdigest()[:12]
+    _ctx.rules_dropped = False
+    rules_append = rules
+    if (rules and session and sid and not guest_cfg(chat) and chosen != "auto" and active_engine() == "claude"
+            and (providers().get(chosen) or {}).get("kind") in ("claude", "claude-remote")
+            and kv_get(K("ctx_tok", chat)) == f"{chosen}:{sid}" and kv_get(K("ctxh:rules", chat)) == rules_hash):
+        rules_append, _ctx.rules_dropped = None, True
     # owner 16.11: a short message on "auto" goes to a fast free provider; the Claude subscription is kept for real work
     mech = not session and model and model == (CFG.get("light_model") or "haiku")  # owner 20.11 11:30: background mechanical work
     light = bool(CFG.get("light_routing", True)) and chosen == "auto" and (mech or is_light_task(raw if raw is not None else prompt))
@@ -5594,7 +5702,7 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
         try:
             try:
                 _ctx.light_task = light
-                res = _run_auto(prompt, model, sid, timeout, on_stage, append=group_prompt(chat), chat=chat, tools=tools, max_budget=max_budget)
+                res = _run_auto(prompt, model, sid, timeout, on_stage, append=rules_append, chat=chat, tools=tools, max_budget=max_budget)
             finally:
                 _ctx.light_task = False
         except (ProviderDown, LimitHit, AuthError, RuntimeError) as e:
@@ -5643,10 +5751,11 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
         kv_set(K("session_runs", chat), str(int(kv_get(K("session_runs", chat)) or 0) + 1))
         if model and getattr(_ctx, "auto_pick", False):
             kv_set(K("session_model", chat), model)  # automatic routing stays on this model for the rest of the session
-    if ctx_hashes and res.get("result") and chosen != "auto" and pu == chosen and not getattr(_ctx, "failover_used", False):
-        tok_after = ctx_tok if (providers().get(chosen) or {}).get("kind") in ("desktop-app", "cli") else (res.get("session_id") or ctx_tok)
+    if res.get("result") and chosen != "auto" and pu == chosen and not getattr(_ctx, "failover_used", False):
+        kind = (providers().get(chosen) or {}).get("kind")
+        tok_after = ctx_tok if kind == "desktop-app" else res.get("cli_session") if kind == "cli" else (res.get("session_id") or ctx_tok)
         kv_set(K("ctx_tok", chat), f"{chosen}:{tok_after}" if tok_after else "")
-        for n, h in ctx_hashes.items():
+        for n, h in {**ctx_hashes, "rules": rules_hash}.items():
             kv_set(K("ctxh:" + n, chat), h)
     if res.get("result") and interactive:
         try:
@@ -7180,6 +7289,7 @@ def owner_command(text, chat=None):
                 write_handoff(sid, chat)
             kv_set(K("session_id", chat), "")
             kv_set(K("session_runs", chat), "0")
+            cli_sessions_clear(chat)
             return f"🔄 הסשן נסגר (נכתב {os.path.basename(handoff_path(chat))}). ההודעה הבאה פותחת שיחה חדשה עם הסיכום."
         fresh = CFG.get("fresh_sessions")
         return (f"סשן: {'נקי לכל הודעה (fresh_sessions)' if fresh else 'רציף'} · הודעות בסשן: {kv_get(K('session_runs', chat)) or 0}"
@@ -9119,6 +9229,7 @@ def failover_conversations(fc, st):
     chats = _fo_chats(fc, st)
     for j in chats:
         kv_set(K("session_id", j), "")
+        cli_sessions_clear(j)
     since = st.get("off_since") or st.get("since")
     n = replay_unanswered(chats, dt.datetime.fromisoformat(since)) if since else 0
     log(f"failover: {len(chats)} conversations served here, {n} unanswered messages replayed")

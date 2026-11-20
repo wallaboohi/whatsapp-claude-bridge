@@ -52,7 +52,7 @@ def test_rules_are_cut_to_the_conversation_topics(agent, monkeypatch, tmp_path):
     gf = mod.os.path.join(str(tmp_path), "groups.json")
     open(gf, "w", encoding="utf-8").write(json.dumps({"g@g.us": {"purpose": "dev"}, "m@g.us": {"topics": ["4m"]}, "a@g.us": {}}))
     monkeypatch.setattr(mod, "GROUPS_FILE", gf)
-    assert mod.chat_topics("g@g.us") == {"dev"} and mod.chat_topics("m@g.us") == {"4m"} and mod.chat_topics("a@g.us") is None
+    assert mod.chat_topics("g@g.us") is None and mod.chat_topics("m@g.us") == {"4m"} and mod.chat_topics("a@g.us") is None
 
 
 def test_fixed_reply_instructions_split_from_the_message(agent):

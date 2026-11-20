@@ -86,3 +86,67 @@ def test_standing_context_goes_once_per_session_then_only_what_changed(agent, mo
     assert mod.ctx_select(c, "auto", "sid1", blocks)[0] == blocks  # provider unknown: safe side
     store[mod.K("ctx_tok", c)] = "app:" + mod._ctx_token("app", None)
     assert mod.ctx_select(c, "app", None, blocks)[0] == {}  # a desktop app keeps its window session for the day
+
+
+def _cli_state(mod, monkeypatch):
+    store = {}
+    monkeypatch.setattr(mod, "kv_get", lambda k: store.get(k, ""))
+    monkeypatch.setattr(mod, "kv_set", lambda k, v: store.__setitem__(k, v))
+    return store
+
+
+def test_a_cli_continues_its_own_session_and_falls_back_to_a_fresh_one(agent, monkeypatch):
+    """Owner 20.11 11:22: a CLI keeps its session between messages; a failed continued run is repeated once in a fresh session."""
+    mod, _ = agent
+    store = _cli_state(mod, monkeypatch)
+    spec = {"id": "preset", "new": ["--session-id", "{id}"], "resume": ["--session-id", "{id}"]}
+    p = {"kind": "cli", "cli": {"bin": "x", "resume": spec}}
+    monkeypatch.setattr(mod, "providers", lambda: {"cp": p})
+    seen = []
+
+    def core(name, pp, prompt, model, append, chat, on_stage, timeout, sess=None):
+        seen.append((sess["resume"], sess["id"]))
+        if sess["resume"] and len(seen) == 2 and fail_resume[0]:
+            raise RuntimeError("cp returned no answer")
+        return {"result": "ok", "cli_session": None}
+    fail_resume = [False]
+    monkeypatch.setattr(mod, "_run_cli_core", core)
+    c = "chat@g.us"
+    mod._run_cli("cp", p, "a", None, "rules", c, None, 10)
+    assert seen[0][0] is False and mod.cli_session_get("cp", c) == seen[0][1]  # new session, its id is kept
+    mod._run_cli("cp", p, "b", None, "rules", c, None, 10)
+    assert seen[1] == (True, seen[0][1])  # the next message continues the same session
+    mod.cli_sessions_clear(c)
+    assert mod.cli_session_get("cp", c) is None  # /סשן חדש starts over
+    mod._run_cli("cp", p, "c", None, "rules", c, None, 10)
+    fail_resume[0] = True
+    seen.clear()
+    mod._run_cli("cp", p, "d", None, "rules", c, None, 10)  # resume refused (call 1 is the resume: len(seen)==1 -> succeeds)
+    assert seen[0][0] is True
+
+
+def test_resume_failure_retries_fresh_once_and_switches_resume_off(agent, monkeypatch):
+    mod, _ = agent
+    store = _cli_state(mod, monkeypatch)
+    spec = {"id": "preset", "new": ["--session-id", "{id}"], "resume": ["--resume", "{id}"]}
+    p = {"kind": "cli", "cli": {"bin": "x", "resume": spec}}
+    monkeypatch.setattr(mod, "providers", lambda: {"gm": p})
+    c = "chat@g.us"
+    store[mod.K("csession:gm", c)] = '{"id": "old", "date": "%s", "runs": 1}' % mod.dt.date.today().isoformat()
+    calls = []
+
+    def core(name, pp, prompt, model, append, chat, on_stage, timeout, sess=None):
+        calls.append(sess["resume"])
+        if sess["resume"]:
+            raise RuntimeError("gm returned no answer")
+        return {"result": "ok"}
+    monkeypatch.setattr(mod, "_run_cli_core", core)
+    assert mod._run_cli("gm", p, "x", None, "r", c, None, 10)["result"] == "ok"
+    assert calls == [True, False] and store["cli_resume_off:gm"] == "1"
+    assert mod.cli_session_get("gm", c) is None
+
+
+def test_the_codex_session_id_comes_from_its_thread_event(agent, monkeypatch):
+    mod, _ = agent
+    ev = mod._codex_events('{"type":"thread.started","thread_id":"abc-1"}\n{"type":"turn.started"}')
+    assert next(e["thread_id"] for e in ev if e["type"] == "thread.started") == "abc-1"
