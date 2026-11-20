@@ -164,6 +164,11 @@ def test_the_policy_is_copied_from_a_peer_and_then_the_grant_works(agent, monkey
     monkeypatch.setattr(mod, "_ssh", lambda *a, **k: _R('{"mode": "draft", "control_group": "x@g.us"}'))
     assert mod.lease_grant("test") is True
     assert (tmp_path / "send_policy.json").read_text(encoding="utf-8").count("control_group") == 1
+    # byte for byte: a LF file stays LF (the live test 21.11 00:11 found CR added on Windows)
+    monkeypatch.setattr(mod, "_ssh", lambda *a, **k: _R('{"mode": "draft",\n "control_group": "x@g.us"}\n'))
+    (tmp_path / "send_policy.json").unlink()
+    assert mod.ensure_send_policy() is True
+    assert b"\r" not in (tmp_path / "send_policy.json").read_bytes()
     assert (tmp_path / "lease_grant").exists()
 
 

@@ -10269,7 +10269,7 @@ def ensure_send_policy():
             text = (r.stdout or b"").decode("utf-8", "replace")
             if r.returncode == 0 and json.loads(text).get("control_group"):  # a real policy, not an empty shell
                 os.makedirs(STORE, exist_ok=True)
-                with open(SEND_POLICY + ".tmp", "w", encoding="utf-8") as f:
+                with open(SEND_POLICY + ".tmp", "w", encoding="utf-8", newline="") as f:  # byte for byte: no LF -> CRLF
                     f.write(text)
                 os.replace(SEND_POLICY + ".tmp", SEND_POLICY)
                 log("send policy copied from", p.get("name") or alias)
@@ -10557,7 +10557,7 @@ def _session_handback_payload(since):
     data = {"session": base64.b64encode(zlib.compress(_sqlite_bytes(os.path.join(STORE, "whatsapp.db")), 1)).decode(), "z": True,
             "messages": [], "chats": []}
     try:  # owner 20.11 23:45: the send policy travels with the identity (the receiver writes it only when it has none)
-        with open(SEND_POLICY, encoding="utf-8") as f:
+        with open(SEND_POLICY, encoding="utf-8", newline="") as f:
             data["send_policy"] = f.read()
     except OSError:
         pass
@@ -10638,7 +10638,7 @@ if (C.get("messages") or C.get("chats")) and os.path.exists(mpath):
 print("@@MSG@@%d" % n)
 pol = C.get("send_policy")
 if pol and not os.path.exists(store + "/send_policy.json"):  # never overwrites: the PC's own policy wins
-    with open(store + "/send_policy.json", "w", encoding="utf-8") as f:
+    with open(store + "/send_policy.json", "w", encoding="utf-8", newline="") as f:
         f.write(pol)
     print("@@POLICY@@written")
 if mode == "pass" and not busy:
