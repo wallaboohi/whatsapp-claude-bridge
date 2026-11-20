@@ -278,7 +278,14 @@ func registerAdminAPI(client *whatsmeow.Client) {
 		if err != nil {
 			return nil, err
 		}
-		msg := client.BuildEdit(chat, types.MessageID(str(b, "id")), &waE2E.Message{Conversation: proto.String(str(b, "text"))})
+		body := &waE2E.Message{Conversation: proto.String(str(b, "text"))}
+		// owner 20.11 12:17: editing a message that was sent as a reply keeps it a reply (🔥 dropped the quote)
+		var quoted string
+		globalStore.db.QueryRow("SELECT COALESCE(quoted_id,'') FROM messages WHERE id = ? AND chat_jid = ?", str(b, "id"), chat.String()).Scan(&quoted)
+		if ci := quoteContext(chat, quoted); ci != nil {
+			body = &waE2E.Message{ExtendedTextMessage: &waE2E.ExtendedTextMessage{Text: proto.String(str(b, "text")), ContextInfo: ci}}
+		}
+		msg := client.BuildEdit(chat, types.MessageID(str(b, "id")), body)
 		_, err = client.SendMessage(ctx, chat, msg)
 		if err == nil {
 			markLocalEdit(globalStore, chat.String(), str(b, "id"), str(b, "text"))

@@ -161,6 +161,13 @@ def main(a):
             bad.append(f"{n}: שינויים לא שמורים")
         elif st.get("busy"):
             bad.append(f"{n}: ריצה פעילה ({', '.join(st['busy'])})")
+    try:  # owner 20.11 12:17: the list of fixes in the pipe - nothing still being worked on goes into a restart
+        items = json.load(open(os.path.join(ROOT, "agent", "pending.json"), encoding="utf-8")).get("items") or []
+    except (OSError, ValueError):
+        items = []
+    for it in items:
+        if it.get("status") == "בעבודה":
+            bad.append(f"ברשימת התיקונים בקנה #{it['id']} עדיין בעבודה ({it.get('by') or '?'}): {it.get('what', '')[:60]}")
     if not str(states[ORDER[0]].get("lease", "")).startswith("holding"):
         bad.append("הנייח לא מחזיק את ההזדהות עכשיו")
     for n, st in states.items():
@@ -203,6 +210,7 @@ def main(a):
             report("⛔ *סבב ההפעלה מחדש נעצר*, הגשר ב" + taker + " (מחזיק אבל ניסוי הכלים נכשל):\n" + "\n".join(lines)
                    + "\nלחזרה: */העבר גשר נייח*")
             return 1
+    subprocess.run([sys.executable, "-I", "-X", "utf8", os.path.join(ROOT, "tools", "pending.py"), "live"], capture_output=True, timeout=60)
     report("🔁 *סבב הפעלה מחדש עם מסירת הגשר הושלם* (קוד " + hub + "):\n" + "\n".join(lines))
     return 0
 

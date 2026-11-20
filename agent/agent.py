@@ -7765,6 +7765,9 @@ def run_command(row):
         full = T["prompt"].format(owner=(guest or {}).get("speaker") or OWNER, when=when, text=body, where=where, dest=dest)
         head, _, reply_rules = full.rpartition("\n\n")  # owner 20.11 11:30: the fixed instructions, once per AI session
         prompt = full if guest or not head else head
+        qctx = quoted_context(chat, mid) if src == "wa" else ""
+        if qctx:
+            prompt += "\n\n" + qctx
         hints = None if guest else dictionary_hints(body)
         if hints:
             prompt += "\n\n" + hints
@@ -11437,6 +11440,30 @@ def quoted_of(chat, mid):
             return None
         time.sleep(1.5)  # the bridge writes quoted_id right after the row; give it a moment once
     return None
+
+
+def quoted_context(chat, mid, limit=600):
+    """Owner 20.11 12:17: a message sent as a reply to another one - the AI sees what it replies to. One quick read (no wait)."""
+    if not chat or not mid:
+        return ""
+    try:
+        with mdb() as db:
+            r = db.execute("SELECT quoted_id FROM messages WHERE id = ? AND chat_jid = ?", (mid, chat)).fetchone()
+            q = db.execute("SELECT sender, content, timestamp, is_from_me, media_type FROM messages WHERE id = ? AND chat_jid = ?",
+                           (r[0], chat)).fetchone() if r and r[0] else None
+    except sqlite3.Error as e:
+        log("quoted context failed", e)
+        return ""
+    if not r or not r[0]:
+        return ""
+    if not q:
+        return "↩️ ההודעה הזו נשלחה כתגובה להודעה קודמת שאינה שמורה בגשר (לא ידוע מה נכתב בה)."
+    sender, content, ts, mine, mtype = q
+    who = ("הגשר (תשובה קודמת)" if (content or "").lstrip().startswith(("🤖", "🦾")) else OWNER) if mine else person_name(sender)
+    body = (content or "").strip() or (f"[{mtype}]" if mtype else "[ללא טקסט]")
+    if len(body) > limit:
+        body = body[:limit] + "…"
+    return f"↩️ ההודעה הזו היא תגובה להודעה של {who} ({str(ts)[11:16]}):\n«{body}»"
 
 
 def draft_of_card(card_id, pending_only=True):

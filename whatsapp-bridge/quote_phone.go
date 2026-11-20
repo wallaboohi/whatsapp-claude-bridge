@@ -23,7 +23,9 @@ func quoteContext(chat types.JID, quotedID string) *waProto.ContextInfo {
 		return nil
 	}
 	participant := chat
-	if chat.Server == types.GroupServer || fromMe {
+	if (sender == "me" || sender == "") && globalClient != nil && globalClient.Store.ID != nil {
+		participant = globalClient.Store.ID.ToNonAD() // the bridge stores its own sends as "me" (owner 20.11 12:17)
+	} else if chat.Server == types.GroupServer || fromMe {
 		server := types.DefaultUserServer
 		if !strings.HasPrefix(sender, "972") && len(sender) >= 14 {
 			server = types.HiddenUserServer // LID-addressed participant
