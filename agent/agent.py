@@ -7148,26 +7148,24 @@ class StatusMsg:
         return f"🛣️ {self._lab('נתיב')} ┃ " + " · ".join(parts)
 
     def _text(self):
-        # the hourglass flips (⏳ ↔ ⌛) on every edit so the owner sees it is alive (owner request 08.11); owner 17.11: one detail per line
-        icon = "⏳" if self.tick % 2 == 0 else "⌛"
+        # owner 20.11 16:55: order = נתיב → פעולה → שלבים → מצב; spinner animation with cycle
+        spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[self.tick % 10]  # rotates every edit (~0.5s)
         prefix = CFG["reply_prefix"]
-        if self.tick % 2 and prefix.strip() == "🤖":
-            prefix = prefix.replace("🤖", "🦾")  # the robot "moves" too while working (owner request 08.11)
+        if self.tick % 10 in [2, 5, 8] and prefix.strip() == "🤖":
+            prefix = prefix.replace("🤖", "🦾")  # robot "moves" with spinner
         st, _, det = self.stage.partition(" · ")
         head = st.split(" ", 1)[-1] if stage_icon(st) else st
-        lines = [f"{icon} {self._lab('מצב')} ┃ *{head}* · ⏱ *{self._elapsed()}*",
-                 f"🪜 {self._lab('שלבים')} ┃ *{max(1, len(self.steps))}*",
+        lines = [self._route_row(),
                  f"🔧 {self._lab('פעולה')} ┃ *{(det or st).strip()[:80]}*",
-                 self._route_row()]
+                 f"🪜 {self._lab('שלבים')} ┃ *{max(1, len(self.steps))}*",
+                 f"{spinner} {self._lab('מצב')} ┃ *{head}* · ⏱ *{self._elapsed()}*"]
         return prefix + "\n".join(lines)
 
     def _final(self):
         """Owner 17.11 13:55 (approved): the finished message shows the steps with how long each took, and the total from receiving
-        the message until the answer."""
+        the message until the answer. Owner 20.11 16:55: order = נתיב first."""
         end = self.ended or time.time()
-        lines = [f"✅ {self._lab('מצב')} ┃ *סיימתי* · ⏱ *{self._elapsed()}*"]
-        if not self.steps:
-            lines.append(f"🪜 {self._lab('שלבים')} ┃ *0*")
+        lines = [self._route_row()]
         if self.steps:  # owner 17.11 16:45: two short process lines: icons in order, and the words below them
             seq = []  # owner 17.11 22:31 (approved): no repeats and only the last few kinds of step — the chain grew without end in a loop
             for s in self.steps:
@@ -7180,9 +7178,12 @@ class StatusMsg:
             seq = seq[-keep:]
             icons = " ".join(stage_icon(h) or "▫️" for h in seq)
             words = " ← ".join(h.split(" ", 1)[-1] if stage_icon(h) else h for h in seq)
-            lines.append(f"🪜 {self._lab('שלבים')} ┃ *{len(self.steps)}* · {icons}" + (f" (+{more} קודמים)" if more > 0 else ""))
             lines.append(f"🔧 {self._lab('פעולה')} ┃ {words}")
-        lines.append(self._route_row())
+            lines.append(f"🪜 {self._lab('שלבים')} ┃ *{len(self.steps)}* · {icons}" + (f" (+{more} קודמים)" if more > 0 else ""))
+        elif not self.steps:
+            lines.append(f"🔧 {self._lab('פעולה')} ┃ _(אין פעולות)_")
+            lines.append(f"🪜 {self._lab('שלבים')} ┃ *0*")
+        lines.append(f"✅ {self._lab('מצב')} ┃ *סיימתי* · ⏱ *{self._elapsed()}*")
         meter = ctx_meter_line(self.chat, self.t0 - 1)
         if meter:
             lines.append(meter)
