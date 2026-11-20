@@ -161,7 +161,56 @@ def rebuild_desktop_bridge(since, hub):
     return ("🔧 נייח: הגשר נבנה מחדש בזמן ההמתנה" if ok else "⚠️ נייח: בניית הגשר נכשלה: " + res[:150])
 
 
+def detach_from_ssh(a):
+    """Owner 20.11 13:00: a process started over ssh lives in the ssh session's job and dies with it - the relay was killed twice
+    in the middle (12:51, 12:56). Started from an ssh session, the relay starts itself again through WMI (outside any job: its
+    parent is the WMI service) and this copy returns at once. Returns the new process id, or 0 when it runs here."""
+    if "--detached" in a or not (os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_CLIENT")) or os.name != "nt":
+        return 0
+    import base64
+    args = base64.b64encode(json.dumps(a + ["--detached"]).encode("utf-8")).decode()
+    cmd = f'"{sys.executable}" -I -X utf8 "{os.path.abspath(__file__)}" --args-b64 {args}'
+    ps = ("$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=" + json.dumps(cmd)
+          + "; CurrentDirectory=" + json.dumps(ROOT) + "}; Write-Output ($r.ReturnValue.ToString() + ' ' + $r.ProcessId)")
+    r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=60)
+    parts = (r.stdout or "").split()
+    if len(parts) >= 2 and parts[0] == "0":
+        return int(parts[1])
+    raise RuntimeError("could not detach the relay from the ssh session: " + ((r.stdout or "") + (r.stderr or ""))[-300:])
+
+
+def ensure_holder_code(name, hub, minutes=6):
+    """Owner 20.11 13:00: the holder hands over only with code that knows the relay. Its agent (not its bridge: WhatsApp stays
+    connected) restarts on the hub code first when it still runs an older one. Returns (ok, why)."""
+    st = state(name)
+    running = str(st.get("running_head") or "")
+    if running and (hub.startswith(running) or running.startswith(hub)):
+        return True, f"כבר רץ על {hub}"
+    if st.get("head") != hub:
+        return False, f"הקוד בדיסק {st.get('head')} ולא {hub}"
+    rc, out = run_py(name, 'open("C:/Users/walla/whatsapp-mcp/agent/restart.request", "w", encoding="utf-8").write('
+                           '"סבב הפעלה מחדש: הסוכן של המחזיק עולה על הקוד החדש לפני המסירה (הגשר נשאר מחובר)")\nprint("@@OK@@")', 60)
+    if "@@OK@@" not in out:
+        return False, "לא הצלחתי לבקש הפעלה מחדש של הסוכן"
+    end = time.time() + minutes * 60
+    while time.time() < end:
+        time.sleep(10)
+        st = state(name)
+        running = str(st.get("running_head") or "")
+        if running and (hub.startswith(running) or running.startswith(hub)) and str(st.get("lease", "")).startswith("holding"):
+            return True, f"הסוכן עלה על {hub}, הגשר נשאר מחובר"
+    return False, f"הסוכן לא עלה על {hub} תוך {minutes} דקות"
+
+
 def main(a):
+    if "--args-b64" in a:  # the detached copy (detach_from_ssh)
+        import base64
+        a = json.loads(base64.b64decode(a[a.index("--args-b64") + 1]).decode("utf-8"))
+    pid = detach_from_ssh(a)
+    if pid:
+        print(f"relay launched detached (pid {pid}); progress: agent/chain_relay.log", flush=True)
+        return 0
     dry = "--dry-run" in a
     auto = "--auto" in a  # owner 20.11 12:25: a scheduled restart (nightly save / update) of the PC holding the bridge
     reason = a[a.index("--reason") + 1] if "--reason" in a and a.index("--reason") + 1 < len(a) else ""
@@ -214,6 +263,14 @@ def main(a):
         if not ok:
             report("⛔ *סבב ההפעלה מחדש נעצר* (הגשר נשאר בנייח):\n" + "\n".join(lines))
             return 1
+    # 1b. the holder's agent on the new code first (owner 20.11 13:00: at 12:51 it still ran 10:59 code that did not know
+    #     handover.request, so the relay could never have moved the bridge)
+    ok, why = ensure_holder_code(ORDER[0], hub)
+    log("holder code", ORDER[0], ok, why)
+    lines.append(f"{'✅' if ok else '❌'} {ORDER[0]}: {why}")
+    if not ok:
+        report("⛔ *סבב ההפעלה מחדש נעצר* לפני המסירה, הגשר ב" + ORDER[0] + ":\n" + "\n".join(lines))
+        return 1
     # 2. the relay
     hops = list(zip(ORDER, ORDER[1:] + ORDER[:1]))
     for giver, taker in hops:

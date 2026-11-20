@@ -10714,9 +10714,14 @@ def handover_request_check():
     if not os.path.exists(HANDOVER_REQUEST):
         return
     try:
+        age = time.time() - os.path.getmtime(HANDOVER_REQUEST)
         arg = open(HANDOVER_REQUEST, encoding="utf-8").read().strip()
     finally:
         os.remove(HANDOVER_REQUEST)
+    if age > float(CFG.get("handover_request_max_age_sec", 600)):
+        # owner 20.11 13:00: a request left by a relay that died (12:51) must never move the bridge by surprise later
+        log("handover request ignored: stale", int(age), "s", arg)
+        return
     out = handover_cmd(arg)
     log("handover request", arg, "->", out[:160])
     try:
