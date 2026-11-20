@@ -7058,11 +7058,13 @@ class StatusMsg:
         self.model, self.stage, self.mid, self.t0, self.done = model, "📩 התקבלה הודעה", None, time.time(), threading.Event()
         self.chat, self.wa = chat or PRIMARY, wa
         self.ai_short, self.ai_model, self.ai_location = status_ai_info(model, self.chat)
-        self.react_to = react_to if wa and CFG.get("status_reactions", True) else None
+        self.source_mid = react_to if wa else None
+        self.react_to = self.source_mid if CFG.get("status_reactions", True) else None
         self._reacted, self._react_t = "", 0.0
         # owner 18.11 22:58: 👀 (the bridge saw it) -> ⏳ ↔ ⌛ every 3 s (on its way) -> 🧠 (the AI works) -> the stage icons
         self.glass = Hourglass(self.chat, self.react_to, first="") if self.react_to else None
         self.steps, self.tick, self.ended = [], 0, None
+        self.source_content = ""  # owner's own WhatsApp message, when it can carry the live status itself
         self.hold, self.loop_done = False, threading.Event()  # owner 17.11 15:15: hold = the answer will be merged into this message
         if not getattr(_ctx, "side_run", False):
             note_progress(self.chat)
@@ -7154,6 +7156,36 @@ class StatusMsg:
         except Exception:
             return ""
 
+    def _load_editable_source(self):
+        """Use the incoming message as the status canvas only when WhatsApp can edit that exact owner message."""
+        if not self.wa or not self.source_mid:
+            return False
+        try:
+            with mdb() as db:
+                row = db.execute("SELECT content, is_from_me, media_type, timestamp FROM messages WHERE id = ? AND chat_jid = ?",
+                                 (self.source_mid, self.chat)).fetchone()
+            if not row or not row[1] or row[2] or not (row[0] or "").strip():
+                return False
+            prefix = (CFG.get("reply_prefix") or "🤖").strip()
+            if row[0].lstrip().startswith(prefix):  # never append a second status to one of the bridge's messages
+                return False
+            age = message_age(row[3])
+            if age is None or age >= FIRE_EDIT_WINDOW:
+                return False
+            self.source_content = row[0]
+            return True
+        except Exception as e:
+            log("status source lookup failed", e)
+            return False
+
+    def _edit_payload(self, status_text):
+        """Append the status to the owner's message, preserving right-to-left marks on the added lines."""
+        if not self.source_content:
+            return rtl(status_text)
+        prefix = CFG["reply_prefix"]
+        formatted = rtl(prefix + status_text)
+        return self.source_content + "\n" + formatted[len(prefix):]
+
     @classmethod
     def _aligned_row(cls, label, icon, value=""):
         """Keep the label on the right, the icon in a fixed middle column, and its value to the left."""
@@ -7209,13 +7241,13 @@ class StatusMsg:
         prefix = CFG["reply_prefix"]
         if self.tick % 10 in [2, 5, 8] and prefix.strip() == "🤖":
             prefix = prefix.replace("🤖", "🦾")  # robot "moves" with spinner
-        return prefix + self.DIVIDER + "\n" + "\n".join(self._status_rows())
+        return ("" if self.source_content else prefix) + self.DIVIDER + "\n" + "\n".join(self._status_rows())
 
     def _final(self):
         """Owner 17.11 13:55 (approved): the finished message shows the steps with how long each took, and the total from receiving
         the message until the answer. Owner 20.11 16:55: order = נתיב first."""
         lines = [self.DIVIDER, *self._status_rows(final=True)]
-        return CFG["reply_prefix"] + "\n".join(lines)
+        return ("" if self.source_content else CFG["reply_prefix"]) + "\n".join(lines)
 
     def send_finished(self):
         """A quick answer (finished before the progress message was due) never got one: its finished message, with the details,
@@ -7238,6 +7270,16 @@ class StatusMsg:
             base = float(CFG.get("status_edit_seconds", 10))
             self.loop_done.wait(max(30, 3 * base + 15))
         elif self.wa and answer:  # a quick answer never had a status message: one message with the finished details and the answer
+            if self._load_editable_source():
+                self.mid = self.source_mid
+                try:
+                    r = bridge("/edit_message", {"jid": self.chat, "id": self.mid,
+                                                   "text": self._edit_payload(self._full(answer))}, timeout=20)
+                    if r.get("success") is not False and not r.get("error") and self._edit_landed(answer):
+                        return True
+                except Exception as e:
+                    log("quick answer source edit failed", e)
+                self.source_content, self.mid = "", None
             return bool(send(self.chat, self._full(answer)))
         if not self.mid or not self.wa:
             return False
@@ -7245,14 +7287,14 @@ class StatusMsg:
             full = self._full(answer)
             if len(full) < 20000:
                 try:
-                    r = bridge("/edit_message", {"jid": self.chat, "id": self.mid, "text": rtl(full)}, timeout=20)
+                    r = bridge("/edit_message", {"jid": self.chat, "id": self.mid, "text": self._edit_payload(full)}, timeout=20)
                     if r.get("success") is not False and not r.get("error") and self._edit_landed(answer):
                         return True
                     log("status merge refused or not seen", r)
                 except Exception as e:
                     log("status merge failed", e)
         try:
-            bridge("/edit_message", {"jid": self.chat, "id": self.mid, "text": rtl(self._final())}, timeout=20)
+            bridge("/edit_message", {"jid": self.chat, "id": self.mid, "text": self._edit_payload(self._final())}, timeout=20)
         except Exception as e:
             log("status final edit failed", e)
         return False
@@ -7283,13 +7325,25 @@ class StatusMsg:
     def _start(self):
         if self.done.is_set():
             return
-        text = rtl(self._text())
+        source_edit = self._load_editable_source()
+        text = self._edit_payload(self._text())
         # Owner 19.11: /api/send now returns the real id. Searching by text could catch an older status message with
         # the same text (⏳ 0:08) when the echo was late, so edits jumped to that old message while the owner scrolled.
-        mid = send(self.chat, text, want_id=True)
-        if mid:
-            self.mid = mid
-        else:
+        if source_edit:
+            self.mid = self.source_mid
+            try:
+                r = bridge("/edit_message", {"jid": self.chat, "id": self.mid, "text": text}, timeout=20)
+                if r.get("success") is False or r.get("error"):
+                    raise RuntimeError(r.get("error") or r.get("message") or "עריכת הודעת יקיר נכשלה")
+            except Exception as e:
+                log("status source edit failed; using a separate status message", e)
+                self.source_content, self.mid = "", None
+        if not self.mid:
+            text = rtl(self._text())
+            mid = send(self.chat, text, want_id=True)
+            if mid:
+                self.mid = mid
+        if not self.mid:
             log("status send id missing: falling back to echo lookup")
             since = dt.datetime.fromtimestamp(self.t0 - 5).strftime("%Y-%m-%d %H:%M:%S")
             for _ in range(8):  # fallback for an older bridge that does not return an id yet
@@ -7312,7 +7366,7 @@ class StatusMsg:
         # owner 17.11 16:24: every 10 s (config status_edit_seconds, never below 10); every 30 s after the first 30 edits
         while self.mid and not self.done.wait(max(10.0, float(CFG.get("status_edit_seconds", 10))) * (3 if edits >= 30 else 2 if edits >= 12 else 1)):
             self.tick += 1
-            new = rtl(self._text())
+            new = self._edit_payload(self._text())
             if new != last:
                 try:
                     bridge("/edit_message", {"jid": self.chat, "id": self.mid, "text": new}, timeout=20)
@@ -7323,7 +7377,7 @@ class StatusMsg:
         self.loop_done.set()
         if self.done.is_set() and self.mid and not self.hold:  # leave the final state (owner request 07.11): no delete
             try:
-                bridge("/edit_message", {"jid": self.chat, "id": self.mid, "text": rtl(self._final())}, timeout=20)
+                bridge("/edit_message", {"jid": self.chat, "id": self.mid, "text": self._edit_payload(self._final())}, timeout=20)
             except Exception as e:
                 log("status final edit failed", e)
 

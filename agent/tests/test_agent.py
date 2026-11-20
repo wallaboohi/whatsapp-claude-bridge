@@ -3026,6 +3026,41 @@ def test_status_start_edits_the_id_returned_by_send(agent, monkeypatch):
     assert edits and all(b.get("id") == "FRESH1" for p, b in edits if p == "/edit_message")
 
 
+def test_status_is_appended_to_the_owners_message_and_answer_stays_there(agent, monkeypatch):
+    mod, db = agent
+    chat, mid = "1203630000@g.us", "OWNER-MSG"
+    original = "בדיקת פריסה"
+    db.execute("INSERT INTO messages VALUES (?, ?, 'me', ?, ?, 1, '', '')",
+               (mid, chat, original, mod.dt.datetime.now().astimezone().isoformat(sep=" ", timespec="seconds")))
+    db.commit()
+    edits, sent = [], []
+    monkeypatch.setattr(mod, "bridge", lambda path, body=None, **k: edits.append((path, dict(body or {}))) or {"success": True})
+    monkeypatch.setattr(mod, "send", lambda *a, **k: sent.append((a, k)) or "STATUS-MSG")
+    monkeypatch.setattr(mod, "status_ai_info", lambda *a, **k: ("קודקס עבודה", "gpt-test", "☁️ ענן"))
+    st = mod.StatusMsg("gpt-test", chat, wa=True, react_to=mid)
+    st.timer.cancel()
+
+    class FinishOnWait:
+        def is_set(self):
+            return False
+
+        def wait(self, _seconds):
+            return True
+
+        def set(self):
+            pass
+
+    st.done = FinishOnWait()
+    st._start()
+    assert st.mid == mid and not sent
+    assert all(path == "/edit_message" and body["id"] == mid for path, body in edits)
+    assert original in edits[0][1]["text"] and st.DIVIDER in edits[0][1]["text"]
+    monkeypatch.setattr(st, "_edit_landed", lambda *_a, **_k: True)
+    assert st.finalize("תשובת בדיקה")
+    assert "📝 *תשובה:*" in edits[-1][1]["text"] and "תשובת בדיקה" in edits[-1][1]["text"]
+    assert edits[-1][1]["id"] == mid and not sent
+
+
 def test_quick_answer_gets_finished_status_only_when_wa(agent, monkeypatch):
     """Owner 17.11 13:55: a quick answer's details go in one finished status message, sent before the answer."""
     mod = agent[0]
