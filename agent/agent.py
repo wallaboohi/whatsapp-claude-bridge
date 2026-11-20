@@ -4664,6 +4664,8 @@ def conversation_pack(chat, n=14):
     pre = (CFG.get("reply_prefix") or "🤖").strip()
     lines = []
     for ts, mine, text in reversed(rows):
+        if re.match(r"^\W*⚠️\s*מכסת\s", text or ""):  # owner 20.11 16:03: another provider's quota warning is not this one's
+            continue
         who = "הבינה" if (text or "").lstrip().startswith(pre) else ("הבעלים" if mine else "אחר")
         lines.append(f"[{str(ts)[11:16]}] {who}: {' '.join((text or '').split())[:300]}")
     if lines:
