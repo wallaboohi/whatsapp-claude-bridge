@@ -7171,7 +7171,7 @@ class StatusMsg:
 
     # Owner 20.11 17:38: keep each status field in a fixed row, with the icon/value column after the same separator.
     LABEL_W = 5
-    DIVIDER = "━━━━━━━ ✦ ━━━━━━━"
+    DIVIDER = "*━━━━━━━ ✦ ━━━━━━━*"
     ICON_COL = 18
     VALUE_GAP = 5
 
@@ -7225,7 +7225,8 @@ class StatusMsg:
             return rtl(status_text)
         prefix = CFG["reply_prefix"]
         formatted = rtl(prefix + status_text)
-        return self.source_content + "\n" + formatted[len(prefix):]
+        owner = "\n".join(l if not l.strip() or l.strip().startswith("*") else f"*{l.strip()}*" for l in self.source_content.split("\n"))
+        return owner + "\n" + formatted[len(prefix):]
 
     @classmethod
     def _aligned_row(cls, label, icon, value=""):
@@ -7260,20 +7261,32 @@ class StatusMsg:
         loc = self.ai_location or "☁️ ענן"
         loc_icon = "🏠" if loc.startswith("🏠") else "☁️"
         loc_text = loc.split(" ", 1)[-1] if " " in loc else loc
+        # owner 20.11 20:57: fixed shape; the changing values never move a row. פירוט = previous ← *current* + running dots.
+        nb = "\u00a0"
+        via = ""
+        if ", דרך " in loc_text:
+            loc_text, via = loc_text.split(", דרך ", 1)
+        names = [i["text"].split(" · ", 1)[0].strip() for i in self.steps]
+        names = [n.split(" ", 1)[-1] if stage_icon(n) else n for n in names]
+        cur = (names[-1] if names else head)[:14]
+        prev = (names[-2] if len(names) > 1 else "התחלה")[:14]
+        dots = "" if final else "." * (self.tick % 3 + 1)
+        detail = f"{prev.ljust(14, nb)} ← *{cur.ljust(14, nb)}*{dots.ljust(3, nb)}"
+        where = loc_text + (f", דרך {via or pc}" if loc_icon == "☁️" else "")
         rows = [
             self._aligned_row("נתיב", "🖥️", f"*{pc}*"),
             self._aligned_row("ספק", "🧠", f"*{self.ai_short or 'לא ידוע'}*" + (f" `{provider}`" if provider else "")),
-            self._aligned_row("מודל", "🧠", model + (f" {model_he(self.ai_model)}" if self.ai_model else "")),
-            self._aligned_row("דרך", loc_icon, f"*{loc_text}*"),
-            self._aligned_row("פירוט", spinner, f"*{self.stage[:80]}*"),
+            self._aligned_row("מודל", "🧬", f"`{self.ai_model}` {model_he(self.ai_model)}" if self.ai_model else "*לא דווח*"),
+            self._aligned_row("דרך", loc_icon, f"*{where}*"),
+            self._aligned_row("פירוט", spinner, detail),
         ]
         if final:
             rows.append(self._aligned_row("", "✅", "*סיימתי*"))
         rows.extend([
             self._aligned_row("שלבים", "🪜", f"*{len(self.steps)}*"),
-            self._aligned_row("", "▫️", " ".join(steps) if steps else ""),
+            nb * self.ICON_COL + " ".join(steps),
             self._aligned_row("לקח לי", "⏱️", f"*{self._elapsed()}*"),
-            self._aligned_row("הקשר", "🧮", f"*{context or 'לא נמדד'}*"),
+            self._aligned_row("הקשר:", "🧮", f"*{context or 'לא נמדד'}*"),
         ])
         return rows
 
@@ -7299,7 +7312,7 @@ class StatusMsg:
 
     def _full(self, answer):
         a = answer.strip()
-        return self._final() + f"\n{self.DIVIDER}\n📝 *תשובה:*\n" + (italic(a) if CFG.get("reply_italic", True) else a)
+        return self._final() + f"\n{self.DIVIDER}\n*תשובה:*\n" + (italic(a) if CFG.get("reply_italic", True) else a)
 
     def finalize(self, answer=None):
         """Owner 17.11 15:15 (third request): ONE message for the whole exchange. The status message gets its last edit with the

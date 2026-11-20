@@ -231,4 +231,4 @@ def test_status_rows_have_one_icon_column_and_one_divider(agent):
     cols = {len(r.split("_", 2)[1]) + 2 + len(r.split("_", 2)[2]) - len(r.split("_", 2)[2].lstrip(" ")) for r in labeled}
     assert cols == {mod.StatusMsg.ICON_COL}
     full = st._full("תשובה קצרה")
-    assert full.count(mod.StatusMsg.DIVIDER) == 2 and full.index("📝 *תשובה:*") > full.rindex(mod.StatusMsg.DIVIDER)
+    assert full.count(mod.StatusMsg.DIVIDER) == 2 and full.index("*תשובה:*") > full.rindex(mod.StatusMsg.DIVIDER)

@@ -986,8 +986,8 @@ def test_cli_status_shows_actual_provider_and_remote_location(agent):
     st.finish()
     mod._ctx.chat = None
     # owner 17.11: one detail per line, the label in bold
-    assert "💬 מנסח תשובה" in text and "🧠" in text and "קופילוט" in text and "☁️" in text and "ענן" in text and "סונט" not in text
-    assert text.index("נתיב") < text.index("ספק") < text.index("💬 מנסח תשובה") and "קופילוט" in text
+    assert "מנסח תשובה" in text and "🧠" in text and "קופילוט" in text and "☁️" in text and "ענן" in text and "סונט" not in text
+    assert text.index("נתיב") < text.index("ספק") < text.index("מנסח תשובה") and "קופילוט" in text
     assert "קופילוט" in final and "ענן" in final and "סונט" not in final
 
 
@@ -3057,7 +3057,7 @@ def test_status_is_appended_to_the_owners_message_and_answer_stays_there(agent, 
     assert original in edits[0][1]["text"] and st.DIVIDER in edits[0][1]["text"]
     monkeypatch.setattr(st, "_edit_landed", lambda *_a, **_k: True)
     assert st.finalize("תשובת בדיקה")
-    assert "📝 *תשובה:*" in edits[-1][1]["text"] and "תשובת בדיקה" in edits[-1][1]["text"]
+    assert "*תשובה:*" in edits[-1][1]["text"] and "תשובת בדיקה" in edits[-1][1]["text"]
     assert edits[-1][1]["id"] == mid and not sent
 
 
