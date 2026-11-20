@@ -7129,6 +7129,8 @@ class StatusMsg:
     # Owner 20.11 17:38: keep each status field in a fixed row, with the icon/value column after the same separator.
     LABEL_W = 5
     DIVIDER = "━━━━━━━ ✦ ━━━━━━━"
+    ICON_COL = 18
+    VALUE_GAP = 5
 
     @classmethod
     def _lab(cls, word):
@@ -7152,6 +7154,14 @@ class StatusMsg:
         except Exception:
             return ""
 
+    @classmethod
+    def _aligned_row(cls, label, icon, value=""):
+        """Keep the label on the right, the icon in a fixed middle column, and its value to the left."""
+        nbsp = "\u00a0"
+        label_text = f"_{label}_"
+        gap = nbsp * max(1, cls.ICON_COL - len(label) - 2)
+        return label_text + gap + icon + (nbsp * cls.VALUE_GAP + value if value else "")
+
     def _status_rows(self, final=False):
         """Fixed field order and icon column for the owner's 20.11 status layout request."""
         spinner = "✅" if final else ("⏳" if self.tick % 2 == 0 else "⌛")
@@ -7172,16 +7182,26 @@ class StatusMsg:
         if not steps and not final:
             steps = ["📩"]
         model = f"`{self.ai_model}`" if self.ai_model else "לא דווח"
+        pc = pc_he(CFG.get("host_label") or socket.gethostname())
+        pc = pc[len("מחשב "):] if pc.startswith("מחשב ") else pc
+        loc = self.ai_location or "☁️ ענן"
+        loc_icon = "🏠" if loc.startswith("🏠") else "☁️"
+        loc_text = loc.split(" ", 1)[-1] if " " in loc else loc
         rows = [
-            self._route_row(),
-            f"🧠 {self._lab('ספק')} ┃ *{self.ai_short or 'לא ידוע'}*" + (f" · `{provider}`" if provider else ""),
-            f"🧠 {self._lab('מודל')} ┃ {model}" + (f" · {model_he(self.ai_model)}" if self.ai_model else ""),
-            f"☁️ {self._lab('דרך')} ┃ *{self.ai_location or '☁️ ענן'}*",
-            f"{spinner} {self._lab('פירוט')} ┃ *{'סיימתי' if final else self.stage[:80]}*",
-            f"🪜 {self._lab('שלבים')} ┃ *{len(self.steps)}* · {' '.join(steps) if steps else '▫️'}",
-            f"⏱️ {self._lab('לקח לי')} ┃ *{self._elapsed()}*",
-            f"🧮 {self._lab('הקשר')} ┃ *{context or 'לא נמדד'}*",
+            self._aligned_row("נתיב", "🖥️", f"*{pc}*"),
+            self._aligned_row("ספק", "🧠", f"*{self.ai_short or 'לא ידוע'}*" + (f" `{provider}`" if provider else "")),
+            self._aligned_row("מודל", "🧠", model + (f" {model_he(self.ai_model)}" if self.ai_model else "")),
+            self._aligned_row("דרך", loc_icon, f"*{loc_text}*"),
+            self._aligned_row("פירוט", spinner, f"*{self.stage[:80]}*"),
         ]
+        if final:
+            rows.append(self._aligned_row("", "✅", "*סיימתי*"))
+        rows.extend([
+            self._aligned_row("שלבים", "🪜", f"*{len(self.steps)}*"),
+            self._aligned_row("", "▫️", " ".join(steps) if steps else ""),
+            self._aligned_row("לקח לי", "⏱️", f"*{self._elapsed()}*"),
+            self._aligned_row("הקשר", "🧮", f"*{context or 'לא נמדד'}*"),
+        ])
         return rows
 
     def _text(self):

@@ -19,8 +19,8 @@ def test_speaker_line_is_one_line_with_all_four(agent, monkeypatch):
     st = mod.StatusMsg("sonnet", wa=False)
     text = st._text()
     st.finish()
-    route = [l for l in text.split(chr(10)) if l.startswith("🛣️")]  # owner 20.11: the route row in the status message
-    assert len(route) == 1 and "┃" in route[0] and "🖥️" in route[0] and "☁️" in route[0]
+    route = [l for l in text.split(chr(10)) if "נתיב" in l]  # owner 20.11: the route row in the status message
+    assert len(route) == 1 and "🖥️" in route[0] and "יקיר" in route[0]
 
 
 def test_stop_kills_a_tracked_process_and_the_run_is_stopped(agent):

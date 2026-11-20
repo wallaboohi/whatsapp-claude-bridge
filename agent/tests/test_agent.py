@@ -964,7 +964,7 @@ def test_status_layout_keeps_fixed_rows_and_moving_progress_icon(agent):
     assert mod.pc_he("salon-pc") == "מחשב סלון נייח" and mod.pc_he("lap-yakir") == "מחשב עבודה נייד"
     # owner 15.11/17.11: header line, then the computer is the first detail line
     short = host[len("מחשב "):] if host.startswith("מחשב ") else host
-    assert short in [l for l in a.split(chr(10)) if "🛣️" in l][0]
+    assert short in [l for l in a.split(chr(10)) if "נתיב" in l][0]
     assert a.index("נתיב") < a.index("ספק") < a.index("מודל") < a.index("דרך") < a.index("פירוט") < a.index("שלבים") < a.index("לקח לי") < a.index("הקשר")
     assert "מגבלת" not in st._final() and "$" not in st._final(), "no usage/money line in the regular chat (owner 09.11 07:14)"
     mod._account_cache.update(at=mod.time.time() + 3600, v="me@example.com (Pro)")
@@ -986,8 +986,8 @@ def test_cli_status_shows_actual_provider_and_remote_location(agent):
     st.finish()
     mod._ctx.chat = None
     # owner 17.11: one detail per line, the label in bold
-    assert "💬 מנסח תשובה" in text and "🧠 *קופילוט*" in text and "☁️ *ענן*" in text and "סונט" not in text
-    assert text.index("🛣️") < text.index("ספק") < text.index("💬 מנסח תשובה") and "קופילוט" in text
+    assert "💬 מנסח תשובה" in text and "🧠" in text and "קופילוט" in text and "☁️" in text and "ענן" in text and "סונט" not in text
+    assert text.index("נתיב") < text.index("ספק") < text.index("💬 מנסח תשובה") and "קופילוט" in text
     assert "קופילוט" in final and "ענן" in final and "סונט" not in final
 
 
