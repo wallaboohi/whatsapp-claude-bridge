@@ -3514,6 +3514,7 @@ def local_say(chat, role, text, files=None):
 
 
 def reply(text, quoted=None):
+    text = unwrap_provider_event_stream(text)[0]  # owner 19.11 23:34: last guard - no raw provider events in WhatsApp, on any path
     chat = cur_chat()
     if chat == PRIMARY:
         kv_set("last_tool_msg", json.dumps({"ts": dt.datetime.now().isoformat(timespec="seconds"), "text": text.strip()[:300]}, ensure_ascii=False))
@@ -4871,6 +4872,7 @@ def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
     with adb() as db:
         db.execute("INSERT INTO claude_runs (at, session, cost, input_tokens, output_tokens, seconds, ok, model, cum, chat) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                    (dt.datetime.now().isoformat(), None, 0, 0, 0, time.time() - t0, 1, m or name, 0, chat))
+    text = unwrap_provider_event_stream(text)[0]  # owner 19.11 23:34: a CLI's JSON event stream never reaches any caller as an answer
     _note_answer(name, time.time() - t0)
     return {"type": "result", "result": text, "is_error": False, "session_id": None, "usage": {}, "total_cost_usd": 0}
 
