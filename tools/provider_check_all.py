@@ -65,7 +65,8 @@ def t_codex():
     return c and _run(c + ["exec", "--skip-git-repo-check", "-"], stdin=PROMPT)
 
 
-ROOT = "C:/Users/walla/whatsapp-mcp"  # same path on all 4 computers (also when run as "python -" over ssh)
+ROOT = os.path.abspath(os.environ.get("WHATSAPP_MCP_ROOT") or "C:/Users/walla/whatsapp-mcp")
+REMOTE_ROOT = "C:/Users/walla/whatsapp-mcp"  # repository path on the other Windows computers
 
 
 def t_gemini():
@@ -155,20 +156,48 @@ def local():
                 res[k] = f.result()
             except Exception as e:
                 res[k] = {"ok": False, "sec": 0, "msg": str(e)[:160]}
-    return {"host": socket.gethostname().lower(), "at": time.strftime("%Y-%m-%d %H:%M"), "tests": res}
+    selected = {}
+    try:
+        cfg = json.load(open(os.path.join(ROOT, "agent", "provider.json"), encoding="utf-8"))
+        selected = {k: cfg.get(k) for k in ("provider", "model") if cfg.get(k)}
+    except Exception:
+        pass
+    return {"host": socket.gethostname().lower(), "at": time.strftime("%Y-%m-%d %H:%M"), "selected": selected, "tests": res}
 
 
 def remote(alias):
-    src = open(os.path.abspath(__file__), encoding="utf-8").read()
-    err = ""
-    for runner in (["python"], ["uv", "run", "-q", "--no-project", "python"]):
+    # Windows OpenSSH can leave its PowerShell shell open after the remote Python exits.
+    # Run the already-installed script and consume its JSON line; close only our SSH client
+    # after that result arrives, instead of waiting for an interactive shell to terminate.
+    script = f"{REMOTE_ROOT}/tools/provider_check_all.py"
+    cmd = ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", alias,
+           "python", "-X", "utf8", script, "local"]
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                encoding="utf-8", errors="replace", bufsize=1)
         try:
-            r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", alias] + runner + ["-X", "utf8", "-", "local"], input=src,
-                               capture_output=True, text=True, timeout=400, encoding="utf-8", errors="replace")
-            return json.loads(r.stdout[r.stdout.find("{"):])
-        except Exception as e:
-            err = (str(e) or "no answer")[:160]
-    return {"error": err}
+            for line in proc.stdout:
+                start = line.find("{")
+                if start < 0:
+                    continue
+                try:
+                    result = json.loads(line[start:])
+                except ValueError:
+                    continue
+                if isinstance(result, dict) and ("tests" in result or "error" in result):
+                    return result
+            err = (proc.stderr.read() or "no provider result").strip()
+            return {"error": err[-160:]}
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait()
+            if proc.stdout:
+                proc.stdout.close()
+            if proc.stderr:
+                proc.stderr.close()
+    except Exception as e:
+        return {"error": (str(e) or "no answer")[:160]}
 
 
 NAMES = {"claude": "Claude Code", "codex": "Codex", "gemini": "Gemini CLI", "copilot": "Copilot CLI", "opencode": "OpenCode", "ollama": "Ollama (שרת מקומי)",
@@ -183,7 +212,7 @@ def main():
     with ThreadPoolExecutor(4) as ex:
         futs = [(name, host, alias, ex.submit(local) if host == me else ex.submit(remote, alias)) for host, name, alias in PCS]
         rows = [(name, host, alias, f.result()) for name, host, alias, f in futs]
-    reg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "agent", "provider_registry.json")
+    reg_path = os.path.join(ROOT, "agent", "provider_registry.json")
     accounts = {}
     try:
         for c in json.load(open(reg_path, encoding="utf-8"))["computers"]:
@@ -194,6 +223,17 @@ def main():
     L = ["# צ'ק-ליסט ספקי בינה בכל המחשבים", f"_נבדק בפועל (שאלה קצרה לכל ספק) {time.strftime('%d.%m.%Y %H:%M')}, מ-{me}. ✅ ענה · ❌ לא ענה · ➖ לא מותקן_", ""]
     L.append("| ספק | " + " | ".join(f"{n} ({h}, ssh {a})" for n, h, a, _ in rows) + " |")
     L.append("|---" * (len(rows) + 1) + "|")
+    cells = []
+    for _, host, _, r in rows:
+        if r.get("error"):
+            cells.append("⚠️ מחשב לא נבדק")
+        else:
+            sel = r.get("selected") or {}
+            label = str(sel.get("provider") or "לא הוגדר")
+            if sel.get("model"):
+                label += " · " + str(sel["model"])
+            cells.append(label)
+    L.append("| ספק שנבחר בהגדרות המחשב | " + " | ".join(cells) + " |")
     for k, title in NAMES.items():
         cells = []
         for _, host, _, r in rows:
@@ -214,9 +254,11 @@ def main():
     for name, host, alias, r in rows:
         if r.get("error"):
             L.append(f"\n- {name}: לא נסרק ({r['error']})")
+    if not os.path.exists(reg_path):
+        L.append("\n_הערה: `agent/provider_registry.json` חסר; החשבון עצמו לא ניתן להשוואה אוטומטית. שורת הספק שנבחר בהגדרות מוצגת בנפרד._")
     L.append("\n_עדכון: `uv run --no-project python -X utf8 tools/provider_check_all.py all` מכל מחשב; הקובץ מועתק לכל הארבעה._")
     text = "\n".join(L) + "\n"
-    home = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "agent", "home")
+    home = os.path.join(ROOT, "agent", "home")
     with open(os.path.join(home, "PROVIDERS-STATUS.md"), "w", encoding="utf-8") as f:
         f.write(text)
     with open(os.path.join(home, "PROVIDERS-STATUS.json"), "w", encoding="utf-8") as f:
