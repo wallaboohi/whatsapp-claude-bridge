@@ -42,6 +42,18 @@ if (-not (Test-Path $pyexe)) {
 $before = git rev-parse HEAD
 if ($env:DRY) { git fetch -q hub 2>&1 | Out-Null; $pull = 'dry-run: fetched only' } else { $pull = git pull --ff-only hub main 2>&1 | Select-Object -Last 1 }
 $after = git rev-parse HEAD
+$merged = $false
+if (-not $env:DRY -and $after -ne (git rev-parse hub/main)) {
+  # owner 21.11 00:10: the PCs commit their own "Daily sync" data commits, which never reached hub, so a plain fast-forward failed on
+  # three PCs and stopped every rolling update. Merge hub into the local branch (hub wins only on conflicting hunks: backup copies of
+  # config files) and push the result, so hub holds every PC's data too. A real conflict or a rejected push stops the chain as before.
+  $dirty = git status --porcelain --untracked-files=no | Where-Object { $_ -notmatch '[.]claude/worktrees/' }
+  if (-not $dirty) {
+    git merge hub/main -X theirs --no-edit 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { git merge --abort 2>&1 | Out-Null } else { git push hub HEAD:main 2>&1 | Out-Null; git fetch -q hub 2>&1 | Out-Null; $merged = $true }
+    $after = git rev-parse HEAD
+  }
+}
 $hub = git rev-parse hub/main
 $go = git diff --name-only $before $after -- whatsapp-bridge | Where-Object { $_ -like '*.go' }
 $rb = ''
@@ -53,10 +65,15 @@ if ($go -and -not $env:DRY) {
   $rbok = ($rb -eq "''" -or $rb -eq '')
   Pop-Location
 }
-if ($after -ne $before -and -not $env:DRY) {
+# owner 21.11 00:22: the laptop already had the new code on disk (merged by hand) but its agent still ran the old one: nothing was
+# pulled, so no restart was asked. Compare the commit the running agent started on with the checkout.
+$runcode = "import sqlite3;db=sqlite3.connect('file:C:/Users/walla/whatsapp-mcp/agent/agent.db?mode=ro',uri=True,timeout=10);r=db.execute('select v from kv where k=?',('running_head',)).fetchone();print(r[0] if r else '')"
+$running = (& $pyexe -I -X utf8 -c $runcode 2>$null | Select-Object -Last 1)
+$stale = [bool]$running -and (-not $after.StartsWith($running.Substring(0, [Math]::Min(7, $running.Length))))
+if (($after -ne $before -or $stale) -and -not $env:DRY) {
   [IO.File]::WriteAllText("C:\Users\walla\whatsapp-mcp\agent\restart.request", "עדכון מדורג בשרשרת: $($after.Substring(0,7))", [Text.UTF8Encoding]::new($false))
 }
-@{before=$before; after=$after; hub=$hub; pull="$pull"; go=[bool]$go; rebuild=$rb; rebuild_ok=$rbok; restart=($after -ne $before)} | ConvertTo-Json -Compress
+@{before=$before; after=$after; hub=$hub; pull="$pull"; go=[bool]$go; rebuild=$rb; rebuild_ok=$rbok; restart=($after -ne $before -or $stale); merged=$merged; running="$running" } | ConvertTo-Json -Compress
 """
 HB = r"""
 import os, subprocess

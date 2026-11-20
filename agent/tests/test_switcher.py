@@ -274,3 +274,24 @@ def test_a_pc_that_already_took_the_identity_is_left_alone(agent, monkeypatch, t
     taken = _holder_env(mod, monkeypatch, tmp_path, holding=True)
     mod.chain_holder_step(HOLDER_FC, "נייח", {"state": "active"}, HOST_AWAY)
     assert taken == []
+
+
+def test_the_planned_take_works_on_every_backup_not_only_the_bedroom(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    for me, before in (("חדר שינה", []), ("סלון", ["חדר שינה"]), ("לפטופ", ["חדר שינה", "סלון"])):
+        taken = _holder_env(mod, monkeypatch, tmp_path, planned=me)
+        fc = {"for": "נייח", "self_name": me, "defer_to": before}
+        assert mod.chain_holder_step(fc, "נייח", {"state": "active"}, HOST_AWAY) is True and len(taken) == 1, me
+
+
+def test_the_rolling_update_merges_diverged_daily_sync_commits_and_restarts_a_stale_agent():
+    import importlib.util, os, sys
+    tools = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "tools")
+    sys.path.insert(0, tools)
+    spec = importlib.util.spec_from_file_location("chain_update_t", os.path.join(tools, "chain_update.py"))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    r = m.REMOTE
+    assert "merge hub/main -X theirs" in r and "push hub HEAD:main" in r and "merge --abort" in r, "diverged PCs are merged, a conflict aborts"
+    assert "claude/worktrees/" in r, "a scratch worktree gitlink is not dirty code"
+    assert "running_head" in r and "$stale" in r, "an agent older than the checkout is restarted even with nothing pulled"

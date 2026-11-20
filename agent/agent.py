@@ -10596,12 +10596,19 @@ def put(path):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path + ".lease-tmp", "wb") as f:
         f.write(blob)
-    for ext in ("-wal", "-shm"):
+    for attempt in range(60):  # owner 21.11: a reader of ours may hold the file for a moment (WinError 5 at 23:26 failed a hand-over)
+        for ext in ("-wal", "-shm"):
+            try:
+                os.remove(path + ext)
+            except OSError:
+                pass
         try:
-            os.remove(path + ext)
-        except OSError:
-            pass
-    os.replace(path + ".lease-tmp", path)
+            os.replace(path + ".lease-tmp", path)
+            break
+        except PermissionError:
+            if attempt == 59:
+                raise
+            time.sleep(0.5)
 busy = running and not st.startswith(("waiting", "released", "replaced"))
 path = store + "/whatsapp.db"
 if busy:
