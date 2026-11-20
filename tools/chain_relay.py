@@ -58,7 +58,9 @@ except sqlite3.Error as e:
 out["busy"] = busy
 g = lambda *a: subprocess.run(["git", "-C", R, *a], capture_output=True, text=True).stdout.strip()
 out["head"] = g("rev-parse", "--short", "HEAD")
-out["dirty"] = [l for l in g("status", "--porcelain", "--untracked-files=no").splitlines() if l.strip()]
+# owner 20.11 23:15 / 21.11 00:20: another Claude session's scratch worktree (.claude/worktrees/*) that the daily sync committed as a
+# gitlink shows as " m" and stopped the nightly relay at 23:15 and the live round: it is not code of the bridge
+out["dirty"] = [l for l in g("status", "--porcelain", "--untracked-files=no").splitlines() if l.strip() and ".claude/worktrees/" not in l]
 print("@@J@@" + json.dumps(out, ensure_ascii=False))
 """
 

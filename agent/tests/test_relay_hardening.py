@@ -147,3 +147,10 @@ def test_the_tool_check_fails_for_a_pc_without_a_send_policy(monkeypatch):
     assert not ok and "send_policy.json" in why
     monkeypatch.setattr(r, "state", lambda n: {"policy": True, "lease": "waiting", "busy": [], "head": "abc"})
     assert r.tool_check("חדר שינה", False)[0]
+
+
+def test_a_scratch_worktree_gitlink_is_not_dirty_code():
+    r = _relay()
+    assert ".claude/worktrees/" in r.STATE and 'not in l' in r.STATE
+    import ast
+    ast.parse(r.STATE)  # the snippet that runs on every PC must stay valid Python
