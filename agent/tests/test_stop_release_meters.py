@@ -218,17 +218,17 @@ def test_a_stale_asked_hold_is_cleared_without_handing_anything_back(agent, monk
 
 
 
-def test_status_rows_have_one_label_width_and_one_divider(agent):
-    """Owner 20.11 10:30 (example ו): every label the same width, ┃ under ┃, the bold on the changing detail, one divider line."""
+def test_status_rows_have_one_icon_column_and_one_divider(agent):
+    """Owner 20.11 (layout ז): label on the right, every icon in the same column, one divider line; order = נתיב first."""
     mod, _ = agent
     st = mod.StatusMsg("sonnet", wa=False)
     st.set_stage("📖 קורא קבצים", "agent.py")
-    text = st._text()
+    rows = [r for r in st._status_rows() if r.startswith("_")]
     st.finish()
-    rows = text.split(chr(10))
-    labels = [r.split("`")[1] for r in rows if r.count("`") >= 2]
-    assert len(labels) == 4 and len({len(x) for x in labels}) == 1
-    assert all(r.split("`")[2].startswith(" ┃ ") for r in rows if r.count("`") >= 2)
-    assert "*agent.py*" in text and "*פעולה*" not in text
+    labeled = [r for r in rows if r.split("_")[1]]
+    assert labeled[0].startswith("_נתיב_")
+    # label + non-breaking gap fills the same width, so the icon starts in the same column in every labeled row
+    cols = {len(r.split("_", 2)[1]) + 2 + len(r.split("_", 2)[2]) - len(r.split("_", 2)[2].lstrip(" ")) for r in labeled}
+    assert cols == {mod.StatusMsg.ICON_COL}
     full = st._full("תשובה קצרה")
-    assert full.count(mod.StatusMsg.DIVIDER) == 1 and full.index(mod.StatusMsg.DIVIDER) < full.index("📝 *תשובה:*")
+    assert full.count(mod.StatusMsg.DIVIDER) == 2 and full.index("📝 *תשובה:*") > full.rindex(mod.StatusMsg.DIVIDER)
