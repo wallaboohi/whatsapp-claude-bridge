@@ -39,6 +39,7 @@ except OSError:
     out["lease"] = ""
 out["grant"] = os.path.exists(R + "/whatsapp-bridge/store/lease_grant")
 out["handover"] = os.path.exists(R + "/whatsapp-bridge/store/handover.json")
+out["policy"] = os.path.exists(R + "/whatsapp-bridge/store/send_policy.json")  # owner 20.11 23:45: draft storm without it
 busy = []
 try:
     db = sqlite3.connect("file:" + R + "/agent/agent.db?mode=ro", uri=True, timeout=10)
@@ -111,6 +112,8 @@ def request(name, target):
 def tool_check(name, holder):
     """Holder: the full quiet self-test must pass. Standby: a fresh agent, waiting at the identity gate, on the hub commit."""
     st = state(name)
+    if st.get("policy") is False:  # owner 20.11 23:45: 23:18 draft storm - a PC without store/send_policy.json must not hold or stand by
+        return False, "חסר store/send_policy.json (הגשר היה הופך תשובות לטיוטות במספר האישי)"
     if holder:
         if not str(st.get("lease", "")).startswith("holding"):
             return False, f"לא מחזיק את ההזדהות ({st.get('lease') or st.get('error')})"

@@ -535,6 +535,7 @@ def _lease_info():
         g = os.path.join(sd, "lease_grant")
         lease["held"] = lease["mode"] and os.path.exists(g) and os.path.getmtime(g) > _boot_time() - 60
         lease["standby"] = lease["mode"] and not lease["status"].startswith("holding")
+        lease["policy"] = os.path.exists(os.path.join(sd, "send_policy.json"))  # owner 20.11 23:45: no policy = must not hold the identity
         meta = os.path.join(sd, "session_copy", "meta.json")
         lease["copy_at"] = (json.load(open(meta, encoding="utf-8")).get("at") or "") if os.path.exists(meta) else ""
     except Exception:

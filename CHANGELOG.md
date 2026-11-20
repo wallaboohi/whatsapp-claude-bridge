@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.2.1 — 2026-11-20
+סוויצ'ר: חלון יציבות של דקה לפני החזרת הגשר, ביטול לולאת fence/unfence, תוקף להעברה מתוכננת שלא נלקחה, סבב לילי עם מגבה אחד וסבב חי מלא בהפעלה יזומה (עם בדיקת חיבור יחיד אחרי כל קפיצה).
+
 ## 1.2.0 — 2026-11-17
 - Tests follow the shorter location wording and the four-section provider list (fixes the failed nightly release 1.2.0) (owner 17.11 04:23)
 - Provider list as four host sections with numbered Hebrew models, /N M, model words, commands index completed, shorter restart/ID notices (owner 16.11 21:58)

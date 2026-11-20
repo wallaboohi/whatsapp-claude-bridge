@@ -588,7 +588,7 @@ def test_usage_limit_parks_and_requeues_commands(agent, monkeypatch):
         st = [r[0] for r in db.execute("SELECT status FROM commands ORDER BY id")]
     # owner 15.11: Claude is the chosen AI and capped: no silent wait, no switch — each message is told to switch AI
     assert st == ["done", "done"] and not called
-    assert sum("לא זמין מהסיבה:" in t and "לא עברתי לבינה אחרת" in t and "/ ומספר" in t for t in sent) == 2
+    assert sum("לא זמין מהסיבה:" in t and "לא עברתי לבינה אחרת" in t and "/ספק *מספר*" in t for t in sent) == 2  # owner 20.11 18:02: the new wording of the switch hint
 
 def test_stranded_limit_waiters_are_requeued(agent, monkeypatch):
     """Owner 11.11: the limit flag was cleared but the PC slept / the notice hung before the re-queue, so the commands sat
@@ -2297,7 +2297,7 @@ def test_every_switch_line_carries_command_and_models(agent):
     assert "/3 *Gemini*" in line and "/gemini" in line and "/ג'מיני" in line and "gemini-flash-lite-latest" in line
     mod.ai_state_set("gemini", True)
     rows = "\n".join(mod.ai_status_lines())
-    assert "/3 *Gemini*" in rows and "/ג'מיני" in rows
+    assert "*/ספק 3*" in rows and "Gemini" in rows  # owner 20.11 18:02: grouped status rows ("*/ספק 3* Gemini ☁️ ענן")
     mod.failover_note("מכסת השימוש נגמרה", "claude", "groq")
     assert "מעברים בין בינות: 1" in mod.failover_line_he() and f"Claude {mod.claude_account_type()} → Groq" in mod.failover_line_he()
 
@@ -2365,7 +2365,8 @@ def test_every_answer_says_where_the_model_runs(agent, monkeypatch, tmp_path):
     assert "בענן" in t and "מקומי" in t and "מארח מרוחק" not in t  # owner 17.11: no machine is called a remote host
     assert t.index("בענן") < t.index("מקומי") and t.index("גרוק") < t.index("מקומי") < t.index("אולמה")
     rows = mod.ai_status_lines()
-    assert rows[0] == mod.REMOTE_HEAD and mod.LOCAL_HEAD in rows and "Ollama" in " ".join(rows[rows.index(mod.LOCAL_HEAD):])
+    # owner 20.11 18:02 / 20:57: rows are grouped by state (answered / not tested / unavailable), each row says cloud or local
+    assert any("Groq" in r and "☁️" in r for r in rows) and any("Ollama" in r and "🏠" in r for r in rows)
 
 
 def test_group_name_never_keeps_a_model_id_and_english_is_translated(agent, monkeypatch):
@@ -3133,6 +3134,7 @@ def test_session_take_and_handback_roundtrip(agent, monkeypatch, tmp_path):
     monkeypatch.setitem(agent.CFG, "session_share", {"enabled": True})
     monkeypatch.setattr(agent, "_bridge_running", lambda: False)
     store = agent.STORE
+    open(agent.SEND_POLICY, "w", encoding="utf-8").write('{"control_group": "x@g.us"}')  # owner 20.11 23:45: no grant without a send policy
     _fake_session(os.path.join(store, "whatsapp.db"), "972500000000:51@s.whatsapp.net")  # the backup's own former device
     open(os.path.join(store, "whatsapp.db-wal"), "wb").write(b"stale")
     os.makedirs(agent.SESSION_COPY, exist_ok=True)
@@ -3248,6 +3250,7 @@ def test_session_resume_stands_by_when_successor_holds(agent, monkeypatch):
     loaded = []
     monkeypatch.setattr(agent, "load_plugins", lambda p=None: loaded.append(p))
     agent.failover_save("נייח", {"state": "active", "since": "2026-11-18T10:00:00"})
+    open(agent.SEND_POLICY, "w", encoding="utf-8").write('{"control_group": "x@g.us"}')  # owner 20.11 23:45: no grant without a send policy
     agent.lease_grant("old")
     agent.failover_resume()
     assert agent.failover_state("נייח").get("state") == "idle" and not loaded and not agent.lease_held()
