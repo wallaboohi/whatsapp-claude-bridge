@@ -949,7 +949,7 @@ def test_transcribe_gap_finds_untranscribed_voice_notes(agent):
     assert mod.kv_get("transcribe_backfill_request") == "" and mod.slow.qsize() >= 1
 
 
-def test_status_hourglass_flips(agent):
+def test_status_layout_keeps_fixed_rows_and_moving_progress_icon(agent):
     mod, _ = agent
     mod._usage_cache.update(at=mod.time.time() + 3600, v={"five_hour": {"utilization": 27}, "seven_day": {"utilization": 70}})
     st = mod.StatusMsg("sonnet", wa=False)
@@ -957,15 +957,15 @@ def test_status_hourglass_flips(agent):
     st.tick += 1
     b = st._text()
     st.finish()
-    assert "\u23f3" in a and "\u231b" in b, "the hourglass alternates on every edit"
+    assert "⏳" in a and "⌛" in b, "the progress icon alternates on every edit"
+    assert all(label in a for label in ("נתיב", "ספק", "מודל", "דרך", "פירוט", "שלבים", "לקח לי", "הקשר"))
     host = mod.pc_he(mod.CFG.get("host_label") or mod.socket.gethostname())  # owner 18.11: Hebrew PC names
     assert mod.pc_he("YB-PC-HW") == "מחשב יקיר נייח" and mod.pc_he("PERROOM") == "מחשב חדר נייח"
     assert mod.pc_he("salon-pc") == "מחשב סלון נייח" and mod.pc_he("lap-yakir") == "מחשב עבודה נייד"
     # owner 15.11/17.11: header line, then the computer is the first detail line
     short = host[len("מחשב "):] if host.startswith("מחשב ") else host
-    # owner 20.11 (example ו): state, steps, action, then the route row (computer · provider · model · location)
-    assert short in a.split(chr(10))[3] and short in [l for l in st._final().split(chr(10)) if "🛣️" in l][0]
-    assert a.index("מצב") < a.index("שלבים") < a.index("פעולה") < a.index("🛣️") and "📩 התקבלה הודעה" in a
+    assert short in [l for l in a.split(chr(10)) if "🛣️" in l][0]
+    assert a.index("נתיב") < a.index("ספק") < a.index("מודל") < a.index("דרך") < a.index("פירוט") < a.index("שלבים") < a.index("לקח לי") < a.index("הקשר")
     assert "מגבלת" not in st._final() and "$" not in st._final(), "no usage/money line in the regular chat (owner 09.11 07:14)"
     mod._account_cache.update(at=mod.time.time() + 3600, v="me@example.com (Pro)")
     rep = mod.owner_command("/תקרה")
@@ -987,7 +987,7 @@ def test_cli_status_shows_actual_provider_and_remote_location(agent):
     mod._ctx.chat = None
     # owner 17.11: one detail per line, the label in bold
     assert "💬 מנסח תשובה" in text and "🧠 *קופילוט*" in text and "☁️ *ענן*" in text and "סונט" not in text
-    assert text.index("💬 מנסח תשובה") < text.index("🛣️") < text.index("קופילוט")
+    assert text.index("🛣️") < text.index("ספק") < text.index("💬 מנסח תשובה") and "קופילוט" in text
     assert "קופילוט" in final and "ענן" in final and "סונט" not in final
 
 
@@ -2977,11 +2977,11 @@ def test_finished_status_lists_step_durations_and_total(agent, monkeypatch):
     monkeypatch.setitem(mod.CFG, "reply_prefix", "🤖 ")
     st = mod.StatusMsg("", "chat@g.us", wa=False)
     st.t0 = 1000.0
-    st.steps = [{"at": "", "ts": 1000.0, "text": "קריאת הקשר"}, {"at": "", "ts": 1003.0, "text": "ניסוח תשובה"}]
+    st.steps = [{"at": "", "ts": 1000.0, "text": "🧵 קריאת הקשר"}, {"at": "", "ts": 1003.0, "text": "💬 ניסוח תשובה"}]
     st.ended = 1011.0
     text = st._final()
-    assert "*סיימתי* · ⏱ *0:11*" in text  # owner 20.11 (example ו): the total time sits on the state row
-    assert "קריאת הקשר ← ניסוח תשובה" in text  # owner 17.11: icons and words, not a long list
+    assert "*סיימתי*" in text and "*0:11*" in text
+    assert "🧵" in text and "💬" in text
 
 
 def test_send_want_id_returns_bridge_message_id(agent, monkeypatch):

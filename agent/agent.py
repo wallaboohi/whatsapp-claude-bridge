@@ -7126,8 +7126,7 @@ class StatusMsg:
     def _detail_lines(self):
         return [speaker_line(self.ai_short, self.ai_model, self.ai_location or "☁️ ענן")]
 
-    # Owner 20.11 10:09-10:30 (example ו): a label in grey code of ONE fixed width on every row, ┃ under ┃, the changing
-    # detail in bold, the route row (computer · provider · model · location), one divider line before the answer.
+    # Owner 20.11 17:38: keep each status field in a fixed row, with the icon/value column after the same separator.
     LABEL_W = 5
     DIVIDER = "━━━━━━━ ✦ ━━━━━━━"
 
@@ -7147,46 +7146,55 @@ class StatusMsg:
         parts.append(f"{icon} *{word or loc}*")
         return f"🛣️ {self._lab('נתיב')} ┃ " + " · ".join(parts)
 
+    def _provider_code(self):
+        try:
+            return run_provider(self.chat, True)[2] or ""
+        except Exception:
+            return ""
+
+    def _status_rows(self, final=False):
+        """Fixed field order and icon column for the owner's 20.11 status layout request."""
+        spinner = "✅" if final else ("⏳" if self.tick % 2 == 0 else "⌛")
+        provider = self._provider_code()
+        st, _, det = self.stage.partition(" · ")
+        head = st.split(" ", 1)[-1] if stage_icon(st) else st
+        meter = ctx_meter_line(self.chat, self.t0 - 1)
+        context = ""
+        if meter:
+            m = re.search(r"הקשר:\s*([^·]+)", meter)
+            context = m.group(1).strip() if m else meter
+        steps = []
+        for item in self.steps:
+            name = item["text"].split(" · ", 1)[0].strip()
+            icon = stage_icon(name)
+            if icon and icon not in steps:
+                steps.append(icon)
+        if not steps and not final:
+            steps = ["📩"]
+        model = f"`{self.ai_model}`" if self.ai_model else "לא דווח"
+        rows = [
+            self._route_row(),
+            f"🧠 {self._lab('ספק')} ┃ *{self.ai_short or 'לא ידוע'}*" + (f" · `{provider}`" if provider else ""),
+            f"🧠 {self._lab('מודל')} ┃ {model}" + (f" · {model_he(self.ai_model)}" if self.ai_model else ""),
+            f"☁️ {self._lab('דרך')} ┃ *{self.ai_location or '☁️ ענן'}*",
+            f"{spinner} {self._lab('פירוט')} ┃ *{'סיימתי' if final else self.stage[:80]}*",
+            f"🪜 {self._lab('שלבים')} ┃ *{len(self.steps)}* · {' '.join(steps) if steps else '▫️'}",
+            f"⏱️ {self._lab('לקח לי')} ┃ *{self._elapsed()}*",
+            f"🧮 {self._lab('הקשר')} ┃ *{context or 'לא נמדד'}*",
+        ]
+        return rows
+
     def _text(self):
-        # owner 20.11 16:55: order = נתיב → פעולה → שלבים → מצב; spinner animation with cycle
-        spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[self.tick % 10]  # rotates every edit (~0.5s)
+        # owner 20.11 17:38: one fixed status layout, updated while the run proceeds.
         prefix = CFG["reply_prefix"]
         if self.tick % 10 in [2, 5, 8] and prefix.strip() == "🤖":
             prefix = prefix.replace("🤖", "🦾")  # robot "moves" with spinner
-        st, _, det = self.stage.partition(" · ")
-        head = st.split(" ", 1)[-1] if stage_icon(st) else st
-        lines = [self._route_row(),
-                 f"🔧 {self._lab('פעולה')} ┃ *{(det or st).strip()[:80]}*",
-                 f"🪜 {self._lab('שלבים')} ┃ *{max(1, len(self.steps))}*",
-                 f"{spinner} {self._lab('מצב')} ┃ *{head}* · ⏱ *{self._elapsed()}*"]
-        return prefix + "\n".join(lines)
+        return prefix + self.DIVIDER + "\n" + "\n".join(self._status_rows())
 
     def _final(self):
         """Owner 17.11 13:55 (approved): the finished message shows the steps with how long each took, and the total from receiving
         the message until the answer. Owner 20.11 16:55: order = נתיב first."""
-        end = self.ended or time.time()
-        lines = [self._route_row()]
-        if self.steps:  # owner 17.11 16:45: two short process lines: icons in order, and the words below them
-            seq = []  # owner 17.11 22:31 (approved): no repeats and only the last few kinds of step — the chain grew without end in a loop
-            for s in self.steps:
-                head = s["text"].split(" · ", 1)[0].strip()
-                if head in seq:
-                    seq.remove(head)
-                seq.append(head)
-            keep = int(CFG.get("final_steps_max", 6))
-            more = len(seq) - keep
-            seq = seq[-keep:]
-            icons = " ".join(stage_icon(h) or "▫️" for h in seq)
-            words = " ← ".join(h.split(" ", 1)[-1] if stage_icon(h) else h for h in seq)
-            lines.append(f"🔧 {self._lab('פעולה')} ┃ {words}")
-            lines.append(f"🪜 {self._lab('שלבים')} ┃ *{len(self.steps)}* · {icons}" + (f" (+{more} קודמים)" if more > 0 else ""))
-        elif not self.steps:
-            lines.append(f"🔧 {self._lab('פעולה')} ┃ _(אין פעולות)_")
-            lines.append(f"🪜 {self._lab('שלבים')} ┃ *0*")
-        lines.append(f"✅ {self._lab('מצב')} ┃ *סיימתי* · ⏱ *{self._elapsed()}*")
-        meter = ctx_meter_line(self.chat, self.t0 - 1)
-        if meter:
-            lines.append(meter)
+        lines = [self.DIVIDER, *self._status_rows(final=True)]
         return CFG["reply_prefix"] + "\n".join(lines)
 
     def send_finished(self):
