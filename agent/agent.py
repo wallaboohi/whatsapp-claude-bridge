@@ -1178,6 +1178,8 @@ def budget_for(chat):
 # same tools, permissions, rules and sessions); another provider only swaps the model server behind it through Claude Code's
 # own settings (ANTHROPIC_BASE_URL / token). Defaults below; config.json "providers" may override or add. Map: AI_HOSTING.md.
 PROVIDER_FILE = os.path.join(HERE, "provider.json")
+PROVIDERS_FILE = os.path.join(HERE, "providers.json")  # the shared provider registry (same on every PC, in git)
+MODELS_LIVE_FILE = os.path.join(HERE, "models_live.json")  # per PC, not in git: live model lists that override providers.json
 SECRETS_DIR = os.path.join(ROOT, "secrets")
 def _read_json(path):
     """with-block: a handle left open blocks git from replacing the file on Windows (bedroom PC, 18.11: pull failed)."""
@@ -1190,13 +1192,27 @@ PROVIDER_WORDS = {"קלוד": "claude", "claude": "claude", "מנוי": "claude"
                   "אופנראוטר": "openrouter", "openrouter": "openrouter", "api": "anthropic_api", "anthropic_api": "anthropic_api"}
 
 
+def _models_overlay():
+    try:
+        with open(MODELS_LIVE_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError, NameError):
+        return {}
+
+
 def providers():
     try:  # re-read each time: a provider added from the dashboard works without restarting the agent
-        out = _read_json(os.path.join(HERE, "providers.json"))
+        out = _read_json(PROVIDERS_FILE)
     except (OSError, ValueError):
         out = json.loads(json.dumps(PROVIDERS_DEFAULT))
     for k, v in (CFG.get("providers") or {}).items():
         out.setdefault(k, {}).update(v)
+    for k, v in _models_overlay().items():  # owner 20.11 11:57: each PC's live model lists, never written into providers.json
+        if isinstance(out.get(k), dict) and isinstance(v, dict) and v.get("models"):
+            out[k]["models"] = list(v["models"])
+            if v.get("model"):
+                out[k]["model"] = v["model"]
     if isinstance(out.get("claude"), dict):  # owner 18.11: the registry names which account this machine's Claude is
         t = claude_account_type()
         out["claude"]["short"] = "Claude " + t
@@ -1962,6 +1978,170 @@ def provider_models(name, limit=2):
     return [str(m).split("/")[-1] for m in ms[:limit] if m]
 
 
+# ---------- live model catalog (owner 20.11 11:57) ----------
+# The bridge never sends a model that the provider does not report now. On entering every provider its list is read from
+# the provider itself; the models that still exist keep the order the owner had, new ones are added at the end, and a
+# default model that disappeared is replaced by a live one.
+CATALOG_FILE = os.path.join(HERE, "model_catalog.json")
+_cat = {"data": {}}
+MODEL_GONE_RE = re.compile(r"model\b[^\n]{0,40}?(?:unavailable|not\s*found|not\s*supported|does\s*not\s*exist|unknown)"
+                           r"|unknown\s*model|invalid\s*model|no\s*such\s*model|model_not_found|model_unavailable", re.I)
+
+
+def _catalog_save():
+    """Write the read lists to model_catalog.json (audit only; the running agent keeps them in memory)."""
+    try:
+        out = {"saved": dt.datetime.now().isoformat(timespec="seconds"), "providers": {}}
+        for k, v in _cat["data"].items():
+            out["providers"][k] = {"at": dt.datetime.fromtimestamp(v.get("at") or 0).isoformat(timespec="seconds"),
+                                   "models": v.get("models") or []}
+        tmp = CATALOG_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(out, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, CATALOG_FILE)
+    except OSError:
+        pass
+
+
+def _models_from_opencode():
+    """The models OpenCode itself reports (`opencode models`), the free Zen ones first."""
+    try:
+        r = subprocess.run([opencode_bin(), "models"], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=int(CFG.get("catalog_timeout_seconds", 25)), cwd=HOME)
+    except Exception:
+        return []
+    ids = [l.strip() for l in (r.stdout or "").splitlines() if "/" in l and len(l.strip().split()) == 1]
+    return sorted(dict.fromkeys(ids), key=lambda m: (not m.startswith("opencode/"), m))
+
+
+def _models_from_ollama(p):
+    out = []
+    for h in provider_hosts(p):
+        try:
+            d = json.loads(urllib.request.urlopen(h["url"].rstrip("/") + "/api/tags", timeout=5).read().decode())
+            out += [m["name"] for m in d.get("models", []) if m.get("name")]
+        except Exception:
+            continue
+    return out
+
+
+def _models_from_http(p):
+    """The provider's own /v1/models, asked at its real address (the local proxy only passes requests through)."""
+    base = ((p.get("upstream") or {}).get("base") or p.get("base_url") or "").rstrip("/")
+    if not base or "{account_id}" in base or "127.0.0.1:8799" in base:
+        return []
+    url = base + ("/models" if re.search(r"/(v1|openai)$", base) else "/v1/models")
+    tok = provider_key(p) or p.get("token") or ""
+    req = urllib.request.Request(url, headers={"Authorization": "Bearer " + tok, "User-Agent": "whatsapp-bridge-catalog"})
+    try:
+        d = json.loads(urllib.request.urlopen(req, timeout=15).read().decode())
+    except Exception:
+        return []
+    rows = d.get("data") if isinstance(d.get("data"), list) else (d.get("models") or [])
+    return [str(m.get("id")) for m in rows if isinstance(m, dict) and m.get("id")]
+
+
+def live_models(name, force=False):
+    """The models a provider reports right now, or the list read in the last minutes (model_catalog_minutes, default 10)."""
+    p = providers().get(name) or {}
+    ent = _cat["data"].get(name) or {}
+    ttl = max(60, int(float(CFG.get("model_catalog_minutes", 10)) * 60))
+    if not force and ent.get("models") and time.time() - (ent.get("at") or 0) < ttl:
+        return list(ent["models"])
+    kind = p.get("kind")
+    if kind == "opencode":
+        got = _models_from_opencode() if opencode_bin() else []
+    elif p.get("probe") == "ollama":
+        got = _models_from_ollama(p)
+    elif p.get("free_list") == "openrouter":
+        got = openrouter_free_models()
+    elif kind in ("cli", "desktop-app", "auto", "claude", "claude-remote", "anthropic-key"):
+        got = []  # brings its own model, or Claude's own fixed list
+    else:
+        got = _models_from_http(p)
+    got = [str(m) for m in (got or []) if m]
+    if got:
+        _cat["data"][name] = {"at": time.time(), "models": got}
+        _catalog_save()
+        return got
+    return list(ent.get("models") or [])
+
+
+def live_valid_model(name, model, force=False):
+    """A model the provider does not report now is never sent to it: the closest live model is used instead."""
+    if not model:
+        return model
+    live = live_models(name, force=force)
+    if not live or model in live:
+        return model
+    tail = str(model).split("/")[-1].split(":")[0].lower()
+    short = [x for x in live if x.split("/")[-1].split(":")[0].lower() == tail]
+    if len(short) == 1:
+        return short[0]
+    p = providers().get(name) or {}
+    for cand in [p.get("model")] + list(p.get("models") or []) + list(live):
+        if cand and cand in live:
+            return cand
+    return model
+
+
+def _merge_models(p, live):
+    """(list, added, removed) in the owner's order: the models that still exist stay where they were, new ones go last.
+    A provider whose own catalog is the whole truth (OpenCode, Ollama, OpenRouter free) gets the new models too; for the
+    others (Groq, Gemini, NVIDIA...) that catalog also lists speech, TTS and embedding models, so only gone ones are dropped."""
+    old = [str(m) for m in (p.get("models") or []) if m]
+    keep = [m for m in old if m in live]
+    whole = p.get("kind") == "opencode" or p.get("probe") == "ollama" or p.get("free_list") == "openrouter"
+    added = [m for m in live if m not in old] if whole else []
+    return (keep + added)[:int(CFG.get("model_catalog_max", 60))], added, [m for m in old if m not in live]
+
+
+def live_ordered(name):
+    """A provider's models as the list is shown and numbered: the provider's live list in the owner's order (no write)."""
+    p = providers().get(name) or {}
+    live = live_models(name)
+    if not live:
+        return list(p.get("models") or [])
+    return _merge_models(p, live)[0]
+
+
+def sync_models(name, force=False):
+    """Read one provider's list from the provider itself and write it into providers.json: the models that still exist keep
+    the owner's order, new ones go to the end, gone ones are dropped and a gone default is replaced. Returns what changed."""
+    p = providers().get(name)
+    if not p:
+        return {"added": [], "removed": [], "models": []}
+    live = live_models(name, force=force)
+    if not live:
+        return {"added": [], "removed": [], "models": list(p.get("models") or [])}
+    old = [str(m) for m in (p.get("models") or []) if m]
+    new, added, removed = _merge_models(p, live)
+    default = p.get("model")
+    new_default = default if default in new else (new[0] if new else default)
+    if new == old and new_default == default:
+        return {"added": [], "removed": [], "models": new}
+    # owner 20.11: written to models_live.json (this PC only, not in git), never into providers.json: the shared registry is
+    # the same on every PC and in git; a live list differs between PCs and would conflict on every merge
+    try:
+        overlay = _models_overlay()
+        overlay[name] = {"models": new, "model": new_default, "synced": dt.datetime.now().isoformat(timespec="seconds")}
+        tmp = MODELS_LIVE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(overlay, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, MODELS_LIVE_FILE)
+    except Exception as e:  # a locked file never stops a switch: the live list is used in memory anyway
+        log("model catalog write failed", name, e)
+        return {"added": added, "removed": removed, "models": new}
+    log("model catalog", name, "models", len(old), "->", len(new), "removed", removed, "added", added)
+    try:
+        with open(os.path.join(HERE, "actions.log"), "a", encoding="utf-8") as f:
+            f.write(f"{dt.datetime.now().isoformat(timespec='seconds')} | agent | model catalog {name} | "
+                    f"{len(old)} -> {len(new)} | removed={removed} | added={added}\n")
+    except OSError:
+        pass
+    return {"added": added, "removed": removed, "models": new}
+
+
 def provider_is_local(name):
     """Runs on the owner's computers (Ollama) rather than in a provider's cloud; from the config only, no network probe."""
     p = providers().get(name) or {}
@@ -2688,7 +2868,7 @@ def provider_check(name, prefer=None):
         return {"ok": bool(k), "detail": "מפתח שמור" if k else f"חסר מפתח: secrets/{p.get('key_file')}", "models": ["opus", "sonnet", "haiku"]}
     if p["kind"] == "opencode":  # owner 16.11: "חסר מפתח: secrets/None" blocked the switch to a working OpenCode
         ok = bool(opencode_bin())
-        return {"ok": ok, "detail": "מותקן" if ok else "OpenCode לא מותקן במחשב הזה", "models": list(p.get("models") or [])}
+        return {"ok": ok, "detail": "מותקן" if ok else "OpenCode לא מותקן במחשב הזה", "models": live_ordered(name)}
     if p["kind"] == "desktop-app":  # owner 18.11: the app on its computer: window open / installed (never types a question)
         d = desktop_app_status(p, fresh=True)
         where = p.get("pc") or p.get("host") or ""
@@ -2696,10 +2876,10 @@ def provider_check(name, prefer=None):
                 else f"{where}: {d.get('error') or 'לא זמינה'}", "models": []}
     if p["kind"] == "cli":  # agent CLIs bring their own sign-in: installed + login/key is the whole check
         ok = cli_ready(p)
-        return {"ok": ok, "detail": "מותקן ומחובר" if ok else f"לא מותקן או לא מחובר: {(p.get('cli') or {}).get('bin')}", "models": list(p.get("models") or [])}
+        return {"ok": ok, "detail": "מותקן ומחובר" if ok else f"לא מותקן או לא מחובר: {(p.get('cli') or {}).get('bin')}", "models": live_ordered(name)}
     if p["kind"] == "opencode":  # no key at all: the free Zen models need only the installed program (owner 16.11: "/opencode" said "missing key secrets/None")
         ok = bool(opencode_bin())
-        return {"ok": ok, "detail": "מותקן" if ok else "OpenCode לא מותקן במחשב", "models": list(p.get("models") or [])}
+        return {"ok": ok, "detail": "מותקן" if ok else "OpenCode לא מותקן במחשב", "models": live_ordered(name)}
     tok = p.get("token") or provider_key(p)
     if not tok:
         return {"ok": False, "detail": f"חסר מפתח: secrets/{p.get('key_file')}", "models": []}
@@ -2846,6 +3026,11 @@ def switch_provider(name, model=None, chat=None):
 def _switch_provider(name, model=None, chat=None):
     """Set the computer provider, or one conversation's provider, if it answers now."""
     ps = providers()
+    if name in ps:  # owner 20.11 11:57: entering a provider refreshes its model list from the provider itself
+        try:
+            sync_models(name)
+        except Exception as e:
+            log("model catalog sync failed", name, str(e)[:120])
     c = provider_check(name, model)
     if not c["ok"]:
         return f"⚪ {ps[name]['label']} לא מחובר: {c['detail']}. לא הוחלף." + tried_he(c.get("tried"))
@@ -4788,6 +4973,7 @@ def _run_cli_core(name, p, prompt, model, append, chat, on_stage, timeout, sess=
         cmd.append("--json")  # Codex emits item.started/completed events; consume them for live progress.
     m = model or p.get("model")
     if m and c.get("model_flag"):
+        m = live_valid_model(name, m)  # owner 20.11 11:57: a model the CLI does not report is not passed to it
         cmd += [c["model_flag"], m]
     out_file = None
     if (c.get("out") or "").startswith("file:") and not remote:  # remote: the answer comes on stdout (a file there is out of reach)
@@ -5201,6 +5387,7 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
         if resume:
             cmd += ["--resume", resume] + (["--fork-session"] if fork else [])  # a side question reads the context but never changes the session
     elif eng == "opencode":
+        model = live_valid_model(getattr(_ctx, "provider_used", None) or "opencode", model)  # owner 20.11 11:57: never a model OpenCode no longer has
         cmd = [opencode_bin(), "run", "--auto", "--format", "json"]  # no --archived: the npm build (laptop, 1.19.x) does not know it, 14.11
         cmd = cmd + (["-m", model] if model else [])
         qwen_env = penv
@@ -5364,6 +5551,14 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
     if res.get("is_error") and not result and res.get("errors"):  # Claude Code: {"errors": ["No conversation found ..."]}
         result = "; ".join(str(x) for x in res["errors"])
     _pu = getattr(_ctx, "provider_used", None) or eng
+    if result and model and MODEL_GONE_RE.search(result):
+        # owner 20.11 11:57: the provider dropped this model - read its list again, take a live model and repeat the run once
+        fixed = live_valid_model(_pu, model, force=True)
+        if fixed and fixed != model:
+            log("model catalog retry", _pu, "dead", model, "->", fixed)
+            sync_models(_pu, force=True)
+            return _run_claude(prompt, fixed, resume, timeout, on_stage=on_stage, append=append, chat=chat, tools=tools,
+                               max_budget=max_budget, stoppable=stoppable, fork=fork)
     if not res or res.get("is_error"):  # owner 19.11: every failed run leaves its real reason in the log, not just a label
         log("provider run failed", _pu, "exit", proc.returncode, "|", (result or errtext or str(stdin_err or "")).strip()[-400:])
     if not res and stdin_err is not None and (classify_down(errtext) or ("bridge",))[0] == "bridge":
@@ -10458,7 +10653,6 @@ def handover_cmd(arg):
                 f"לחזרה לנייח: */העבר גשר נייח*." + (f"\n⚠️ לא הגעתי אל: {', '.join(failed)}." if failed else ""))
     if fc:
         return f"אפשר להעביר את הגשר רק מהנייח או מהמחשב שמחזיק אותו. עכשיו אני ב{me}: קודם */העבר גשר נייח*, ואחרי שהוא חוזר להחזיק, להעביר משם."
-
     if target not in names:
         return f"\"{target}\" לא מוגדר כמחשב בשרשרת כאן."
     if session_cfg() and not lease_held():

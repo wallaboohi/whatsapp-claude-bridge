@@ -78,3 +78,11 @@ agent/rollback.hold
 *.pre-handback-*
 *.own-*
 '*
+# owner 20.11: runtime files of the live model catalog, the fixes-in-the-pipe list and the relay; pytest leftovers
+agent/models_live.json
+agent/model_catalog.json
+agent/pending.json
+agent/pending.log
+agent/chain_relay.log
+agent/emoji_legend_contexts.xlsx
+/tmp/

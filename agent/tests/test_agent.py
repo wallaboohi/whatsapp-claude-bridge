@@ -30,7 +30,8 @@ def agent(tmp_path, monkeypatch):
     # never touch the real installation's files from a test (model choice, groups, restart / stop requests)
     for name, fname in (("MODEL_FILE", "model_override.json"), ("GROUPS_FILE", "groups.json"),
                         ("RESTART_FILE", "restart.request"), ("STOP_FILE", "stop.request"),
-                        ("PROVIDER_FILE", "provider.json")):
+                        ("PROVIDER_FILE", "provider.json"), ("PROVIDERS_FILE", "providers.json"),
+                        ("MODELS_LIVE_FILE", "models_live.json"), ("CATALOG_FILE", "model_catalog.json")):
         monkeypatch.setattr(mod, name, str(tmp_path / fname))
     mod.adb().close()
     monkeypatch.setattr(mod, "opencode_bin", lambda: None)  # tests never depend on whether OpenCode is installed on this PC
@@ -39,6 +40,10 @@ def agent(tmp_path, monkeypatch):
     mod._real_desktop_ai_call = mod.desktop_ai_call
     monkeypatch.setattr(mod, "desktop_ai_call", lambda p, args, stdin_text=None, timeout=240: {"ok": False, "error": "tests"})
     monkeypatch.setattr(mod, "reachable", lambda url, timeout=3: True)  # nor on a local Ollama / translation server listening (CI has none)
+    # the live model catalogs (owner 20.11 11:57) are never fetched from a test: no network, no writing the real registry
+    monkeypatch.setattr(mod, "_models_from_http", lambda p: [])
+    monkeypatch.setattr(mod, "_models_from_ollama", lambda p: [])
+    monkeypatch.setattr(mod, "_models_from_opencode", lambda: [])
     return mod, db
 
 
