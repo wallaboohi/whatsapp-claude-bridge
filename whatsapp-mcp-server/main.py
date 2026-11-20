@@ -1,5 +1,5 @@
 from typing import List, Dict, Any, Optional
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 from whatsapp import (
     search_contacts as whatsapp_search_contacts,
     list_messages as whatsapp_list_messages,
@@ -468,3 +468,6 @@ def phone_tools_index() -> Dict[str, List[str]]:
                   "phone_who", "phone_calls (names)", "phone_events", "phone_search", "phone_index", "tools/phone_db.py (catalog)"],
         "data": ["list_transcripts", "list_polls", "list_drafts"],
     }
+
+# Expose ASGI app for uvicorn
+app = mcp.http_app()
