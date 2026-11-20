@@ -7321,7 +7321,7 @@ class StatusMsg:
         self.refresh_ai()
         self.finish()
         if self.mid and self.wa:
-            base = float(CFG.get("status_edit_seconds", 10))
+            base = float(CFG.get("status_edit_seconds", 5))
             self.loop_done.wait(max(30, 3 * base + 15))
         elif self.wa and answer:  # a quick answer never had a status message: one message with the finished details and the answer
             if self._load_editable_source():
@@ -7418,7 +7418,8 @@ class StatusMsg:
         # owner 17.11 16:20: many edits in a short time look like abuse to WhatsApp (ban risk): an edit at most every 20 s
         # (config status_edit_seconds, never below 15), every 60 s after the first 10 edits
         # owner 17.11 16:24: every 10 s (config status_edit_seconds, never below 10); every 30 s after the first 30 edits
-        while self.mid and not self.done.wait(max(10.0, float(CFG.get("status_edit_seconds", 10))) * (3 if edits >= 30 else 2 if edits >= 12 else 1)):
+        # owner 20.11 21:06: dots and clock every 5 s, fixed (no slowdown after many edits)
+        while self.mid and not self.done.wait(max(5.0, float(CFG.get("status_edit_seconds", 5)))):
             self.tick += 1
             new = self._edit_payload(self._text())
             if new != last:
