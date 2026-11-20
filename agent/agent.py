@@ -10248,11 +10248,47 @@ def lease_enable():
             f.write("owner 18.11: one WhatsApp identity moves between the PCs; the bridge connects only with store/lease_grant\n")
 
 
+SEND_POLICY = os.path.join(STORE, "send_policy.json")
+
+
+def ensure_send_policy():
+    """Owner 20.11 23:45: the 23:18-23:28 draft storm. The identity moves between PCs but store/send_policy.json (which chats are the
+    owner's, which groups get direct replies) did not: a PC without it runs the bridge's default policy, in which every reply to the
+    owner's own groups becomes a "טיוטה" card in the account's chat with itself = the owner's personal number. In lease mode this PC
+    must have the file before it may hold the identity: missing -> copied from the first peer that has a real one (never overwritten).
+    True = the file is here (or lease mode is off and the bridge behaves as before)."""
+    if os.path.exists(SEND_POLICY) or not session_cfg():
+        return True
+    rel = os.path.relpath(SEND_POLICY, ROOT).replace("/", "\\")
+    for p in CFG.get("peers") or []:
+        alias = peer_alias(p)
+        if not alias:
+            continue
+        try:
+            r = _ssh(alias, f'type "{_remote_root(p).replace("/", chr(92))}\\{rel}"', timeout=20, connect=5)
+            text = (r.stdout or b"").decode("utf-8", "replace")
+            if r.returncode == 0 and json.loads(text).get("control_group"):  # a real policy, not an empty shell
+                os.makedirs(STORE, exist_ok=True)
+                with open(SEND_POLICY + ".tmp", "w", encoding="utf-8") as f:
+                    f.write(text)
+                os.replace(SEND_POLICY + ".tmp", SEND_POLICY)
+                log("send policy copied from", p.get("name") or alias)
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def lease_grant(why=""):
+    if not ensure_send_policy():
+        # never connect the bridge here without its send policy: it would turn the owner's group replies into drafts in his personal chat
+        log("session lease NOT granted: no send_policy.json on this PC and no peer gave one:", why)
+        return False
     lease_enable()
     with open(LEASE_GRANT, "w", encoding="utf-8") as f:
         f.write(f"{socket.gethostname()} {dt.datetime.now().isoformat(timespec='seconds')} {why}\n")
     log("session lease granted:", why)
+    return True
 
 
 def _bridge_running():
@@ -10520,6 +10556,11 @@ def _session_handback_payload(since):
     import zlib
     data = {"session": base64.b64encode(zlib.compress(_sqlite_bytes(os.path.join(STORE, "whatsapp.db")), 1)).decode(), "z": True,
             "messages": [], "chats": []}
+    try:  # owner 20.11 23:45: the send policy travels with the identity (the receiver writes it only when it has none)
+        with open(SEND_POLICY, encoding="utf-8") as f:
+            data["send_policy"] = f.read()
+    except OSError:
+        pass
     try:
         db = sqlite3.connect(f"file:{os.path.join(STORE, 'messages.db')}?mode=ro", uri=True, timeout=30)
         db.row_factory = sqlite3.Row
@@ -10595,6 +10636,11 @@ if (C.get("messages") or C.get("chats")) and os.path.exists(mpath):
             n += db.execute("INSERT OR IGNORE INTO messages (" + ",".join(m) + ") VALUES (" + ",".join("?" * len(m)) + ")", list(m.values())).rowcount
     db.close()
 print("@@MSG@@%d" % n)
+pol = C.get("send_policy")
+if pol and not os.path.exists(store + "/send_policy.json"):  # never overwrites: the PC's own policy wins
+    with open(store + "/send_policy.json", "w", encoding="utf-8") as f:
+        f.write(pol)
+    print("@@POLICY@@written")
 if mode == "pass" and not busy:
     meta = {}
     try:
@@ -10706,6 +10752,7 @@ def session_backup_tick(peer, name, peer_st):
     if not sc:
         return
     lease_enable()
+    ensure_send_policy()  # owner 20.11 23:45: a standby gets the owner's send policy before it can ever hold the identity
     if (failover_state(name).get("state") or "idle") != "idle":
         return
     with _take_lock:  # never while chain_watch is taking over (it grants before its state says "active")
@@ -11376,7 +11423,8 @@ def chain_pass_marker(host):
 def _chain_ready(d):
     """A peer's /alive says it can take the identity: its agent is up and its bridge waits at the gate with a copy."""
     lease = (d or {}).get("lease") or {}
-    return (d or {}).get("agent_alive", True) is not False and bool(lease.get("mode")) and bool(lease.get("copy_at") or lease.get("held"))
+    return ((d or {}).get("agent_alive", True) is not False and bool(lease.get("mode")) and lease.get("policy", True) is not False
+            and bool(lease.get("copy_at") or lease.get("held")))  # owner 20.11 23:45: no send policy there = it cannot hold the identity
 
 
 def _maybe_holder(v):
@@ -11454,6 +11502,8 @@ def chain_handback_target(fc, host, view):
         lease = d.get("lease") or {}
         if not lease.get("mode"):
             continue  # no identity gate there: it cannot take the identity
+        if lease.get("policy") is False:
+            continue  # owner 20.11 23:45: no send policy there: its bridge would draft the owner's group replies into his personal chat
         if pn == host:
             if _alive_holds_lease(d) and mine:
                 continue  # both connected (it came back cut off): it lets go first (chain_host_step), then it is the target
@@ -13790,6 +13840,11 @@ if __name__ == "__main__":
         session_bootstrap()  # owner 18.11: a backup without a store of its own gets the history first
     except Exception:
         log("session bootstrap failed", traceback.format_exc())
+    try:
+        if not ensure_send_policy():  # owner 20.11 23:45: the bridge never holds the identity here without it (lease_grant refuses)
+            log("WARNING: no send_policy.json on this PC and no peer gave one - this PC will not hold the bridge")
+    except Exception:
+        log("send policy check failed", traceback.format_exc())
     _defer = False  # the service: our plugins wait while another machine holds them (failover); unknown = run them now
     _holds = []
     if len(sys.argv) == 1 and plugin_hold_applies():

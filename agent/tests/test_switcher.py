@@ -130,3 +130,94 @@ def test_a_young_handover_is_left_alone(agent, monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "failover_cfg", lambda: FC)
     assert mod.handover_expire({"לפטופ": {"status": "up", "data": {"lease": {"held": False}}}}) is False and f.exists()
 
+
+
+# ---- owner 20.11 23:45: the draft storm. A PC without store/send_policy.json ran the bridge's default policy: every reply to the
+# owner's groups became a "טיוטה" card in his personal chat. The policy must travel, and a PC without it must not hold the bridge.
+
+def _lease_env(mod, monkeypatch, tmp_path, peers=None):
+    monkeypatch.setattr(mod, "SEND_POLICY", str(tmp_path / "send_policy.json"))
+    monkeypatch.setattr(mod, "STORE", str(tmp_path))
+    monkeypatch.setattr(mod, "LEASE_GRANT", str(tmp_path / "lease_grant"))
+    monkeypatch.setattr(mod, "LEASE_MODE", str(tmp_path / "lease_mode"))
+    monkeypatch.setattr(mod, "session_cfg", lambda: {"enabled": True})
+    mod.CFG["peers"] = peers or [{"name": "נייח", "ssh": "DESK"}]
+    monkeypatch.setattr(mod, "peer_alias", lambda p: p.get("ssh"))
+
+
+class _R:
+    def __init__(self, text, rc=0):
+        self.stdout, self.returncode = text.encode("utf-8"), rc
+
+
+def test_no_grant_without_a_send_policy(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    _lease_env(mod, monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "_ssh", lambda *a, **k: _R("", 1))  # no peer can give one
+    assert mod.lease_grant("test") is False
+    assert not (tmp_path / "lease_grant").exists(), "the bridge must not connect here: it would draft into the owner's personal chat"
+
+
+def test_the_policy_is_copied_from_a_peer_and_then_the_grant_works(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    _lease_env(mod, monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "_ssh", lambda *a, **k: _R('{"mode": "draft", "control_group": "x@g.us"}'))
+    assert mod.lease_grant("test") is True
+    assert (tmp_path / "send_policy.json").read_text(encoding="utf-8").count("control_group") == 1
+    assert (tmp_path / "lease_grant").exists()
+
+
+def test_an_empty_shell_policy_is_not_copied(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    _lease_env(mod, monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "_ssh", lambda *a, **k: _R('{"mode": "draft"}'))
+    assert mod.ensure_send_policy() is False and not (tmp_path / "send_policy.json").exists()
+
+
+def test_an_existing_policy_is_never_overwritten(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    _lease_env(mod, monkeypatch, tmp_path)
+    (tmp_path / "send_policy.json").write_text('{"control_group": "mine"}', encoding="utf-8")
+    monkeypatch.setattr(mod, "_ssh", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no ssh needed")))
+    assert mod.ensure_send_policy() is True
+    assert "mine" in (tmp_path / "send_policy.json").read_text(encoding="utf-8")
+
+
+def test_without_lease_mode_nothing_changes(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    _lease_env(mod, monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "session_cfg", lambda: None)
+    assert mod.ensure_send_policy() is True
+
+
+def test_the_hand_over_carries_the_policy_and_never_overwrites_the_receivers(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    _lease_env(mod, monkeypatch, tmp_path)
+    (tmp_path / "send_policy.json").write_text('{"control_group": "holder"}', encoding="utf-8")
+    monkeypatch.setattr(mod, "_sqlite_bytes", lambda p: b"x")
+    assert "holder" in mod._session_handback_payload("")["send_policy"]
+    store = tmp_path / "target"
+    store.mkdir()
+    C = {"store": str(store).replace("\\", "/"), "session": "", "mode": "host", "send_policy": '{"control_group": "holder"}', "agent_db": ""}
+    import base64
+    C["session"] = base64.b64encode(b"x").decode()
+    run = lambda: exec(compile(mod.SESSION_HANDBACK, "hb", "exec"), {"C": dict(C)})
+    run()
+    assert "holder" in (store / "send_policy.json").read_text(encoding="utf-8")
+    (store / "send_policy.json").write_text('{"control_group": "receiver"}', encoding="utf-8")
+    run()
+    assert "receiver" in (store / "send_policy.json").read_text(encoding="utf-8"), "the receiver's own policy wins"
+
+
+def test_a_pc_without_a_policy_is_neither_ready_nor_a_handback_target(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    good = {"agent_alive": True, "lease": {"mode": True, "copy_at": "2026-11-20T21:00:00", "policy": True}}
+    bad = {"agent_alive": True, "lease": {"mode": True, "copy_at": "2026-11-20T21:00:00", "policy": False}}
+    assert mod._chain_ready(good) and not mod._chain_ready(bad)
+    old = {"agent_alive": True, "lease": {"mode": True, "copy_at": "2026-11-20T21:00:00"}}
+    assert mod._chain_ready(old), "an older peer that does not report the key is not blocked"
+    _env(mod, monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "lease_held", lambda: True)
+    fc = {"for": "נייח", "self_name": "סלון", "defer_to": ["חדר שינה"]}
+    view = {"נייח": {"status": "up", "data": {**bad, "chain": {"for": "נייח"}}, "last": {}}}
+    assert mod.chain_handback_target(fc, "נייח", view) == "", "the bridge never goes to a PC without a send policy"
