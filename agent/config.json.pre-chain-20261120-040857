@@ -1,0 +1,187 @@
+{
+  "bridge_url": "http://127.0.0.1:8765/api",
+  "store_dir": "whatsapp-bridge/store",
+  "claude_group": "120363415200476330@g.us",
+  "owner_name": "יקיר",
+  "reply_prefix": "🤖 ",
+  "backup_dir": "~/WhatsApp-Backup",
+  "backup_keep_days": 14,
+  "backup_media_days": 90,
+  "backup_time": "03:00",
+  "claude_model": "sonnet",
+  "light_model": "haiku",
+  "daily_budget_usd": 20,
+  "disconnect_alert_minutes": 10,
+  "transcribe": true,
+  "transcribe_all_chats": true,
+  "whisper_model": "ivrit-ai/whisper-large-v3-turbo-ct2",
+  "whisper_language": "he",
+  "log_max_mb": 5,
+  "plugins": [
+    "C:/Users/walla/ppe-tracker/wa_plugin.py",
+    "C:/Users/walla/ppe-tracker/segment_d_auto.py"
+  ],
+  "fresh_sessions": false,
+  "strict_mcp": true,
+  "reply_italic": true,
+  "quote_replies": true,
+  "language": "he",
+  "permission_mode": "bypassPermissions",
+  "host_label": "YB-PC-HW",
+  "claude_account": "פרטי",
+  "peers": [
+    {
+      "name": "חדר שינה",
+      "url": "http://127.0.0.1:8784",
+      "tunnel": "PERROOM",
+      "ollama_port": 11437
+    },
+    {
+      "name": "סלון",
+      "url": "http://127.0.0.1:8783",
+      "tunnel": "SALON",
+      "ollama_port": 11436
+    },
+    {
+      "name": "לפטופ",
+      "url": "http://127.0.0.1:8781",
+      "ssh": "4-MINE"
+    }
+  ],
+  "voice_name": "en-US-AvaMultilingualNeural",
+  "git_author": {
+    "name": "WallaBoohi",
+    "email": "343664468+wallaboohi@users.noreply.github.com"
+  },
+  "voice_style": "soft",
+  "push_important": [
+    "972532806770",
+    "972537391066",
+    "972506808581",
+    "972555506765",
+    "972503036056",
+    "972544591219",
+    "972544376380",
+    "972532841467"
+  ],
+  "auto_transcript": false,
+  "unlimited_all": true,
+  "usd_ils": 3.1,
+  "monthly_jobs": [
+    {
+      "name": "חשבון חודשי לציפורה",
+      "day": 1,
+      "prompt": "משימה חודשית אוטומטית מיקיר: הפק את החשבון החודשי לציפורה על החודש הקלנדרי הקודם (מה-1 ועד היום האחרון שלו, יקיר 11.11) לפי הנוהל בקובץ tzipora_billing.md (בתיקייה הזו). שמור את האקסל ב-outbox. אל תיצור טיוטות. בסוף שאל את יקיר אם לאשר טיוטת סיכום לדודו חייק ארגמן ולאנדריאה חייק."
+    }
+  ],
+  "once_jobs": [
+    {
+      "name": "עבודת לילה 11.11",
+      "at": "2026-11-11 03:15",
+      "prompt": "משימת לילה מיקיר (10.11 19:58): בצע את המשימות בקובץ night_tasks_2026-11-11.md (בתיקייה הזו), לפי הסדר ולפי הכללים שבו. בסוף כתוב דוח קצר: מה בוצע, מה נבדק, מה לא, ומה נתקע."
+    },
+    {
+      "name": "המשך עבודה 11.11",
+      "at": "2026-11-11 08:05",
+      "prompt": "משימה מיקיר (11.11 07:36): \"בצע את כל מה שנכשלת לבצע מאתמול\" ו\"בדוק שהגשר זהה בשני המחשבים\". בצע את הקובץ day_tasks_2026-11-11.md (בתיקייה הזו) לפי הסדר והכללים שבו. אין תקרת זמן. בסוף דוח קצר: מה בוצע, מה נבדק, מה לא, מה מחכה להחלטה של יקיר."
+    }
+  ],
+  "phone": {
+    "adb": "100.115.100.33:5555",
+    "data_dir": "//10.0.0.154/YAKIR/bridge-archive/YB-PC-HW/phone-data"
+  },
+  "providers": {
+    "ollama": {
+      "hosts": [
+        {
+          "url": "http://127.0.0.1:11435",
+          "label": "הלפטופ (ברירת מחדל)"
+        },
+        {
+          "url": "http://127.0.0.1:11434",
+          "label": "הנייח (גיבוי)"
+        },
+        {
+          "url": "http://127.0.0.1:11436",
+          "label": "הסלון (24GB, גם DictaLM עברית)"
+        }
+      ]
+    }
+  },
+  "adb_keeper": {
+    "enabled": true,
+    "notify": true,
+    "after_min": 15
+  },
+  "auto_release": true,
+  "auto_release_time": "03:05",
+  "session_max_runs": 15,
+  "failover_disabled_20261114": {
+    "for": "לפטופ",
+    "plugins": [
+      "C:/Users/walla/ppe-tracker/segment_d_auto.py",
+      "C:/Users/walla/ppe-tracker/wa_plugin.py"
+    ],
+    "plugin_dbs": [
+      "C:/Users/walla/ppe-tracker/plugin.db"
+    ],
+    "mirror": [
+      "C:/Users/walla/ppe-tracker/*.py",
+      "C:/Users/walla/ppe-tracker/*.json",
+      "C:/Users/walla/ppe-tracker/build.sh",
+      "C:/Users/walla/ppe-tracker/form_template.html",
+      "C:/Users/walla/ppe-tracker/keys/*",
+      "C:/Users/walla/ppe-tracker/logo/*",
+      "C:/Users/walla/ppe-tracker/segment_d_state/sheet_snapshot.json",
+      "C:/Users/walla/whatsapp-mcp/lunch/*.py"
+    ],
+    "group": "120363431750792742@g.us",
+    "auto": true,
+    "return_dirs": [
+      "C:/Users/walla/ppe-tracker/pending_intake"
+    ]
+  },
+  "home_sync_disabled_20261114": {
+    "peer": "4-MINE",
+    "files": [
+      "dictionary.md",
+      "shared-sync.md",
+      "tzipora_billing.md",
+      "bridge_rules.md"
+    ]
+  },
+  "auto_update_time": "03:30",
+  "session_rotate_hours": 24,
+  "maintainer": true,
+  "deep_model": "opus",
+  "name_prefix": "HW",
+  "chrome": true,
+  "voice_replies": true,
+  "group_name_model": true,
+  "claude_timeout_minutes": 0,
+  "total_daily_budget_usd": 40.0,
+  "auto_update": true,
+  "morning_summary": true,
+  "morning_summary_time": "07:30",
+  "selftest_time": "04:30",
+  "update_check_time": "09:00",
+  "signin_check_time": "09:30",
+  "group_check_time": "10:00",
+  "reconnect_settle_seconds": 45,
+  "peer_watch": true,
+  "peer_alert_minutes": 10,
+  "peer_offline_minutes": 30,
+  "peer_backup": true,
+  "peer_backup_max_mb": 2048,
+  "peer_watch_seconds": 15,
+  "session_share": {
+    "enabled": true,
+    "pull_minutes": 5
+  },
+  "plugin_hold_check": false,
+  "restart_wait_minutes": 1,
+  "hold_check_minutes": 1,
+  "nas_backup_repos": [
+    "C:/Users/walla/ppe-tracker"
+  ]
+}

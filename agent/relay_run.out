@@ -1,0 +1,11 @@
+21:17:40 relay start LIVE ordered hub 43ed752 
+21:17:46 preflight נייח {"head": "43ed752", "lease": "holding 2026-11-20T19:46:29+02:00", "busy": [], "dirty": []}
+21:17:46 preflight חדר שינה {"head": "dccd5fb", "lease": "waiting 2026-11-20T21:17:37+02:00", "busy": [], "dirty": []}
+21:17:46 preflight סלון {"head": "28913c7", "lease": "waiting 2026-11-20T21:17:34+02:00", "busy": [], "dirty": []}
+21:17:46 preflight לפטופ {"head": "28913c7", "lease": "waiting 2026-11-20T21:16:53+02:00", "busy": [], "dirty": []}
+21:18:36 restart חדר שינה True ממתין בשער, קוד 43ed752
+21:19:12 restart סלון True ממתין בשער, קוד 43ed752
+21:20:00 restart לפטופ True ממתין בשער, קוד 43ed752
+21:20:31 holder code נייח True הסוכן עלה על 43ed752, הגשר נשאר מחובר
+21:21:09 hop נייח -> חדר שינה 28 s True בדיקה עצמית עברה
+21:21:45 hop חדר שינה -> סלון 15 s True בדיקה עצמית עברה
