@@ -70,3 +70,23 @@ def test_a_stale_hand_over_request_is_ignored(agent, monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "send", lambda *a, **k: None)
     mod.handover_request_check()
     assert moved == ["חדר שינה"]
+
+
+def test_the_detach_command_parses_in_powershell(monkeypatch):
+    """12:58: the first version passed JSON-quoted paths and PowerShell refused it. The real command is parsed here."""
+    import shutil
+    import subprocess as sp
+    if not shutil.which("powershell"):
+        return
+    real_run = sp.run  # the same module object is patched below
+    r = _relay()
+    monkeypatch.setenv("SSH_CONNECTION", "1 2 3 4")
+    monkeypatch.setattr(r.os, "name", "nt")
+    seen = {}
+
+    class R:
+        stdout, stderr = "0 1", ""
+    monkeypatch.setattr(r.subprocess, "run", lambda cmd, **k: seen.update(cmd=cmd) or R())
+    r.detach_from_ssh(["--reason", "יישור קו 'בדיקה'"])  # parse only below: no process is ever started
+    check = "$e = $null; [void][System.Management.Automation.Language.Parser]::ParseInput(" +         "'" + seen["cmd"][-1].replace("'", "''") + "', [ref]$null, [ref]$e); if ($e.Count) { exit 1 } else { exit 0 }"
+    assert real_run(["powershell", "-NoProfile", "-Command", check], capture_output=True).returncode == 0

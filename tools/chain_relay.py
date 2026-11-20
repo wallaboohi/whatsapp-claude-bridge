@@ -170,8 +170,9 @@ def detach_from_ssh(a):
     import base64
     args = base64.b64encode(json.dumps(a + ["--detached"]).encode("utf-8")).decode()
     cmd = f'"{sys.executable}" -I -X utf8 "{os.path.abspath(__file__)}" --args-b64 {args}'
-    ps = ("$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=" + json.dumps(cmd)
-          + "; CurrentDirectory=" + json.dumps(ROOT) + "}; Write-Output ($r.ReturnValue.ToString() + ' ' + $r.ProcessId)")
+    q = lambda x: "'" + str(x).replace("'", "''") + "'"  # a PowerShell literal string: no escapes, '' is a quote
+    ps = ("$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=" + q(cmd)
+          + "; CurrentDirectory=" + q(ROOT) + "}; Write-Output ($r.ReturnValue.ToString() + ' ' + $r.ProcessId)")
     r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True, text=True,
                        encoding="utf-8", errors="replace", timeout=60)
     parts = (r.stdout or "").split()
