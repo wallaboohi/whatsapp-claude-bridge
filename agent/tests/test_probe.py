@@ -72,6 +72,15 @@ def test_numbers_and_spellings_switch_the_provider(agent):
     assert r("open-router")[0] == "openrouter_free" and r("openrauter")[0] == "openrouter_free"
 
 
+def test_explicit_provider_number_command(agent, monkeypatch):
+    mod, _ = agent
+    calls = []
+    monkeypatch.setattr(mod, "switch_provider", lambda name, model=None, chat=None: calls.append((name, model, chat)) or "ok")
+    assert mod.owner_command("/ספק 3", mod.PRIMARY) == "ok"
+    assert calls[-1] == ("gemini", None, mod.PRIMARY)
+    assert "אין ספק מספר 99" in mod.owner_command("/ספק 99", mod.PRIMARY)
+
+
 def test_the_owners_typos_are_understood_and_other_words_are_not(agent):
     mod, _ = agent
     assert mod.fuzzy_ai_word("claudeflare") == "cloudflare" or mod.resolve_ai_word("claudeflare")[0] == "cloudflare"
@@ -104,15 +113,30 @@ def test_switch_message_gives_reason_code_and_groups_every_ai(agent, monkeypatch
     mod.ai_state_set("gemini", True)
     mod.ai_state_set("codex", False, "quota", FAULTS["codex"][0])
     mod.ai_state_set("cloudflare", False, "rate", "HTTP 429 rate limit")
+    mod.ai_state_set("nvidia", False, "key", "missing API key")
     out = mod.ai_down_text("copilot", "x", FAULTS["copilot"][0])
     assert "*Copilot* לא זמין מהסיבה: מכסת השימוש נגמרה" in out and "לא עברתי לבינה אחרת" in out
-    assert "✅ *ענו לאחרונה:*" in out and "/3 " in out
-    assert "⛔ *מחוברים ולא עונים:*" in out and "/11 *Codex*" in out and "(מכסת השימוש נגמרה, חוזרת ב-14.12)" in out
-    assert "(מגבלת קצב או עומס אצל הספק (קוד 429)" in out
-    assert "⚪ *לא מחוברים במחשב הזה:*" in out and "/8 " in out
+    assert "✅ *זמינים וענו לאחרונה:*" in out and "*/ספק 3*" in out and "Gemini" in out
+    assert "⏳ *ממתינים למכסה או לאיפוס:*" in out and "*/ספק 11*" in out and "Codex" in out and "14.12" in out
+    assert "*/ספק 7*" in out and "Cloudflare" in out and "קוד 429" in out
+    assert "⚙️ *דורשים הגדרה או התחברות:*" in out and "*/ספק 6*" in out and "NVIDIA" in out
+    assert "⚪ *לא זמינים במחשב הזה:*" in out and "*/ספק 8*" in out and "OpenCode" in out
     assert "❔ *מוכנים, עוד לא נבדקו:*" in out
-    assert "/copilot" not in out and "/10 " not in out  # the failed AI is not offered again
+    assert "למעבר בין ספקים שלח /ספק *מספר*" in out and "/copilot" not in out and "*/ספק 10*" not in out
     assert "14.12" in mod.retry_hint_he(FAULTS["codex"][0]) and "16 דקות" in mod.retry_hint_he("Please retry in 16m7.9s.")
+
+
+def test_provider_status_rows_keep_icon_column_and_location(agent, monkeypatch):
+    mod, _ = agent
+    monkeypatch.setattr(mod, "provider_ready", lambda _name: True)
+    monkeypatch.setattr(mod, "where_of", lambda name, model=None: ("local", "מקומי") if mod.provider_is_local(name) else ("remote", "ענן"))
+    mod.ai_state_set("claude_work", True)
+    rows = [line for line in mod.ai_status_lines() if "*/ספק " in line]
+    assert rows and all(line.startswith(mod.RLM + "*/ספק ") for line in rows)
+    cloud = [line for line in rows if "☁️" in line]
+    assert len({line.index("☁️") for line in cloud}) == 1
+    work = next(line for line in cloud if "claude_work" not in line and "Claude" in line and "עבודה" in line)
+    assert "*/ספק 12*" in work and "מחשב עבודה נייד" in work
 
 
 def test_model_menu_on_another_ai_shows_its_own_models_not_claudes(agent, monkeypatch):

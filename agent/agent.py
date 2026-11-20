@@ -2474,35 +2474,76 @@ def ai_state_get(name, hours=12, fresh=False):
 
 
 def ai_status_lines(skip=()):
-    """The numbered switch list in groups, remote first then local (owner 16.11), each by what the bridge saw: answered lately,
-    connected but not answering (with the reason), ready but unchecked, not connected."""
-    rows = []
-    for head, group in split_by_place([n for n in provider_order() if n not in skip and n != "auto"]):
-        rows += [head] + _ai_status_rows(group)
-    return rows
-
-
-def _ai_status_rows(names):
-    ok, bad, unknown, off = [], [], [], []
-    for n in names:
-        tag, st = provider_line(n), ai_state_get(n, fresh=True)
-        if st and not st["ok"]:
-            why = REASON_SHORT_HE.get(st["reason"], "לא עונה") + (f" (קוד {st['code']})" if st.get("code") else "") + (f", {st['hint']}" if st.get("hint") else "")
-            bad.append(f"{tag} ({why})")
-        elif not provider_ready(n):
-            if provider_cooled(n):
-                bad.append(f"{tag} (בהמתנה אחרי תקלה)")
-            else:
-                off.append(tag)
-        elif st and st["ok"]:
-            ok.append(tag)
+    """Owner 20.11: group by readiness; every selectable provider line starts with /ספק N and states its location."""
+    groups = {key: [] for key in ("ok", "bad", "quota", "setup", "unknown", "off")}
+    for name in (n for n in provider_order() if n not in skip and n != "auto"):
+        st = ai_state_get(name, fresh=True)
+        reason = (st or {}).get("reason", "")
+        ready = provider_ready(name)
+        if provider_cooled(name) or reason in ("quota", "rate") or (name == "claude" and limit_raw()):
+            key = "quota"
+        elif reason in ("key", "login", "billing", "rejected") or ((providers().get(name) or {}).get("key_file") and not provider_key(providers()[name])):
+            key = "setup"
+        elif st and st.get("ok") and ready:
+            key = "ok"
+        elif st and not st.get("ok"):
+            key = "bad"
+        elif ready:
+            key = "unknown"
         else:
-            unknown.append(tag)
-    rows = []
-    for icon, title, items in (("✅", "ענו לאחרונה", ok), ("⛔", "מחוברים ולא עונים", bad), ("❔", "מוכנים, עוד לא נבדקו", unknown), ("⚪", "לא מחוברים במחשב הזה", off)):
-        if items:
-            rows.append(f"{icon} *{title}:* " + " · ".join(items))
-    return rows
+            key = "off"
+        if key in ("bad", "quota", "setup") and st:
+            pieces = [REASON_SHORT_HE.get(reason, "לא ענה")]
+            if st.get("code"):
+                pieces.append(f"קוד {st['code']}")
+            if st.get("hint"):
+                pieces.append(st["hint"])
+            detail = " · ".join(pieces)
+        elif key == "quota":
+            detail = "בהמתנה לאיפוס או לסיום צינון"
+        elif key == "setup":
+            detail = "נדרשת הגדרה או התחברות"
+        elif key == "bad":
+            detail = "לא ענה בבדיקה האחרונה"
+        else:
+            detail = ""
+        row = _provider_status_line(name) + (f" · {detail}" if detail else "")
+        groups[key].append(row)
+    headings = (("ok", "✅", "זמינים וענו לאחרונה"), ("bad", "⛔", "מחוברים ולא ענו"),
+                ("quota", "⏳", "ממתינים למכסה או לאיפוס"), ("setup", "⚙️", "דורשים הגדרה או התחברות"),
+                ("unknown", "❔", "מוכנים, עוד לא נבדקו"), ("off", "⚪", "לא זמינים במחשב הזה"))
+    return [line for key, icon, title in headings if groups[key]
+            for line in (f"{RLM}{icon} *{title}:*", *groups[key])]
+
+
+def _provider_status_line(name):
+    """A compact selectable row: command, English provider/account, then cloud or local execution location."""
+    p = providers().get(name) or {}
+    number = provider_number(name)
+    label = str(p.get("label") or name)
+    english = label.split("·", 1)[0].strip()
+    english = re.sub(r"\s*\([^)]*\)", "", english).strip()
+    english = re.sub(r"\s+(?:CLI|API)$", "", english, flags=re.I).strip()
+    if name == "claude":
+        account = "פרטי" if claude_account_type() == "פרטי" else "עבודה"
+        account = f" · {account}"
+    else:
+        suffix = label.split("·", 1)[1].strip() if "·" in label else ""
+        suffix = re.sub(r"\s*\([^)]*\)", "", suffix).strip()
+        suffix = suffix.replace("חשבון העבודה", "עבודה").replace("חשבון עבודה", "עבודה").replace("חשבון פרטי", "פרטי")
+        account = f" · {suffix}" if suffix and any(w in suffix for w in ("חשבון", "עבודה", "פרטי", "חדר", "סלון")) else ""
+    ssh_host = p.get("ssh") or (p.get("cli") or {}).get("ssh")
+    if p.get("where") == "local" or p.get("hosts") or p.get("kind") == "desktop-app":
+        kind, place = where_of(name, p.get("model"))
+        location = f"🏠 {place}" if kind == "local" else "☁️ ענן"
+    elif isinstance(ssh_host, str) and ssh_host:
+        location = f"☁️ ענן דרך {pc_he(ssh_host)}"
+    else:
+        location = "☁️ ענן"
+    command = f"*/ספק {number}*"
+    text = english + account
+    gap = "\u00a0" * max(1, 36 - len(command) - 1 - len(text))
+    return f"{RLM}{command}\u00a0{text}{gap}{location}"
 
 
 def ai_down_text(name, why, raw="", reason=""):
@@ -2521,7 +2562,7 @@ def ai_down_text(name, why, raw="", reason=""):
     hint = retry_hint_he(raw)
     detail = next((l.strip() for l in reversed((raw or "").splitlines()) if l.strip()), "")[:200]
     return (head + (f", {hint}" if hint else "") + "\n" + (f"פירוט מהספק: `{detail}`\n" if detail else "")
-            + "לא עברתי לבינה אחרת.\n\n*למעבר, בינות פעילות הן:* (בחר עם / ומספר או שם, ושלח שוב את ההודעה)\n"
+            + "לא עברתי לבינה אחרת.\n\nלמעבר בין ספקים שלח /ספק *מספר* או שם; למעבר בין מודלים שלח /מודל *מספר*.\n"
             + "\n".join(ai_status_lines(skip=(name,))) + "\n\nכל הרשימה: /ספק · בדיקת מענה לכולן: /בדוק מענה")
 
 
@@ -7620,6 +7661,14 @@ def owner_command(text, chat=None):
     if m:  # owner 13.11: the bridge's AI provider (the same as the provider node of the legend in the dashboard)
         if not m.group(2):
             return providers_text()
+        if m.group(2).isdigit():  # owner 20.11: the explicit /ספק N form shown in provider status lines
+            order = provider_order()
+            number = int(m.group(2))
+            if not 1 <= number <= len(order):
+                return f"אין ספק מספר {number}. יש לבחור מספר בין 1 ל-{len(order)}. לרשימה: /ספק"
+            if m.group(4):
+                return "פורמט: /ספק <מספר> [מודל]"
+            return switch_provider(order[number - 1], m.group(3), chat=cur_chat())
         if m.group(2).lower() in ("כאן", "קבוצה", "לקבוצה"):
             chat = cur_chat()
             if not m.group(3) or m.group(3).lower() in ("איפוס", "ברירת-מחדל", "default"):
