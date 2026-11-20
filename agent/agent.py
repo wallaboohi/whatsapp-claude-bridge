@@ -7080,22 +7080,48 @@ class StatusMsg:
     def _detail_lines(self):
         return [speaker_line(self.ai_short, self.ai_model, self.ai_location or "☁️ ענן")]
 
+    # Owner 20.11 10:09-10:30 (example ו): a label in grey code of ONE fixed width on every row, ┃ under ┃, the changing
+    # detail in bold, the route row (computer · provider · model · location), one divider line before the answer.
+    LABEL_W = 5
+    DIVIDER = "━━━━━━━ ✦ ━━━━━━━"
+
+    @classmethod
+    def _lab(cls, word):
+        nb = "\u00a0"  # a hard space: WhatsApp keeps it, so every label has the same width
+        return f"`{nb}{word}{nb * (cls.LABEL_W - len(word) + 1)}`"
+
+    def _route_row(self):
+        pc = pc_he(CFG.get("host_label") or socket.gethostname())
+        pc = pc[len("מחשב "):] if pc.startswith("מחשב ") else pc
+        loc = self.ai_location or "☁️ ענן"
+        icon, _, word = loc.partition(" ")
+        parts = [f"🖥️ *{pc}*"] + ([f"🧠 *{self.ai_short}*"] if self.ai_short else [])
+        if self.ai_model:
+            parts.append(f"🔖 *{model_he(self.ai_model)}*")
+        parts.append(f"{icon} *{word or loc}*")
+        return f"🛣️ {self._lab('נתיב')} ┃ " + " · ".join(parts)
+
     def _text(self):
         # the hourglass flips (⏳ ↔ ⌛) on every edit so the owner sees it is alive (owner request 08.11); owner 17.11: one detail per line
         icon = "⏳" if self.tick % 2 == 0 else "⌛"
         prefix = CFG["reply_prefix"]
         if self.tick % 2 and prefix.strip() == "🤖":
             prefix = prefix.replace("🤖", "🦾")  # the robot "moves" too while working (owner request 08.11)
-        st = self.stage.partition(" · ")[0]
-        # Owner 19.11: keep live updates short; the full process belongs in the final status.
-        lines = [f"{icon} בעבודה · ⏱ {self._elapsed()}"] + self._detail_lines() + [f"🧵 {stage_icon(st) or '▫️'} {st}"]
-        return prefix + italic("\n".join(lines))
+        st, _, det = self.stage.partition(" · ")
+        head = st.split(" ", 1)[-1] if stage_icon(st) else st
+        lines = [f"{icon} {self._lab('מצב')} ┃ *{head}* · ⏱ *{self._elapsed()}*",
+                 f"🪜 {self._lab('שלבים')} ┃ *{max(1, len(self.steps))}*",
+                 f"🔧 {self._lab('פעולה')} ┃ *{(det or st).strip()[:80]}*",
+                 self._route_row()]
+        return prefix + "\n".join(lines)
 
     def _final(self):
         """Owner 17.11 13:55 (approved): the finished message shows the steps with how long each took, and the total from receiving
         the message until the answer."""
         end = self.ended or time.time()
-        lines = [f"✅ סיימתי · ⏱ {self._elapsed()}"] + self._detail_lines()
+        lines = [f"✅ {self._lab('מצב')} ┃ *סיימתי* · ⏱ *{self._elapsed()}*"]
+        if not self.steps:
+            lines.append(f"🪜 {self._lab('שלבים')} ┃ *0*")
         if self.steps:  # owner 17.11 16:45: two short process lines: icons in order, and the words below them
             seq = []  # owner 17.11 22:31 (approved): no repeats and only the last few kinds of step — the chain grew without end in a loop
             for s in self.steps:
@@ -7108,13 +7134,13 @@ class StatusMsg:
             seq = seq[-keep:]
             icons = " ".join(stage_icon(h) or "▫️" for h in seq)
             words = " ← ".join(h.split(" ", 1)[-1] if stage_icon(h) else h for h in seq)
-            lines.append(f"🪜 {icons}" + (f" (+{more} קודמים)" if more > 0 else ""))
-            lines.append(words)
+            lines.append(f"🪜 {self._lab('שלבים')} ┃ *{len(self.steps)}* · {icons}" + (f" (+{more} קודמים)" if more > 0 else ""))
+            lines.append(f"🔧 {self._lab('פעולה')} ┃ {words}")
+        lines.append(self._route_row())
         meter = ctx_meter_line(self.chat, self.t0 - 1)
         if meter:
             lines.append(meter)
-        lines.append(f"⏱ *סה״כ מקבלת ההודעה עד התשובה:* {self._elapsed()}")
-        return CFG["reply_prefix"] + italic("\n".join(lines))
+        return CFG["reply_prefix"] + "\n".join(lines)
 
     def send_finished(self):
         """A quick answer (finished before the progress message was due) never got one: its finished message, with the details,
@@ -7125,7 +7151,7 @@ class StatusMsg:
 
     def _full(self, answer):
         a = answer.strip()
-        return self._final() + "\n\n📝 *תשובה:*\n" + (italic(a) if CFG.get("reply_italic", True) else a)
+        return self._final() + f"\n{self.DIVIDER}\n📝 *תשובה:*\n" + (italic(a) if CFG.get("reply_italic", True) else a)
 
     def finalize(self, answer=None):
         """Owner 17.11 15:15 (third request): ONE message for the whole exchange. The status message gets its last edit with the
@@ -11680,6 +11706,20 @@ def quoted_of(chat, mid):
     return None
 
 
+def quoted_id_of(chat, mid, wait=3.0):
+    """The id of the message this one replies to ('' when it is not a reply). The row may land a moment after the event."""
+    end = time.time() + wait
+    while True:
+        try:
+            with mdb() as db:
+                r = db.execute("SELECT quoted_id FROM messages WHERE id = ? AND chat_jid = ?", (mid, chat)).fetchone()
+        except sqlite3.Error:
+            r = None
+        if r is not None or time.time() >= end:
+            return (r[0] or "") if r else ""
+        time.sleep(0.3)
+
+
 def quoted_context(chat, mid, limit=600):
     """Owner 20.11 12:17: a message sent as a reply to another one - the AI sees what it replies to. One quick read (no wait)."""
     if not chat or not mid:
@@ -11986,7 +12026,8 @@ def handle(row):
         if is_draft_copy(content):
             return  # the bridge's copy-and-paste text under a draft card (owner 10.11), not an instruction
         if content == READ_ALOUD:  # 🛞 = read my last answer aloud (no Claude run)
-            work.put(lambda: read_aloud(cj))
+            # owner 20.11 12:17: 🛞 sent as a reply reads the message it replies to (looked up in the worker, never in the intake)
+            work.put(lambda: read_aloud(cj, quoted_id_of(cj, mid) or None))
             return
         if me and not mtype and (jump_queue(cj, mid, content) or live_control(cj, mid, content)):
             return  # /עכשיו, >>, /עצור, /תור: answered at once, not queued behind the running work

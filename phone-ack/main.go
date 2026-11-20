@@ -78,12 +78,12 @@ func main() {
 	}
 	client := whatsmeow.NewClient(dev, logger)
 	a := &ack{client: client, dir: *dir, seen: map[string]bool{}, pending: map[string]bool{}}
-	a.cfg = config{WaitSec: 10, MaxAgeSec: 120, Emoji: "👀"}
+	a.cfg = config{WaitSec: 5, MaxAgeSec: 120, Emoji: "👀"} // owner 20.11 12:30: eyes within 5 seconds
 	if b, err := os.ReadFile(filepath.Join(*dir, "config.json")); err == nil {
 		_ = json.Unmarshal(b, &a.cfg)
 	}
 	if a.cfg.WaitSec <= 0 {
-		a.cfg.WaitSec = 10
+		a.cfg.WaitSec = 5
 	}
 	if a.cfg.MaxAgeSec <= 0 {
 		a.cfg.MaxAgeSec = 120

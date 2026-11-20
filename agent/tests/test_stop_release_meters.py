@@ -19,7 +19,8 @@ def test_speaker_line_is_one_line_with_all_four(agent, monkeypatch):
     st = mod.StatusMsg("sonnet", wa=False)
     text = st._text()
     st.finish()
-    assert "*מחשב:*" not in text and "*מיקום:*" not in text and "*ספק:*" not in text and "🗣️ *מדבר:*" in text
+    route = [l for l in text.split(chr(10)) if l.startswith("🛣️")]  # owner 20.11: the route row in the status message
+    assert len(route) == 1 and "┃" in route[0] and "🖥️" in route[0] and "☁️" in route[0]
 
 
 def test_stop_kills_a_tracked_process_and_the_run_is_stopped(agent):
@@ -214,3 +215,20 @@ def test_a_stale_asked_hold_is_cleared_without_handing_anything_back(agent, monk
     finally:
         mod._failover_loaded.discard(name)
     assert mod.failover_clear_stale(name, {"state": "active"}, {}) is False and mod.os.path.exists(hold)
+
+
+
+def test_status_rows_have_one_label_width_and_one_divider(agent):
+    """Owner 20.11 10:30 (example ו): every label the same width, ┃ under ┃, the bold on the changing detail, one divider line."""
+    mod, _ = agent
+    st = mod.StatusMsg("sonnet", wa=False)
+    st.set_stage("📖 קורא קבצים", "agent.py")
+    text = st._text()
+    st.finish()
+    rows = text.split(chr(10))
+    labels = [r.split("`")[1] for r in rows if r.count("`") >= 2]
+    assert len(labels) == 4 and len({len(x) for x in labels}) == 1
+    assert all(r.split("`")[2].startswith(" ┃ ") for r in rows if r.count("`") >= 2)
+    assert "*agent.py*" in text and "*פעולה*" not in text
+    full = st._full("תשובה קצרה")
+    assert full.count(mod.StatusMsg.DIVIDER) == 1 and full.index(mod.StatusMsg.DIVIDER) < full.index("📝 *תשובה:*")

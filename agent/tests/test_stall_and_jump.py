@@ -115,3 +115,31 @@ def test_after_three_stalls_the_owner_decides(agent, monkeypatch):
     monkeypatch.setattr(mod, "reply", lambda text, quoted=None: sent.append(text))
     monkeypatch.setattr(mod, "active_provider", lambda chat=None: ("opencode", None))
     assert mod.park_stalled(cid, chat, "M", "wa") is False and "לא אמשיך לבד" in sent[-1]
+
+
+def test_the_wheel_sent_as_a_reply_reads_the_replied_message(agent, monkeypatch):
+    """Owner 20.11 12:17: 🛞 sent as a reply to a message reads THAT message aloud, not the last answer."""
+    mod, _ = agent
+    monkeypatch.setattr(mod, "mdb", lambda: _FakeMdb({"W1": "Q9"}))
+    assert mod.quoted_id_of("g@g.us", "W1") == "Q9"
+    assert mod.quoted_id_of("g@g.us", "W2", wait=0) == ""
+
+
+class _FakeMdb:
+    def __init__(self, quotes):
+        self.quotes = quotes
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def execute(self, q, params):
+        mid = params[0]
+        row = (self.quotes[mid],) if mid in self.quotes else None
+
+        class R:
+            def fetchone(self_inner):
+                return row
+        return R()
