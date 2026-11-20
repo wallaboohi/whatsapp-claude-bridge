@@ -99,11 +99,12 @@ def main():
     uv = shutil.which("uv") or os.path.expanduser("~/.local/bin/uv.exe")
     # owner 10.11: a test that passed only at some hours broke the 23:30 release — run the suite now and at fake clock
     # times too (night/quiet hours, morning edge, release time, weekend, year end; agent/tests/conftest.py FAKE_NOW)
+    os.makedirs(os.path.join(ROOT, ".pytest_tmp"), exist_ok=True)  # owner 20.11: Temp\pytest-of-* was ACL-locked and failed the night release
     for when in ("", "2026-11-10 02:00", "2026-11-10 07:00", "2026-11-10 12:00", "2026-11-10 23:30",
                  "2026-11-13 15:00", "2026-11-14 23:59", "2026-12-31 23:59"):
         if when:
             print("  🕒 שעון מדומה:", when)
-        run([uv, "run", "-q", "--no-sync", "--group", "dev", "pytest", "-q", "-p", "no:cacheprovider", "tests"],
+        run([uv, "run", "-q", "--no-sync", "--group", "dev", "pytest", "-q", "-p", "no:cacheprovider", "--basetemp", os.path.join(ROOT, ".pytest_tmp", "release"), "tests"],
             cwd=os.path.join(ROOT, "agent"), env={"FAKE_NOW": when} if when else None)
     run([uv, "run", "-q", "python", "-c", "import main, extras"], cwd=os.path.join(ROOT, "whatsapp-mcp-server"))
     claude = shutil.which("claude")

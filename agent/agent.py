@@ -418,8 +418,9 @@ def _day_sync_tests(go, py):
     if go:
         runs.append((["go", "test", "./..."], os.path.join(ROOT, "whatsapp-bridge")))
     if py:
-        runs.append(([uvx, "run", "--no-sync", "python", "-X", "utf8", "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests"],
+        runs.append(([uvx, "run", "--no-sync", "python", "-X", "utf8", "-m", "pytest", "-q", "-p", "no:cacheprovider", "--basetemp", os.path.join(ROOT, ".pytest_tmp", "daysync"), "tests"],
                      os.path.join(ROOT, "agent")))
+    os.makedirs(os.path.join(ROOT, ".pytest_tmp"), exist_ok=True)
     for cmd, cwd in runs:
         try:
             r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900,
