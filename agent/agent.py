@@ -10400,8 +10400,17 @@ def handover_cmd(arg):
         return ("🔁 *מחזיר את הגשר לנייח.* הנייח מתעורר תוך כחצי דקה, ואז ההזדהות והאוטומציות חוזרות אליו לבד (כמו בחזרה אחרי נפילה). "
                 "אודיע כשהוא מחזיק."
                 + (f"\n⚠️ לא הצלחתי להגיע אל: {', '.join(failed)}. אם הנייח ביניהם, הוא יישאר בהמתנה עד שאגיע אליו." if failed else ""))
+    if fc and target != me and target in names and (failover_state(fc["for"]).get("state") or "idle") == "active" \
+            and kv_get("session_taken_at"):
+        # owner 20.11 12:01 (the relay): the backup that holds the bridge passes it on; the desktop stays away until "נייח"
+        failed = handover_spread({"to": target, "at": dt.datetime.now().isoformat(timespec="seconds"), "by": socket.gethostname()})
+        if target in failed:
+            return f"⚠️ לא הצלחתי לכתוב את ההוראה ב\"{target}\", ולכן לא העברתי. הגשר נשאר ב{me}."
+        return (f"🔀 *מעביר את הגשר מ{me} ל{target}* (בתוך שניות, עם ההודעות שהתקבלו כאן). "
+                f"לחזרה לנייח: */העבר גשר נייח*." + (f"\n⚠️ לא הגעתי אל: {', '.join(failed)}." if failed else ""))
     if fc:
-        return f"אפשר להעביר את הגשר רק מהנייח. עכשיו אני ב{me}: קודם */העבר גשר נייח*, ואחרי שהוא חוזר להחזיק, להעביר משם."
+        return f"אפשר להעביר את הגשר רק מהנייח או מהמחשב שמחזיק אותו. עכשיו אני ב{me}: קודם */העבר גשר נייח*, ואחרי שהוא חוזר להחזיק, להעביר משם."
+
     if target not in names:
         return f"\"{target}\" לא מוגדר כמחשב בשרשרת כאן."
     if session_cfg() and not lease_held():
@@ -10428,6 +10437,26 @@ def handover_cmd(arg):
             + (f"\n⚠️ לא הגעתי אל: {', '.join(failed)} (הם לא ייקחו כי הנייח מושבת מרצון רק מבחינת {target})." if failed else ""))
 
 
+HANDOVER_REQUEST = os.path.join(os.path.dirname(RESTART_FILE), "handover.request")
+
+
+def handover_request_check():
+    """Owner 20.11 12:01: tools/chain_relay.py moves the bridge along the chain by writing agent/handover.request (the target's
+    name, as in /העבר גשר) on the PC that holds it; the result goes to the control group like the command's answer."""
+    if not os.path.exists(HANDOVER_REQUEST):
+        return
+    try:
+        arg = open(HANDOVER_REQUEST, encoding="utf-8").read().strip()
+    finally:
+        os.remove(HANDOVER_REQUEST)
+    out = handover_cmd(arg)
+    log("handover request", arg, "->", out[:160])
+    try:
+        send(PRIMARY, CFG["reply_prefix"] + italic("🔀 מסירה מתוכננת (סבב הפעלה מחדש): " + out))
+    except Exception as e:
+        log("handover request: report failed", e)
+
+
 def handover_away():
     """Host at start-up with a hand-over file: release the identity and wait, silent, until the file is gone (owner 19.11)."""
     if failover_cfg() or not os.path.exists(HANDOVER_FILE):
@@ -10441,6 +10470,8 @@ def handover_away():
     while os.path.exists(HANDOVER_FILE):
         time.sleep(15)
     kv_set("heartbeat", dt.datetime.now().isoformat(timespec="seconds"))
+    for chat in load_groups():  # owner 20.11 12:01: the context pack after the bridge comes back here
+        kv_set(K("gap", chat), "1")
     log("planned hand-over ended: starting as host again")
 
 
@@ -10873,8 +10904,9 @@ def chain_take_blocker(fc, host, view, now=None, passed_from="", fenced=()):
         return f"\"{host}\" זמין", None
     if hs == "unknown":
         return f"\"{host}\" עוד לא נבדק", None
+    planned_here = handover_read().get("to") == fc.get("self_name")  # owner 20.11 12:01: a planned hand-over waits for nothing
     if hs == "agent_down" and host not in fenced:
-        if now - (hv.get("since") or now) < grace:
+        if now - (hv.get("since") or now) < grace and not planned_here:
             return f"\"{host}\" מפעיל מחדש את הסוכן (המחשב עונה)", None
         return f"\"{host}\": הסוכן לא עונה {int(now - hv['since'])} שנ' והמחשב כן", host
     for pn, v in view.items():
@@ -10898,8 +10930,20 @@ def chain_take_blocker(fc, host, view, now=None, passed_from="", fenced=()):
 
 def chain_handback_target(fc, host, view):
     """Holder: the earliest PC before us in the chain that is back and can take the identity: the host first, then the
-    backups in defer_to order. "" = keep holding."""
+    backups in defer_to order. "" = keep holding.
+    Owner 20.11 12:01 (the relay): a planned hand-over (store/handover.json) decides instead: named here = keep holding;
+    named another backup that is up and can take the identity = that one (forward too); the desktop wakes when the file goes."""
     mine = lease_held()
+    planned = handover_read().get("to")
+    if planned:
+        if planned == fc.get("self_name") or planned == host:
+            return ""
+        v = view.get(planned) or {}
+        d = v.get("data") or {}
+        if v.get("status") == "up" and (d.get("lease") or {}).get("mode") and not d.get("holds") and not _alive_holds_lease(d) \
+                and (d.get("chain") or {}).get("for") == host:
+            return planned
+        return ""
     for pn in [host] + [str(x) for x in fc.get("defer_to") or []]:
         v = view.get(pn) or {}
         if v.get("status") != "up":
@@ -11058,6 +11102,8 @@ def chain_backup_step(fc, host, st, view, now=None):
             _fo_say(fc, msg)
         return False
     kv_set(f"fo_chain_fail_said:{host}", "")
+    for chat in load_groups():  # owner 20.11 12:01: the context pack: every conversation's next run gets its recent messages
+        kv_set(K("gap", chat), "1")
     head = (f"🔁 \"{passed}\" החזיר לי את הגשר: אני לפניו בשרשרת." if passed
             else f"🖥️ המחשב \"{host}\" לא זמין (נבדק לפני {int(secs)} שנ').")
     _fo_say(fc, f"{head} {msg}")
@@ -11189,6 +11235,10 @@ def chain_watch():
     while True:
         _chain_wake.wait(1.0)
         _chain_wake.clear()
+        try:
+            handover_request_check()
+        except Exception:
+            log("handover request error", traceback.format_exc())
         try:
             chain_decide()
         except Exception:
