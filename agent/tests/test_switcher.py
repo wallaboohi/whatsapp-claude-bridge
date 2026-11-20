@@ -295,3 +295,29 @@ def test_the_rolling_update_merges_diverged_daily_sync_commits_and_restarts_a_st
     assert "merge hub/main -X theirs" in r and "push hub HEAD:main" in r and "merge --abort" in r, "diverged PCs are merged, a conflict aborts"
     assert "claude/worktrees/" in r, "a scratch worktree gitlink is not dirty code"
     assert "running_head" in r and "$stale" in r, "an agent older than the checkout is restarted even with nothing pulled"
+
+
+# ---- owner 21.11 00:55 (live round 2): the salon -> laptop hop failed. The bedroom is before the laptop in the chain and was up and
+# ready, so the laptop kept answering "an earlier PC is up" and never took the bridge it was handed on purpose.
+
+def test_a_planned_handover_to_this_pc_beats_the_earlier_pc_that_is_ready(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    _env(mod, monkeypatch, tmp_path, {"to": "לפטופ", "at": "2026-11-21T00:51:40", "by": "salon-pc"})
+    fc = {"for": "נייח", "self_name": "לפטופ", "defer_to": ["חדר שינה", "סלון"]}
+    ready = {"agent_alive": True, "holds": [], "lease": {"mode": True, "copy_at": "2026-11-21T00:40:00", "policy": True}}
+    view = {"נייח": {"status": "agent_down", "data": None, "last": {}, "since": 1.0},
+            "חדר שינה": {"status": "up", "data": ready, "last": {}},
+            "סלון": {"status": "up", "data": {**ready, "lease": {**ready["lease"], "held": True}}, "last": {}}}
+    why, fence = mod.chain_take_blocker(fc, "נייח", view, now=10_000.0, passed_from="סלון", fenced=("נייח",))
+    assert (why, fence) == ("", None), why
+
+
+def test_without_a_planned_handover_the_earlier_ready_pc_still_has_priority(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    _env(mod, monkeypatch, tmp_path)
+    fc = {"for": "נייח", "self_name": "לפטופ", "defer_to": ["חדר שינה", "סלון"]}
+    ready = {"agent_alive": True, "holds": [], "lease": {"mode": True, "copy_at": "2026-11-21T00:40:00", "policy": True}}
+    view = {"נייח": {"status": "down", "data": None, "last": {}, "since": 1.0},
+            "חדר שינה": {"status": "up", "data": ready, "last": {}}}
+    why, fence = mod.chain_take_blocker(fc, "נייח", view, now=10_000.0)
+    assert why and "לפניי בשרשרת" in why, "the normal order is unchanged when nothing was handed over on purpose"

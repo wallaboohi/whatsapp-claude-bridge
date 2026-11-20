@@ -171,3 +171,30 @@ def test_no_recovery_when_someone_holds_the_bridge(monkeypatch):
     monkeypatch.setattr(r, "holders", lambda: ["חדר שינה"])
     monkeypatch.setattr(r, "run_py", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not touch anything")))
     assert r.recover_desktop("x") is False
+
+
+def test_a_hop_with_nobody_connected_fails_after_a_minute_not_after_four(monkeypatch):
+    r = _relay()
+    t = _clock(r, monkeypatch)
+    monkeypatch.setattr(r, "state", lambda n: {"lease": "waiting"})
+    monkeypatch.setattr(r, "holders", lambda: [])
+    assert r.wait_holding_or_floor("לפטופ", 4, 60) is False
+    assert t[0] - 1000.0 < 90, "the hop is failed after about a minute, then the desktop is brought back"
+
+
+def test_a_hop_that_completes_is_not_cut_short(monkeypatch):
+    r = _relay()
+    t = _clock(r, monkeypatch)
+    calls = []
+    monkeypatch.setattr(r, "holders", lambda: [])
+    monkeypatch.setattr(r, "state", lambda n: calls.append(1) or {"lease": "holding x" if t[0] - 1000.0 > 40 else "waiting"})
+    assert r.wait_holding_or_floor("לפטופ", 4, 60) is True
+
+
+def test_someone_holding_resets_the_floor(monkeypatch):
+    r = _relay()
+    t = _clock(r, monkeypatch)
+    monkeypatch.setattr(r, "state", lambda n: {"lease": "waiting"})
+    monkeypatch.setattr(r, "holders", lambda: ["חדר שינה"] if t[0] - 1000.0 < 100 else [])
+    r.wait_holding_or_floor("לפטופ", 4, 60)
+    assert t[0] - 1000.0 >= 160, "the minute is counted only while nobody holds"

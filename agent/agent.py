@@ -11469,7 +11469,10 @@ def chain_take_blocker(fc, host, view, now=None, passed_from="", fenced=()):
         if s == "up":
             if host in (d.get("holds") or []) or _alive_holds_lease(d):
                 return f"\"{pn}\" מחזיק כבר את העבודה", None
-            if pn in before and _chain_ready(d):
+            if pn in before and _chain_ready(d) and not planned_here:
+                # owner 21.11 00:55 (live round 2, salon -> laptop): the bedroom is before the laptop and ready, so the laptop never
+                # took the bridge it was handed on purpose. A hand-over named to THIS PC is the owner's explicit order; the normal
+                # priority (the bridge returns to the earliest PC) applies again when the hand-over ends.
                 return f"\"{pn}\" לפניי בשרשרת וזמין", None
         elif s == "unknown" and (pn in before or _maybe_holder(v)):
             return f"\"{pn}\" עוד לא נבדק", None

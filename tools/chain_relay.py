@@ -130,6 +130,26 @@ def tool_check(name, holder):
     return True, f"ממתין בשער, קוד {st.get('head')}"
 
 
+def wait_holding_or_floor(name, minutes=5, floor_seconds=60):
+    """Like wait_holding, but a hop where NOBODY holds the identity for floor_seconds is a failure at once: the bridge must not sit
+    offline for the whole hop timeout (live round 2, 21.11: 4 minutes). The caller then cancels the hand-over and the desktop returns."""
+    end, empty_since, last_check = time.time() + minutes * 60, None, 0.0
+    while time.time() < end:
+        if str(state(name).get("lease", "")).startswith("holding"):
+            return True
+        if time.time() - last_check >= 8:
+            last_check = time.time()
+            if holders():
+                empty_since = None
+            else:
+                empty_since = empty_since or time.time()
+                if time.time() - empty_since >= floor_seconds:
+                    log("hop: nobody holds the identity for", int(time.time() - empty_since), "s - failing the hop early")
+                    return False
+        time.sleep(3)
+    return False
+
+
 def wait_holding(name, minutes=5):
     end = time.time() + minutes * 60
     while time.time() < end:
@@ -351,7 +371,7 @@ def main(a):
             lines.append(f"❌ {giver} ← {taker}: לא הצלחתי לכתוב את בקשת המסירה")
             report("⛔ *סבב ההפעלה מחדש נעצר*, הגשר ב" + giver + ":\n" + "\n".join(lines))
             return 1
-        held = wait_holding(taker, 6 if taker == ORDER[0] else 4)
+        held = wait_holding_or_floor(taker, 6 if taker == ORDER[0] else 4)
         secs = int(time.time() - t0)
         if not held:
             lines.append(f"❌ {giver} ← {taker}: לא קיבל את הגשר תוך {secs} שנ'")
