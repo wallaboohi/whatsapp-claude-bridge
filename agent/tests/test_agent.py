@@ -2564,6 +2564,23 @@ def test_provider_event_stream_is_never_sent_as_answer(agent):
     assert mod.unwrap_provider_event_stream(ordinary) == (ordinary, False)
 
 
+def test_ensure_hebrew_unwraps_provider_stream_before_translation(agent, monkeypatch):
+    mod, _ = agent
+    raw = '\n'.join([
+        '{"type":"thread.started","thread_id":"private-thread"}',
+        '{"type":"turn.started"}',
+        '{"type":"item.completed","item":{"type":"agent_message","text":"I am checking the bridge configuration and provider output."}}',
+    ])
+    monkeypatch.setattr(mod, "claude", lambda *a, **k: None)
+    out = mod.ensure_hebrew(raw)
+    assert out.startswith("⚠️ הבינה ענתה באנגלית")
+    assert "I am checking the bridge configuration" in out
+    assert "thread.started" not in out and "private-thread" not in out and '"item.completed"' not in out
+
+    no_answer = '{"type":"thread.started"}\n{"type":"turn.started"}'
+    assert mod.ensure_hebrew(no_answer) == "לא התקבלה תשובה מהבינה; הגיע רק פלט טכני. נסה שוב."
+
+
 def test_watchdog_heals_a_bridge_whose_api_is_down(agent, monkeypatch):
     """Owner 14.11: the bridge process ran but its API did not answer (port held), so nothing was sent: kill it (its loop restarts it),
     and start the task when no loop runs."""

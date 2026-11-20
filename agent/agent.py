@@ -2874,6 +2874,13 @@ def hebrew_share(text):
 def ensure_hebrew(text, chat=None):
     """Owner 14.11: a message that is mostly Latin letters is translated to Hebrew by a ready provider before it is sent; when that is not
     possible the owner gets a Hebrew warning above the original instead of silent English."""
+    # A hosted CLI can occasionally return its stream-json protocol as plain text. Unwrap it
+    # before language detection/translation, or a translator failure would echo the full
+    # internal event stream into WhatsApp. reply() is a final guard, but this path used to
+    # prepend the raw stream to a Hebrew warning before that guard could identify it.
+    text, was_stream = unwrap_provider_event_stream(text)
+    if was_stream and text == "לא התקבלה תשובה מהבינה; הגיע רק פלט טכני. נסה שוב.":
+        return text
     if ERROR_ANSWER_RE.match(text or ""):  # a provider error shown as an answer: explain it in Hebrew instead of dumping JSON
         return explain_error(text)
     if hebrew_share(text) >= 0.35:
