@@ -191,7 +191,7 @@ def main():
     if keys:
         sys.exit("✖ נמצא מה שנראה כמפתח בקומיטים שעוד לא עלו ל-GitHub (GitHub יחסום את הדחיפה):\n"
                  + "\n".join(f"{c} {f}" for c, f in keys[:10]) + "\nצריך להוציא אותם מהקומיטים לפני השחרור.")
-    if "--no-rehearsal" not in sys.argv:
+    if "--rehearsal" in sys.argv:  # owner 21.11 23:50: off by default — GitHub's own build (step 4) is the real check
         print("▶ חזרה על הבנייה של GitHub בעותק נקי (רק קבצים שמורים, בלי hub ו-NAS)", flush=True)
         fail = github_rehearsal()
         if fail:
@@ -218,11 +218,11 @@ def main():
     run([go, "vet", "."], cwd=os.path.join(ROOT, "whatsapp-bridge"), env=env)
     run([go, "test", "./..."], cwd=os.path.join(ROOT, "whatsapp-bridge"), env=env)
     uv = shutil.which("uv") or os.path.expanduser("~/.local/bin/uv.exe")
-    # owner 10.11: a test that passed only at some hours broke the 23:30 release — run the suite now and at fake clock
-    # times too (night/quiet hours, morning edge, release time, weekend, year end; agent/tests/conftest.py FAKE_NOW)
+    # owner 21.11 23:50: one run (it was 8 — the same suite at 7 fake clocks, ~20 minutes, since 10.11); --clocks brings them back
     os.makedirs(os.path.join(ROOT, ".pytest_tmp"), exist_ok=True)  # owner 20.11: Temp\pytest-of-* was ACL-locked and failed the night release
-    for when in ("", "2026-11-10 02:00", "2026-11-10 07:00", "2026-11-10 12:00", "2026-11-10 23:30",
-                 "2026-11-13 15:00", "2026-11-14 23:59", "2026-12-31 23:59"):
+    clocks = ("2026-11-10 02:00", "2026-11-10 07:00", "2026-11-10 12:00", "2026-11-10 23:30",
+              "2026-11-13 15:00", "2026-11-14 23:59", "2026-12-31 23:59") if "--clocks" in sys.argv else ()
+    for when in ("",) + clocks:
         if when:
             print("  🕒 שעון מדומה:", when)
         # owner 21.11: a fresh folder for every run — pytest empties --basetemp first, and a file still held by the previous run
@@ -260,18 +260,42 @@ def main():
         print("(dry run — לא נשמר ולא פורסם)")
         return
 
-    # 4. commit, tag, push
+    # 4. commit, push main, wait for GitHub's build of it, and only then tag (owner 21.11 23:50: v1.2.2 and v1.2.3 were tagged
+    # before GitHub built them, both builds failed and both numbers were spent)
     run(["git", "add"] + bumped)
     run(["git", "commit", "-m", f"Release v{ver}\n\n{notes}"])
-    run(["git", "tag", "-a", f"v{ver}", "-m", f"v{ver}"])
     branch = run(["git", "rev-parse", "--abbrev-ref", "HEAD"]).strip()
+    sha = run(["git", "rev-parse", "HEAD"]).strip()
     run(["git", "push", "origin", f"{branch}:main"])
+    print("▶ ממתין לבנייה של GitHub על הקוד הזה (בלי תג)…", flush=True)
+    result = wait_github_build(sha)
+    if result != "success":
+        sys.exit(f"✖ הבנייה ב-GitHub: {result}. לא נוצר תג, ומספר הגרסה {ver} לא נשרף.\n"
+                 "https://github.com/WallaBoohi/whatsapp-claude-bridge/actions")
+    print("✔ הבנייה ב-GitHub עברה", flush=True)
+    run(["git", "tag", "-a", f"v{ver}", "-m", f"v{ver}"])
     run(["git", "push", "origin", f"v{ver}"])
     versioning.consume(ver)
     print(f"✔ v{ver} פורסמה. GitHub בונה את הקבצים: https://github.com/WallaBoohi/whatsapp-claude-bridge/actions")
 
 
 BUMPED = ["VERSION", "dash/VERSION", ".claude-plugin/plugin.json", "agent/pyproject.toml", "agent/uv.lock", "CHANGELOG.md"]
+
+
+def wait_github_build(sha, minutes=30):
+    """The result of GitHub's build of this commit on main: "success", "failure", ... or "no answer" after `minutes`."""
+    import time
+    gh = shutil.which("gh") or r"C:\Program Files\GitHub CLI\gh.exe"
+    end = time.time() + minutes * 60
+    while time.time() < end:
+        r = subprocess.run([gh, "run", "list", "-R", "WallaBoohi/whatsapp-claude-bridge", "--commit", sha, "--branch", "main",
+                            "--json", "status,conclusion", "-q", ".[0] | \"\\(.status) \\(.conclusion)\""],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
+        status, _, conclusion = (r.stdout or "").strip().partition(" ")
+        if status == "completed":
+            return conclusion or "unknown"
+        time.sleep(20)
+    return "no answer"
 
 if __name__ == "__main__":
     # owner 21.11: a dry run that fails must leave the files as they were too (its bump to 1.2.2 stayed behind and would have
