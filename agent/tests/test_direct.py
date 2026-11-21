@@ -148,7 +148,7 @@ def test_a_whole_exchange_contents_then_a_tool_then_the_answer(provider, box):
     assert r["text"] == "42" and r["in"] == 420 and r["tools"] == ["read_file", "read_file"]
     first = state["seen"][0]
     assert first["messages"][0]["role"] == "system" and "RULES" in first["messages"][0]["content"] and "bridge_tools" in first["messages"][0]["content"]
-    assert [t["function"]["name"] for t in first["tools"]] == ["bridge_tools", "bridge_call", "save_tool"], "only the three small tools are sent"
+    assert [t["function"]["name"] for t in first["tools"]] == ["bridge_tools", "bridge_call", "bridge_rules", "save_tool"], "only the small tools are sent"
     assert "get_status" in state["seen"][1]["messages"][-1]["content"], "the table of contents went back"
     assert "the answer is 42" in state["seen"][2]["messages"][-1]["content"]
     assert state["headers"][0]["Authorization"] == "Bearer KEY" and "yb-bridge" in state["headers"][0]["User-Agent"]
@@ -171,3 +171,20 @@ def test_one_retry_only_when_the_provider_says_when(provider, monkeypatch):
     with pytest.raises(bd.DirectError):
         bd.run("gemini", p, "", "m1", "", "hi", mcp=FakeMcp())
     assert len(state["seen"]) == 4, "a daily quota (22 hours) is not waited for"
+
+
+def test_the_rules_go_as_a_table_of_contents_and_a_rule_is_read_when_needed(provider, box):
+    """Owner 21.11: like the tools — the owner's "כלל בסיס" rules and who this group is go in full; every other rule is one line of
+    contents, read with bridge_rules when the provider needs it."""
+    p, state = provider
+    rules = "\n".join(["- *עברית תמיד (יקיר 14.11.2026, כלל בסיס לכל הגשר):* כל תשובה בעברית.",
+                       "- *שמות, לא מספרים (יקיר 09.11.2026):* לא כותבים מספר טלפון.", "  המשך הכלל בשורה שנייה.", "",
+                       "הקבוצה הנוכחית \"ויוי\".", "# הוראות לשיחה", "- *השם שלך: ויוי*"])
+    always, items = bd.split_rules(rules)
+    assert "עברית תמיד" in always and "הקבוצה הנוכחית" in always and [t for t, _ in items] == ["שמות, לא מספרים (יקיר 09.11.2026)", "הוראות לשיחה", "השם שלך: ויוי"]
+    assert "המשך הכלל בשורה שנייה" in items[0][1]
+    state["replies"] = [(200, _tool_call("c1", "bridge_rules", {"number": 1}), {}), (200, _answer("בסדר"), {})]
+    assert bd.run("gemini", p, "", "m1", rules, "hi", mcp=FakeMcp())["text"] == "בסדר"
+    system = state["seen"][0]["messages"][0]["content"]
+    assert "כל תשובה בעברית" in system and "1. שמות, לא מספרים" in system and "לא כותבים מספר טלפון" not in system
+    assert "לא כותבים מספר טלפון" in state["seen"][1]["messages"][-1]["content"], "the rule in full when asked"

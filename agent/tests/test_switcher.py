@@ -803,3 +803,35 @@ def test_the_switch_checks_go_straight_to_the_provider_not_through_the_translato
     monkeypatch.setattr(bd, "probe", lambda *a, **k: (False, "HTTP 429 slow"))
     r = agent.anthropic_probe(p, "k")
     assert not r["ok"] and [m for m, _ in r["tried"]] == ["m1", "m2"], "a rate-limited model: the next one is tried"
+
+
+def test_a_failed_model_goes_once_to_the_last_model_that_answered(agent, monkeypatch):
+    """Owner 21.11 18:05: no model is removed for a failure; the same message goes at once, once, to the model that last answered with
+    this provider, and that model is where a provider starts next time."""
+    agent = agent[0]
+    import bridge_direct as bd
+    p = {"kind": "anthropic", "upstream": {"base": "https://x/v1"}, "model": "lite", "short": "G"}
+    monkeypatch.setattr(agent, "providers", lambda: {"g": p})
+    monkeypatch.setattr(agent, "live_valid_model", lambda n, m, force=False: m)
+    monkeypatch.setattr(agent, "group_prompt", lambda chat: "")
+    agent.kv_set("last_good_model:g", "flash")
+    tried = []
+
+    def fake(name, prov, key, model, system, user, on_tool=None, timeout=600, mcp=None):
+        tried.append(model)
+        if model == "pro":
+            raise bd.DirectError(404, "models/pro is no longer available")
+        return {"text": "ok", "in": 1, "out": 1, "tools": []}
+    monkeypatch.setattr(bd, "run", fake)
+    r = agent._run_direct("g", p, "q", "pro", agent.PRIMARY, None, 60)
+    assert r["result"] == "ok" and tried == ["pro", "flash"] and r["model"] == "flash"
+    assert agent.kv_get("last_good_model:g") == "flash" and agent.last_good_model("g", p) == "flash"
+    tried.clear()
+    agent._run_direct("g", p, "q", None, agent.PRIMARY, None, 60)
+    assert tried == ["flash"], "a provider starts from the model that last answered"
+    monkeypatch.setattr(bd, "run", lambda *a, **k: tried.append(a[3]) or (_ for _ in ()).throw(bd.DirectError(503, "high demand")))
+    tried.clear()
+    import pytest as _pt
+    with _pt.raises(agent.ProviderDown):
+        agent._run_direct("g", p, "q", "pro", agent.PRIMARY, None, 60)
+    assert tried == ["pro", "flash"], "once, not more"

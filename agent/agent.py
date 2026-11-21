@@ -2819,7 +2819,7 @@ def provider_env(name=None, model=None):
             raise ProviderDown(name, "unreachable", 30)
         return dict(os.environ), model or p.get("model") or None
     if p.get("kind") == "anthropic" and p.get("upstream"):  # owner 21.11: the bridge talks to it by itself (bridge_direct), no translator
-        return dict(os.environ), (model or p.get("model") or None)
+        return dict(os.environ), (model or last_good_model(name, p) or None)
     if p.get("kind") == "anthropic":
         m = model or p.get("model") or ""
         h = provider_host(p, m)
@@ -5498,12 +5498,18 @@ def _codex_stage(event):
     return None
 
 
+def last_good_model(name, p=None):
+    """Owner 21.11 18:05: a provider starts from the model that last answered with it (the bridge remembers it), else its configured
+    default. No model is ever removed for a failure: "many failures come for no reason"."""
+    return kv_get(f"last_good_model:{name}") or (p or providers().get(name) or {}).get("model") or ""
+
+
 def _run_direct(name, p, prompt, model, chat, on_stage, timeout):
     """Owner 21.11 (OWNER-SPEC 1-5, 14): the bridge itself talks to the provider. It sends the connection message (what the bridge is +
     how to reach its tools), the bridge rules, the last 10 messages and this message; the provider reaches every bridge tool through
     bridge_tools / bridge_call and keeps its own tools with save_tool. Returns a Claude-shaped result like the CLI runs."""
     import bridge_direct as bd
-    m = live_valid_model(name, model or p.get("model"))
+    m = live_valid_model(name, model or last_good_model(name, p))
     probe = getattr(_ctx, "probe", False)
     system = "" if probe else ((group_prompt(chat) or "") + "\n\n" + HEBREW_RULE).strip()
     user = (prompt if probe else conversation_pack(chat or PRIMARY) + "\n\n---\nההודעה הנוכחית (ענה עליה):\n" + prompt + HEBREW_TAIL)
@@ -5515,13 +5521,29 @@ def _run_direct(name, p, prompt, model, chat, on_stage, timeout):
             ev = {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": tool, "input": args}]}}
             on_stage(_stage_of(ev) or "🔧 מפעיל כלי", _detail_of(tool, args))
     t0 = time.time()
+    key = provider_key(p) or p.get("token") or ""
     try:
-        r = bd.run(name, p, provider_key(p) or p.get("token") or "", m, system, user, on_tool=on_tool, timeout=timeout or 600)
+        try:
+            r = bd.run(name, p, key, m, system, user, on_tool=on_tool, timeout=timeout or 600)
+        except bd.DirectError as e:
+            # owner 21.11 18:05: the model that failed is not the one that last answered: the same message goes at once, once, to that
+            # one (same provider), instead of the owner sending it again (gemini-2.5-pro 404 four times, 18:00; a 503 / 429 that passed
+            # half a minute later)
+            fallback = live_valid_model(name, last_good_model(name, p))
+            if not fallback or fallback == m or probe:
+                raise
+            log("direct run failed on", name, m, "-> once more on the last model that answered:", fallback, "|", e.raw[:160])
+            if on_stage:
+                on_stage(f"🔁 {m} לא ענה, עובר ל-{fallback}", "")
+            m = fallback
+            r = bd.run(name, p, key, m, system, user, on_tool=on_tool, timeout=timeout or 600)
     except bd.DirectError as e:
         reason, minutes = classify_down(e.raw) or (("unreachable", 5) if e.code == 0 else ("error", 15))
         raise ProviderDown(name, reason, minutes, raw=e.raw[-600:]) from None
     finally:
         _ctx.run_seconds = time.time() - t0
+    if r["text"] and not probe:
+        kv_set(f"last_good_model:{name}", m)
     if not r["text"]:
         raise ProviderDown(name, "error", 15, raw="empty answer")
     return {"type": "result", "result": r["text"], "is_error": False, "session_id": None,

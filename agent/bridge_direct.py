@@ -401,11 +401,49 @@ def call_tool(provider, name, args, mcp=None):
     return f"אין כלי בשם {name}. לרשימה: bridge_tools בלי שם."
 
 
+RULE_HEAD = re.compile(r"^\s*[-•]\s*\*([^*]{2,160})\*")
+BASE_MARK = "כלל בסיס"
+
+
+def split_rules(text):
+    """Owner 21.11: the bridge rules like the tools — a table of contents, and a rule is read when it is needed. Returns
+    (always, items): `always` = the rules the owner marked "כלל בסיס" + the lines that are not a numbered rule (who this group is,
+    its purpose); `items` = [(title, full text)] for the table of contents."""
+    always, items, cur = [], [], None
+    for line in (text or "").splitlines():
+        m = RULE_HEAD.match(line)
+        if m:
+            cur = [m.group(1).strip().rstrip(":"), [line]]
+            items.append(cur)
+        elif line.lstrip().startswith("#"):
+            cur = [line.strip("# ").strip(), [line]]
+            items.append(cur)
+        elif not line.strip():
+            cur = None  # a blank line ends a rule: the next paragraph is not part of it
+        elif cur is not None:
+            cur[1].append(line)
+        else:
+            always.append(line)
+    out = []
+    for title, body in items:
+        if BASE_MARK in title:
+            always.append("\n".join(body))
+        else:
+            out.append((title, "\n".join(body)))
+    return "\n".join(always).strip(), out
+
+
+def rules_contents(items):
+    return "\n".join(f"{i}. {t}" for i, (t, _) in enumerate(items, 1))
+
+
 META_TOOLS = [
     {"type": "function", "function": {"name": "bridge_tools", "description": "Without a name: the table of contents of every bridge tool (one line each). With a name: that tool's full definition.",
                                       "parameters": _schema({"name": S})}},
     {"type": "function", "function": {"name": "bridge_call", "description": "Run a bridge tool by name with its arguments (an object).",
                                       "parameters": _schema({"name": S, "args": {"type": "object"}}, ["name"])}},
+    {"type": "function", "function": {"name": "bridge_rules", "description": "The bridge rules: without a number their table of contents; with a number that rule in full. Read a rule before an action it covers.",
+                                      "parameters": _schema({"number": {"type": "integer"}})}},
     {"type": "function", "function": {"name": "save_tool", "description": "Save a tool you downloaded or wrote into your own toolbox, to use it next time with bridge_call: Python code that reads its arguments as JSON on stdin and prints the result.",
                                       "parameters": _schema({"name": S, "description": S, "code": S, "parameters": {"type": "object"}, "shared": {"type": "boolean"}}, ["name", "description", "code"])}},
 ]
@@ -417,7 +455,8 @@ def connection_text(provider):
             f"ומפרסם את התשובה שלך בווצאפ. לגשר יש כלים משלו (ווצאפ, קבצים, פקודות, חיפוש ברשת וקריאת דפים) ואתה מפעיל אותם דרכו: "
             f"bridge_tools בלי שם מחזיר את תוכן העניינים, bridge_tools עם שם מחזיר הגדרה מלאה, bridge_call מפעיל כלי. "
             f"כלי שאין בגשר או שלא עובד לך — הורד או כתוב אותו ושמור עם save_tool; הוא יישמר בארגז הכלים שלך ({rel}/tools/). "
-            f"התשובה הסופית שלך נשלחת לקבוצה אוטומטית.")
+            f"כללי הגשר: הכללים המסומנים 'כלל בסיס' מופיעים כאן במלואם; לשאר יש תוכן עניינים — לפני פעולה שנוגעת לכלל, קרא אותו עם "
+            f"bridge_rules ומספר. התשובה הסופית שלך נשלחת לקבוצה אוטומטית.")
 
 
 # ---------------------------------------------------------------- one run against a provider
@@ -491,13 +530,16 @@ def probe(name, p, key, model, text, max_tokens=200, timeout=90):
 
 def run(name, p, key, model, system_text, user_text, on_tool=None, timeout=600, mcp=None):
     """The whole exchange with one provider: the request, every tool round, the final answer. {"text", "in", "out", "tools"}."""
-    msgs = [{"role": "system", "content": connection_text(name) + "\n\n" + (system_text or "")}, {"role": "user", "content": user_text}]
+    always, rule_items = split_rules(system_text)
+    sent_rules = always + (("\n\nתוכן עניינים של כללי הגשר (bridge_rules ומספר לסעיף המלא):\n" + rules_contents(rule_items)) if rule_items else "")
+    msgs = [{"role": "system", "content": connection_text(name) + "\n\n" + sent_rules}, {"role": "user", "content": user_text}]
     field = (p.get("upstream") or {}).get("max_tokens_field") or "max_tokens"
     tin = tout = 0
     used, seen = [], {}
     end = time.time() + (timeout or 600)
     _append(os.path.join(provider_dir(name), "requests.log"), {"at": _now(), "parts_chars": {
-        "connection": len(connection_text(name)), "rules": len(system_text or ""), "conversation_and_message": len(user_text or ""),
+        "connection": len(connection_text(name)), "rules_sent": len(sent_rules), "rules_full": len(system_text or ""),
+        "conversation_and_message": len(user_text or ""),
         "tools": len(json.dumps(META_TOOLS, ensure_ascii=False))}})
     for _ in range(MAX_ROUNDS):
         # the answer's room: Groq counts it against its 8000 tokens a minute, so it is kept modest (providers.json "max_tokens" overrides)
@@ -522,7 +564,11 @@ def run(name, p, key, model, system_text, user_text, on_tool=None, timeout=600, 
                 res, ok = seen[sig], True
             else:
                 try:
-                    if fn == "bridge_tools":
+                    if fn == "bridge_rules":
+                        k = a.get("number")
+                        res = (rule_items[int(k) - 1][1] if str(k).isdigit() and 0 < int(k) <= len(rule_items)
+                               else rules_contents(rule_items) or "אין כללים נוספים")
+                    elif fn == "bridge_tools":
                         res = definition(name, a["name"], mcp) if a.get("name") else contents(name, mcp)
                     elif fn == "bridge_call":
                         tool = a.get("name", "")
