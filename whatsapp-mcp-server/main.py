@@ -16,13 +16,14 @@ from whatsapp import (
 )
 
 # Initialize FastMCP server
-from fastmcp.server.middleware.rate_limiting import TokenBucketRateLimiter
+from fastmcp.server.middleware.rate_limiting import RateLimitingMiddleware
 
-# Increase token bucket to allow more burst requests (30) and refill faster (20 per second)
-# This mitigates 429 errors caused by FastMCP's default rate‑limiting.
+# Allow bursts of 30 requests and 20 per second (owner 20.11). Owner 21.11: this was `middleware=[TokenBucketRateLimiter(...)]`,
+# but TokenBucketRateLimiter is the internal bucket, not a middleware, so the server failed on its first request with
+# "'TokenBucketRateLimiter' object is not callable" (the WhatsApp MCP could not connect). RateLimitingMiddleware is the middleware.
 mcp = FastMCP(
     "whatsapp",
-    middleware=[TokenBucketRateLimiter(capacity=30, refill_rate=20)],
+    middleware=[RateLimitingMiddleware(max_requests_per_second=20, burst_capacity=30)],
 )
 
 @mcp.tool()
