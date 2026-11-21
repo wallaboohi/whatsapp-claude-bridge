@@ -536,3 +536,42 @@ def test_without_a_handover_a_pc_holding_the_work_still_blocks(agent, monkeypatc
     fc = {"for": "נייח", "self_name": "לפטופ", "defer_to": ["חדר שינה", "סלון"]}
     why, fence = mod.chain_take_blocker(fc, "נייח", _holds_view(), now=10_000.0, fenced=("נייח",))
     assert "מחזיק כבר את העבודה" in why, "the normal rule is unchanged"
+
+
+# ---- owner 21.11 03:10 (nightly round): after a planned hand-over the desktop woke and granted itself while the bedroom was still
+# connected: two connections on one identity, WhatsApp threw the bedroom off, the bridge was offline ~14 s.
+
+def _host_start_env(mod, monkeypatch, alive):
+    granted = []
+    monkeypatch.setattr(mod, "session_cfg", lambda: {"enabled": True})
+    monkeypatch.setattr(mod, "failover_cfg", lambda: None)
+    monkeypatch.setattr(mod, "chain_active", lambda: True)
+    monkeypatch.setattr(mod, "lease_enable", lambda: None)
+    monkeypatch.setattr(mod, "lease_grant", lambda why="": granted.append(why) or True)
+    mod.CFG["peers"] = [{"name": "חדר שינה", "url": "http://127.0.0.1:1", "ssh": "PERROOM"}, {"name": "סלון", "url": "http://127.0.0.1:2", "ssh": "SALON"}]
+    monkeypatch.setattr(mod, "peer_alias", lambda p: p.get("ssh"))
+    monkeypatch.setattr(mod, "peer_alive", lambda p, timeout=3: alive.get(p["name"]))
+    monkeypatch.setattr(mod, "peer_alive_ssh", lambda p, timeout=8: None)
+    return granted
+
+
+def test_the_host_does_not_grant_itself_while_a_peer_holds_the_identity(agent, monkeypatch):
+    mod, _ = agent
+    granted = _host_start_env(mod, monkeypatch, {"חדר שינה": {"agent_alive": True, "lease": {"held": True}}, "סלון": {"agent_alive": True, "lease": {"held": False}}})
+    mod.session_host_start(False, [])  # holds == []: the list of who runs our automations is empty, the identity is not
+    assert granted == [], "two connections on one identity: the holder hands it back"
+
+
+def test_the_host_asks_over_ssh_when_the_tunnel_is_not_up_yet(agent, monkeypatch):
+    mod, _ = agent
+    granted = _host_start_env(mod, monkeypatch, {})  # tunnels down: no answer through them
+    monkeypatch.setattr(mod, "peer_alive_ssh", lambda p, timeout=8: {"agent_alive": True, "lease": {"held": True}} if p["name"] == "חדר שינה" else None)
+    mod.session_host_start(False, [])
+    assert granted == [], "the host starts before its tunnels: the ssh answer is the one that counts"
+
+
+def test_the_host_grants_itself_when_nobody_holds_the_identity(agent, monkeypatch):
+    mod, _ = agent
+    granted = _host_start_env(mod, monkeypatch, {"חדר שינה": {"agent_alive": True, "lease": {"held": False}}, "סלון": None})
+    mod.session_host_start(False, [])
+    assert granted == ["host start"], "an ordinary restart / crash recovery of the host is unchanged"

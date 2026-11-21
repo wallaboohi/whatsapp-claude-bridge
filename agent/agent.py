@@ -10809,9 +10809,30 @@ def session_host_start(deferred, holds=None):
     if deferred:
         lease_revoke("a backup holds the identity; waiting for the hand-back", wait=20)
     elif holds == [] or not chain_active():
+        who = _identity_holders() if chain_active() else []
+        if who:
+            # owner 21.11 03:10 (nightly round): the desktop woke after a planned hand-over and granted itself while the bedroom was
+            # still connected: two connections on one identity, WhatsApp threw the bedroom off and the bridge was offline ~14 s.
+            # "holds" lists who runs our AUTOMATIONS, not who is connected. The one that holds the identity hands it back (a clean
+            # hand-over of about a second); the host never grabs it.
+            log("host start: not granting - holds the identity now:", ", ".join(who), "- it hands it back")
+            return
         lease_grant("host start")
     else:
         log("host start: not every peer answered; the chain watch grants the identity once nobody holds it")
+
+
+def _identity_holders(timeout=3):
+    """Peers whose bridge holds the WhatsApp identity right now: asked through the tunnel and, when the tunnel is not up yet (the
+    host starts before its tunnels), over ssh."""
+    out = []
+    for p in CFG.get("peers") or []:
+        d = peer_alive(p, timeout=timeout) if p.get("url") else None
+        if d is None and peer_alias(p):
+            d = peer_alive_ssh(p, timeout=8)
+        if d is not None and _alive_holds_lease(d):
+            out.append(p.get("name") or peer_alias(p))
+    return out
 
 
 def session_backup_tick(peer, name, peer_st):
