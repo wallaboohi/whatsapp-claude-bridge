@@ -7354,6 +7354,17 @@ class StatusMsg:
     # Owner 21.11 17:11 (exact format): italic rows "icon label: *value*", the divider and the metrics line in italic.
     DIVIDER = "_*━━━━━━━ ✦ ━━━━━━━*_"
 
+    def _route_row(self):
+        pc = pc_he(CFG.get("host_label") or socket.gethostname())
+        pc = pc[len("מחשב "):] if pc.startswith("מחשב ") else pc
+        loc = self.ai_location or "☁️ ענן"
+        icon, _, word = loc.partition(" ")
+        parts = [f"🖥️ *{pc}*"] + ([f"🧠 *{self.ai_short}*"] if self.ai_short else [])
+        if self.ai_model:
+            parts.append(f"🔖 *{model_he(self.ai_model)}*")
+        parts.append(f"{icon} *{word or loc}*")
+        return "🛣️ נתיב ┃ " + " · ".join(parts)
+
     def _provider_code(self):
         try:
             return run_provider(self.chat, True)[2] or ""
@@ -7422,7 +7433,7 @@ class StatusMsg:
         rows = [
             f"_🖥️ נתיב: *{pc}*_",
             f"_🧠 ספק: *{self.ai_short or 'לא ידוע'}*_",
-            f"_🧬 מודל: *{model_he(self.ai_model) if self.ai_model else 'לא דווח'}*_",
+            f"_🧬 מודל: *{self.ai_model or 'לא דווח'}*_",
             f"_{loc_icon} דרך: *{where}*_",
             f"_🧵 שיחה: *{'המשך שיחה' if self.resumed else 'שיחה חדשה'}*_",
             f"_{spinner} שלב: {prev} ← *{cur}*_",
