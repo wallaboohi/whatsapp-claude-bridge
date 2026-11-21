@@ -202,3 +202,18 @@ def test_cloudflare_assistant_tool_call_turn_has_string_content():
     cf = px.to_openai(body, {"model": "m", "upstream": {"string_content": True}})
     assert cf["messages"][1]["content"] == "" and cf["messages"][1]["tool_calls"]  # Cloudflare 400s on null content
     assert px.to_openai(body, {"model": "m"})["messages"][1]["content"] is None  # other providers keep the standard null
+
+
+def test_the_proxy_logs_request_size_and_the_upstream_error_but_never_the_prompt_or_a_key(tmp_path, monkeypatch):
+    """Owner 21.11: Gemini answered once and then "rate"; only the size of the request tells a quota of 250000 input tokens per minute apart
+    from a request rate. One line per call: estimated tokens, messages, tools, status, the upstream error text; never the prompt text."""
+    log = tmp_path / "oai_proxy.log"
+    monkeypatch.setattr(px, "PROXY_LOG", str(log))
+    req = {"model": "gemini-flash-lite-latest", "stream": True, "tools": [{"type": "function"}] * 3,
+           "messages": [{"role": "user", "content": "SECRET PROMPT TEXT " * 100}, {"role": "assistant", "content": "x"}]}
+    px.proxy_log("ERR", "gemini", req, 429, '[{"error": {"code": 429, "message": "quota", "details": [{"quotaValue": "250000"}]}}]')
+    px.proxy_log("ok ", "gemini", req, 200)
+    text = log.read_text(encoding="utf-8")
+    assert "ERR gemini" in text and "status=429" in text and "quotaValue" in text and "messages=2" in text and "tools=3" in text
+    assert "est_input_tokens=" in text and "ok  gemini" in text.replace("ok ", "ok  ", 1) or "ok  gemini" in text
+    assert "SECRET PROMPT TEXT" not in text, "the prompt is never written"

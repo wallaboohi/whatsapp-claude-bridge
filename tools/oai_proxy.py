@@ -71,6 +71,25 @@ def read_key(p, n=1):
 
 
 QUOTA_CODES = (402, 429)
+PROXY_LOG = os.path.join(ROOT, "agent", "oai_proxy.log")
+
+
+def proxy_log(kind, name, req, status="", detail=""):
+    """Owner 21.11: Gemini answered once and then "rate" in a group; the agent only ever saw "Request rejected (429)". One line per upstream
+    call: the estimated input tokens (a request above the provider's per-minute INPUT-token quota is refused at once: Gemini free tier
+    250000), the number of messages and tools, and for an error the upstream status and message. Never the prompt, never a key."""
+    try:
+        est = len(json.dumps(req, ensure_ascii=False)) // 4
+        line = (f"{time.strftime('%Y-%m-%d %H:%M:%S')} {kind} {name} model={req.get('model')} est_input_tokens={est} "
+                f"messages={len(req.get('messages') or [])} tools={len(req.get('tools') or [])} stream={bool(req.get('stream'))}")
+        if status != "":
+            line += f" status={status}"
+        if detail:
+            line += " :: " + " ".join(str(detail).split())[:400]
+        with open(PROXY_LOG, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
 
 
 # ---------------- request: Anthropic -> OpenAI ----------------
@@ -360,9 +379,12 @@ class Handler(BaseHTTPRequestHandler):
         for attempt in (1, 2, 3):  # a retry only after "max_tokens too large" (with the provider's limit) or a quota error (with the 2nd key)
             try:
                 r = urllib.request.urlopen(urllib.request.Request(url, data=json.dumps(req).encode(), headers=hdr, method="POST"), timeout=600)
+                proxy_log("ok ", name, req, r.status)
                 break
             except urllib.error.HTTPError as e:
-                msg = upstream_message(e.read().decode("utf-8", "replace"), e.reason)
+                raw_err = e.read().decode("utf-8", "replace")
+                msg = upstream_message(raw_err, e.reason)
+                proxy_log("ERR", name, req, e.code, raw_err)
                 if e.code in QUOTA_CODES and key2 and hdr["Authorization"] != "Bearer " + key2:
                     hdr["Authorization"] = "Bearer " + key2  # owner 17.11 22:31: the first account's quota is out, the second account answers
                     continue
