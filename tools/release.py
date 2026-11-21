@@ -153,9 +153,17 @@ def main():
 BUMPED = ["VERSION", "dash/VERSION", ".claude-plugin/plugin.json", "agent/pyproject.toml", "agent/uv.lock", "CHANGELOG.md"]
 
 if __name__ == "__main__":
+    # owner 21.11: a dry run that fails must leave the files as they were too (its bump to 1.2.2 stayed behind and would have
+    # stopped the night release on "uncommitted changes"); the exact contents are kept, so nothing else in them is lost
+    _before = {f: open(os.path.join(ROOT, f), encoding="utf-8", newline="").read() for f in BUMPED if os.path.exists(os.path.join(ROOT, f))}
     try:
         main()
     except SystemExit as e:
+        if e.code not in (0, None) and "--dry-run" in sys.argv:
+            for f, txt in _before.items():
+                with open(os.path.join(ROOT, f), "w", encoding="utf-8", newline="") as fh:
+                    fh.write(txt)
+            print("↩️ בדיקת השחרור נכשלה: הקבצים הוחזרו כמו שהיו")
         # a failed release must not leave the version bump behind: it blocked the next night ("uncommitted changes")
         if e.code not in (0, None) and "--dry-run" not in sys.argv and not str(e.code).startswith("✖ יש שינויים"):
             head = subprocess.run(["git", "log", "-1", "--format=%s"], cwd=ROOT, capture_output=True, text=True).stdout

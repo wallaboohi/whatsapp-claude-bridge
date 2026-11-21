@@ -819,9 +819,15 @@ def auto_release():
     with open(notes, "w", encoding="utf-8") as f:
         f.write("\n".join("- " + s[:160] for s in subjects[:20]) + "\n")
     uvx = shutil.which("uv") or os.path.expanduser("~/.local/bin/uv.exe")
-    r = subprocess.run([uvx, "run", "--no-project", "python", "-X", "utf8", os.path.join(ROOT, "tools", "release.py"), ver,
-                        f"--notes-file={notes}"], cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                       timeout=1800, creationflags=NO_WINDOW)
+    def attempt():
+        return subprocess.run([uvx, "run", "--no-project", "python", "-X", "utf8", os.path.join(ROOT, "tools", "release.py"), ver,
+                               f"--notes-file={notes}"], cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=1800, creationflags=NO_WINDOW)
+    r = attempt()
+    if r.returncode != 0:  # owner 21.11: a passing failure (a locked file, a busy disk) gets one more try before the night is lost
+        log("auto_release: failed, one more try in 2 minutes |", (r.stdout + r.stderr)[-300:])
+        time.sleep(120)
+        r = attempt()
     try:
         os.remove(notes)
     except OSError:
