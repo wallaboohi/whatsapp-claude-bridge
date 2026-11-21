@@ -56,6 +56,13 @@ if (-not $env:DRY -and $after -ne (git rev-parse hub/main)) {
 }
 $hub = git rev-parse hub/main
 $go = git diff --name-only $before $after -- whatsapp-bridge | Where-Object { $_ -like '*.go' }
+# owner 21.11 02:10: a failed bridge build left the laptop on the old exe, and the next update saw no Go difference (the code was
+# already pulled) and never retried. Rebuild whenever the exe on disk is older than the last commit that touched Go code.
+if (-not $go) {
+  $gct = [int](git log -1 --format=%ct -- 'whatsapp-bridge/*.go')
+  $bexe = Get-Item "C:\Users\walla\whatsapp-mcp\whatsapp-bridge\whatsapp-bridge.exe" -ErrorAction SilentlyContinue
+  if ($bexe -and $gct -gt 0 -and ([DateTimeOffset]$bexe.LastWriteTimeUtc).ToUnixTimeSeconds() -lt $gct) { $go = @('stale-exe.go') }
+}
 $rb = ''
 $rbok = $true
 if ($go -and -not $env:DRY) {

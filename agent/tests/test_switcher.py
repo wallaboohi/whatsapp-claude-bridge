@@ -422,3 +422,15 @@ def test_a_scratch_worktree_gitlink_does_not_stop_the_bridge_rebuild(agent):
     assert mod._code_dirty(" m .claude/worktrees/agent-ad2300d519a4e23fb\n") == "", "the laptop rebuild stopped on exactly this line"
     assert mod._code_dirty(" M whatsapp-bridge/main.go\n m .claude/worktrees/x\n") == " M whatsapp-bridge/main.go", "real changes still count"
     assert mod._code_dirty("") == "" and mod._code_dirty(None) == ""
+
+
+def test_the_update_rebuilds_a_bridge_exe_that_is_older_than_the_go_code():
+    import importlib.util, os, sys
+    tools = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "tools")
+    sys.path.insert(0, tools)
+    spec = importlib.util.spec_from_file_location("chain_update_t2", os.path.join(tools, "chain_update.py"))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    r = m.REMOTE
+    assert "stale-exe.go" in r and "LastWriteTimeUtc" in r and "git log -1 --format=%ct" in r, "an old exe is rebuilt even when nothing was pulled"
+    assert r.index("stale-exe.go") < r.index("if ($go -and -not $env:DRY)"), "the check comes before the rebuild decision"
