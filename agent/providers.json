@@ -502,26 +502,6 @@
   "where": "local",
   "how": "Google Antigravity CLI (agy) — סוכן הפיתוח של גוגל המורץ ישירות במחשב דרך פקודת agy -p."
  },
- "antigravity_app": {
-  "label": "Antigravity app · לפטופ",
-  "short": "Antigravity app",
-  "kind": "desktop-app",
-  "app": "antigravity",
-  "host": "lap-yakir",
-  "pc": "לפטופ",
-  "timeout": 240,
-  "aliases": [
-   "antigravity app",
-   "גרביטי אפליקציה",
-   "אנטיגרביטי אפליקציה",
-   "אפליקציית אנטיגרביטי",
-   "אפליקציית גרביטי",
-   "גרביטי אפ"
-  ],
-  "cost": "Google",
-  "where": "local",
-  "how": "אפליקציית Antigravity למחשב בלפטופ: הגשר מקליד בחלון האפליקציה (tools/desktop_ai.py דרך משימה בסשן המשתמש) וקורא את התשובה. בלי כלי הגשר."
- },
  "lmstudio": {
   "label": "LM Studio · מקומי במחשב (API)",
   "short": "LM Studio",
@@ -544,78 +524,6 @@
   "cost": "מקומי",
   "where": "local",
   "how": "מודלים מקומיים ב-LM Studio (רץ בפורט 1234 או דרך lms server start)."
- },
- "lmstudio_app": {
-  "label": "LM Studio app · חלון מקומי",
-  "short": "LM Studio app",
-  "kind": "desktop-app",
-  "app": "lmstudio",
-  "host": "lap-yakir",
-  "pc": "לפטופ",
-  "timeout": 180,
-  "aliases": [
-   "lmstudio app",
-   "אל אם סטודיו אפליקציה"
-  ],
-  "cost": "מקומי",
-  "where": "local",
-  "how": "אפליקציית LM Studio במחשב בלפטופ, מתקשרת דרך חלון האפליקציה ב-tools/desktop_ai.py."
- },
- "vscode_app": {
-  "label": "Visual Studio Code · Copilot Chat",
-  "short": "VS Code",
-  "kind": "desktop-app",
-  "app": "vscode",
-  "host": "lap-yakir",
-  "pc": "לפטופ",
-  "timeout": 240,
-  "aliases": [
-   "vscode",
-   "vs code",
-   "קוד",
-   "ויזואל סטודיו",
-   "ויז'ואל סטודיו",
-   "vscode app"
-  ],
-  "cost": "מנוי GitHub",
-  "where": "local",
-  "how": "Visual Studio Code עם Copilot Chat במחשב דרך tools/desktop_ai.py."
- },
- "github_copilot_app": {
-  "label": "GitHub Copilot app · אפליקציה",
-  "short": "Copilot App",
-  "kind": "desktop-app",
-  "app": "github_copilot",
-  "host": "lap-yakir",
-  "pc": "לפטופ",
-  "timeout": 240,
-  "aliases": [
-   "github copilot app",
-   "גיטהאב קופילוט אפליקציה",
-   "גיטהאב קוד",
-   "קופילוט אפ"
-  ],
-  "cost": "מנוי GitHub",
-  "where": "local",
-  "how": "אפליקציית GitHub Copilot למחשב (com.github.githubapp) דרך tools/desktop_ai.py."
- },
- "cursor_app": {
-  "label": "Cursor · עורך קוד בינה מלאכותית",
-  "short": "Cursor",
-  "kind": "desktop-app",
-  "app": "cursor",
-  "host": "lap-yakir",
-  "pc": "לפטופ",
-  "timeout": 240,
-  "aliases": [
-   "cursor",
-   "סמן",
-   "קורסור",
-   "cursor app"
-  ],
-  "cost": "מנוי Cursor",
-  "where": "local",
-  "how": "אפליקציית Cursor AI Code Editor במחשב דרך tools/desktop_ai.py."
  },
  "ovhcloud": {
   "label": "OVHcloud AI Endpoints · חינמי (בלי מפתח)",
