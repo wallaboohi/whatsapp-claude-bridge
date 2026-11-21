@@ -14485,8 +14485,7 @@ def scheduler():
                          (CFG.get("auto_update_time", "23:50"), "auto_update", auto_update),
                          (CFG.get("monthly_jobs_time", "02:00"), "monthly_jobs", monthly_jobs),
                          (CFG.get("health_report_time", "08:00"), "weekly_health", weekly_health),
-                         (CFG.get("engine_probe_time", "06:00"), "engine_response_probe", daily_engine_probe),
-                         (CFG.get("engine_probe_time_pm", "18:00"), "engine_response_probe_pm", daily_engine_probe)]
+                         (CFG.get("engine_probe_time", "06:00"), "engine_response_probe", daily_engine_probe)]  # owner 22.11: once a day, 06:00 (the 18:00 run removed)
                 # owner 11.11: the PC slept in the middle of the 03:00 backup and the day was already marked: retry
                 # until it really finished today (backup_done), at most every 30 minutes
                 if (now.strftime("%H:%M") >= CFG["backup_time"] and (kv_get("backup_done") or "")[:10] != today
