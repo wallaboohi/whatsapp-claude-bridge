@@ -485,12 +485,16 @@ def connection_text(provider):
 
 # ---------------------------------------------------------------- one run against a provider
 
-def _base(p):
+def _base(p, key_index=0):
     up = p.get("upstream") or {}
     base = (up.get("base") or p.get("base_url") or "").rstrip("/")
     if "{account_id}" in base:
+        af = up.get("account_file") or ""
+        # owner 22.11: the Nth key may belong to another account (Cloudflare key 2 = a second account, refused with the first
+        # account's number): secrets/<account_file>N when it exists, else the first account
+        own = os.path.join(ROOT, "secrets", f"{af}{key_index + 1}") if key_index else ""
         try:
-            acc = open(os.path.join(ROOT, "secrets", up.get("account_file") or ""), encoding="utf-8").read().strip()
+            acc = open(own if own and os.path.exists(own) else os.path.join(ROOT, "secrets", af), encoding="utf-8").read().strip()
         except OSError:
             acc = "MISSING-ACCOUNT-ID"
         base = base.replace("{account_id}", acc)
@@ -544,7 +548,11 @@ def _daily_until(raw):
     if secs is None:
         m = re.search(r"(?i)retry in (?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?", raw or "")
         secs = (int(m.group(1) or 0) * 3600 + int(m.group(2) or 0) * 60 + int(float(m.group(3) or 0))) if m and any(m.groups()) else None
-    return time.time() + secs if secs else None
+    if not secs:  # owner 22.11: "used up your daily free allocation" (Cloudflare) gives no time: the day ends at 00:00 UTC
+        import datetime as _dt
+        now = _dt.datetime.now(_dt.timezone.utc)
+        secs = (_dt.datetime.combine(now.date() + _dt.timedelta(days=1), _dt.time(), _dt.timezone.utc) - now).total_seconds()
+    return time.time() + secs
 
 
 def _exhausted_file(name):
@@ -596,7 +604,7 @@ def _post(name, p, key, body, timeout):
 
 
 def _post_one(name, p, key, body, timeout, key_index=0):
-    url = _base(p) + "/chat/completions"
+    url = _base(p, key_index) + "/chat/completions"
     hdr = {"Content-Type": "application/json", "User-Agent": UA}
     if key:
         hdr["Authorization"] = "Bearer " + key

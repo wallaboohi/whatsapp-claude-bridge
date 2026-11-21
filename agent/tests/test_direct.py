@@ -234,3 +234,19 @@ def test_every_account_of_a_provider_is_used_in_turn(provider, box, monkeypatch)
     with pytest.raises(bd.DirectError):
         bd.run("gemini", p, keys, "m1", "", "hi", mcp=FakeMcp())
     assert state["headers"][-1]["Authorization"] == "Bearer K1", "a per-minute limit does not burn the other accounts"
+
+
+def test_cloudflare_daily_allocation_moves_to_the_next_account(tmp_path, monkeypatch):
+    """Owner 22.11: Cloudflare's "used up your daily free allocation" gives no reset time, so no account switch happened; and key 2
+    belongs to a second account, refused with the first account's number."""
+    import bridge_direct as bd
+    raw = '{"errors":[{"message":"AiError: AiError: you have used up your daily free allocation of 10,000 neurons"}]}'
+    u = bd._daily_until(raw)
+    assert u and 0 < u - bd.time.time() <= 86400, "until 00:00 UTC"
+    assert bd._key_moves_on(429, raw)
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "secrets" / "cf.account").write_text("AAA", encoding="utf-8")
+    (tmp_path / "secrets" / "cf.account2").write_text("BBB", encoding="utf-8")
+    monkeypatch.setattr(bd, "ROOT", str(tmp_path))
+    p = {"upstream": {"base": "https://x/accounts/{account_id}/ai/v1", "account_file": "cf.account"}}
+    assert bd._base(p).endswith("/AAA/ai/v1") and bd._base(p, 1).endswith("/BBB/ai/v1") and bd._base(p, 2).endswith("/AAA/ai/v1")
