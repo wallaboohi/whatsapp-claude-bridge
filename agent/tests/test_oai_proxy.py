@@ -204,6 +204,15 @@ def test_cloudflare_assistant_tool_call_turn_has_string_content():
     assert px.to_openai(body, {"model": "m"})["messages"][1]["content"] is None  # other providers keep the standard null
 
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_real_proxy_log(tmp_path, monkeypatch):
+    """The tests start a real proxy against a fake upstream: its request log must not land in the real agent/oai_proxy.log."""
+    monkeypatch.setattr(px, "PROXY_LOG", str(tmp_path / "oai_proxy.test.log"))
+
+
 def test_the_proxy_logs_request_size_and_the_upstream_error_but_never_the_prompt_or_a_key(tmp_path, monkeypatch):
     """Owner 21.11: Gemini answered once and then "rate"; only the size of the request tells a quota of 250000 input tokens per minute apart
     from a request rate. One line per call: estimated tokens, messages, tools, status, the upstream error text; never the prompt text."""

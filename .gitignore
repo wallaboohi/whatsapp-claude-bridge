@@ -86,3 +86,5 @@ agent/pending.log
 agent/chain_relay.log
 agent/emoji_legend_contexts.xlsx
 /tmp/
+
+agent/oai_proxy.log
