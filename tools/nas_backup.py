@@ -1,16 +1,15 @@
 """The bridge's full daily backup to the TrueNAS (owner 21.11 20:45: "everything, from every place — the only backup of the bridge and
 its content").
 
-Runs outside the agent (Task Scheduler, daily), so it works when the agent is down. Never deletes anything on the NAS.
-  1. the code with its whole history: git push to the "nas" remote (all branches and tags)
-  2. a consistent copy of every SQLite database (sqlite backup API: messages, the WhatsApp identity, the agent's queue and memory ...)
-  3. everything in the bridge folder (store / media, secrets, config, agent/home, provider folders ...) -> <NAS>/current, copy only
-     (robocopy /E: a file deleted here stays there)
-  4. a dated folder per day with the databases, secrets, config files and the bridge's notes (small; kept)
-  5. the bridge's data outside its folder: the CLIs' settings, the bridge's Claude memory (BACKUP_EXTRA)
-The result: agent/nas_backup.log and agent/nas_backup_status.json (the agent reports a failure in the control / log group).
+Runs outside the agent (Task Scheduler, daily 02:30), so it works when the agent is down. The owner's rule (21.11 23:10):
+  every day   the code with its history (git push to "nas", a new dated branch, never forced) and a clean copy of the code
+              (git archive: only what git keeps) as <NAS>/<PC>/code-daily/<date>.zip — kept 30 days, the older zips deleted
+  every 7 days a full image, code included: <NAS>/<PC>/full/<date>/ = every file of the bridge folder (store / media, secrets,
+              config, agent/home, provider folders ...), a consistent copy of every SQLite database (sqlite backup API) and the
+              bridge's data outside its folder (_outside: the CLIs' settings, the bridge's Claude memory). Full images are kept.
+The result: agent/nas_backup.log and agent/nas_backup_status.json (the agent reports a failure in the bridge-log group).
 
-  python tools/nas_backup.py [--dest \\\\host\\share\\dir]
+  python tools/nas_backup.py [--dest \\\\host\\share\\dir] [--full]
 """
 import datetime as dt
 import glob
@@ -83,7 +82,42 @@ def copy_tree(src, dst):
     return rc < 8, f"robocopy {rc}: {summary}"
 
 
-def main(dest):
+CODE_KEEP_DAYS = 30  # owner 21.11 23:10: a clean code copy every day, kept 30 days, the older ones deleted
+FULL_EVERY_DAYS = 7  # owner 21.11 23:10: every 7 days everything, code included — a full image
+
+
+def code_daily(base, day):
+    """A clean copy of the code (only what git keeps: no secrets, no data) as <base>/code-daily/<day>.zip; copies older than
+    CODE_KEEP_DAYS are deleted (the owner's own rule; only this folder, only these dated zips)."""
+    folder = os.path.join(base, "code-daily")
+    os.makedirs(folder, exist_ok=True)
+    rc, out = run(["git", "archive", "--format=zip", "-o", os.path.join(folder, f"{day}.zip"), "HEAD"], timeout=600)
+    if rc:
+        return "failed: " + out.strip()[-200:]
+    cut = dt.date.today() - dt.timedelta(days=CODE_KEEP_DAYS)
+    gone = 0
+    for f in glob.glob(os.path.join(folder, "????-??-??.zip")):
+        try:
+            if dt.date.fromisoformat(os.path.basename(f)[:10]) < cut:
+                os.remove(f)
+                gone += 1
+        except (ValueError, OSError):
+            pass
+    return f"ok ({day}.zip" + (f", {gone} older than {CODE_KEEP_DAYS} days deleted)" if gone else ")")
+
+
+def full_due(base):
+    """True when the newest full image is FULL_EVERY_DAYS old or more (or there is none)."""
+    days = []
+    for d in glob.glob(os.path.join(base, "full", "????-??-??")):
+        try:
+            days.append(dt.date.fromisoformat(os.path.basename(d)))
+        except ValueError:
+            pass
+    return not days or (dt.date.today() - max(days)).days >= FULL_EVERY_DAYS
+
+
+def main(dest, force_full=False):
     t0 = time.time()
     host = socket.gethostname()
     base = os.path.join(dest, host)
@@ -110,7 +144,19 @@ def main(dest):
     rc2, out2 = run(["git", "push", "-q", "nas", "--tags"], timeout=600)
     status["steps"]["code"] = "ok" if rc == 0 and rc2 == 0 else ("failed: " + (out + out2).strip().splitlines()[-1][:200] if (out + out2).strip() else "failed")
     log("code (git push nas):", status["steps"]["code"])
-    # 2. consistent copies of the databases
+    # 2. every day: a clean copy of the code, kept 30 days
+    status["steps"]["code_daily"] = code_daily(base, day)
+    log("clean code copy:", status["steps"]["code_daily"])
+    code_ok = status["steps"]["code"] == "ok" and status["steps"]["code_daily"].startswith("ok")
+    if not (force_full or full_due(base)):
+        status["steps"]["full"] = "not due (every %d days)" % FULL_EVERY_DAYS
+        status["ok"] = code_ok
+        status["seconds"] = int(time.time() - t0)
+        json.dump(status, open(STATUS, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+        log("done in", status["seconds"], "s, ok:", status["ok"], "(no full image today)")
+        return 0 if status["ok"] else 1
+    # 3. every 7 days: the full image -> <base>/full/<day> (consistent database copies, every file, the data outside the folder)
+    full = os.path.join(base, "full", day)
     stage = tempfile.mkdtemp(prefix="yb-nas-")
     dbs = []
     for src in databases():
@@ -122,48 +168,28 @@ def main(dest):
             log("database copy failed:", rel, e)
     status["steps"]["databases"] = f"{len(dbs)} copied"
     log("databases:", ", ".join(dbs))
-    # 3. everything else -> current (never deletes there)
-    ok, note = copy_tree(ROOT, os.path.join(base, "current"))
+    ok, note = copy_tree(ROOT, full)  # every file but the databases (copied consistently above) and rebuildable caches
     status["steps"]["files"] = note if ok else "failed: " + note
     log("files:", note)
-    ok_db, note_db = copy_tree(stage, os.path.join(base, "current")) if dbs else (True, "none")
-    # robocopy above skips *.db: the staged copies go in with a plain copy
     for rel in dbs:
-        dst = os.path.join(base, "current", rel)
+        dst = os.path.join(full, rel)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         shutil.copy2(os.path.join(stage, rel), dst)
-    # 4. the dated folder: databases, secrets, config, the bridge's notes
-    daily = os.path.join(base, "daily", day)
-    for rel in dbs:
-        dst = os.path.join(daily, rel)
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        shutil.copy2(os.path.join(stage, rel), dst)
-    for d in SMALL_DIRS:
-        if os.path.isdir(os.path.join(ROOT, d)):
-            shutil.copytree(os.path.join(ROOT, d), os.path.join(daily, d), dirs_exist_ok=True)
-    for pat in SMALL_GLOBS:
-        for f in glob.glob(os.path.join(ROOT, pat), recursive=True):
-            if os.path.isfile(f) and os.path.getsize(f) < 50_000_000:
-                dst = os.path.join(daily, os.path.relpath(f, ROOT))
-                os.makedirs(os.path.dirname(dst), exist_ok=True)
-                shutil.copy2(f, dst)
-    status["steps"]["daily"] = daily
-    # 5. the bridge's data outside its folder
     extra = 0
-    for src in BACKUP_EXTRA:
+    for src in BACKUP_EXTRA:  # the bridge's data outside its folder
         if not os.path.exists(src):
             continue
-        dst = os.path.join(base, "outside", os.path.relpath(src, HOME))
+        dst = os.path.join(full, "_outside", os.path.relpath(src, HOME))
         if os.path.isdir(src):
             shutil.copytree(src, dst, dirs_exist_ok=True)
-            shutil.copytree(src, os.path.join(daily, "outside", os.path.relpath(src, HOME)), dirs_exist_ok=True)
         else:
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy2(src, dst)
         extra += 1
     status["steps"]["outside"] = f"{extra} items"
+    status["steps"]["full"] = full
     shutil.rmtree(stage, ignore_errors=True)  # our own temporary copies
-    status["ok"] = status["steps"]["code"] == "ok" and ok and bool(dbs)
+    status["ok"] = code_ok and ok and bool(dbs)
     status["seconds"] = int(time.time() - t0)
     json.dump(status, open(STATUS, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     log("done in", status["seconds"], "s, ok:", status["ok"])
@@ -174,4 +200,4 @@ if __name__ == "__main__":
     d = DEST_DEFAULT
     if "--dest" in sys.argv:
         d = sys.argv[sys.argv.index("--dest") + 1]
-    sys.exit(main(d))
+    sys.exit(main(d, force_full="--full" in sys.argv))
