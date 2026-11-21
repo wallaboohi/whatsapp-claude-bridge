@@ -39,41 +39,21 @@ def test_a_run_that_crosses_five_minutes_waits_for_the_owners_ok(agent, monkeypa
     with mod.adb() as db:
         db.execute("INSERT INTO commands (msg_id, text, at, chat_jid, source, sync) VALUES ('m9', 'בקשה כבדה', '2026-11-14 02:00:00', ?, 'wa', 0)", (mod.PRIMARY,))
         cid = db.execute("SELECT id FROM commands WHERE msg_id = 'm9'").fetchone()[0]
-    assert mod.owner_command("כן", mod.PRIMARY) is None  # nothing waits: "כן" is an ordinary message
     mod._ctx.chat = mod.PRIMARY
     try:
-        mod.ask_slow_approval(cid, mod.PRIMARY, "m9", "wa", (600, "ollama", "bridge-qwen3-4b:latest", "לפטופ"))
+        mod.tell_slow_run("m9", "wa", (600, "ollama", "bridge-qwen3-4b:latest", "לפטופ"))
     finally:
         mod._ctx.chat = None
-    assert "10 דקות" in sent[-1] and "🏠 לפטופ" in sent[-1] and "כן" in sent[-1]
-    with mod.adb() as db:
-        assert db.execute("SELECT status FROM commands WHERE id = ?", (cid,)).fetchone()[0] == "waiting_approval"
-    assert "מאשר" in mod.owner_command("כן", mod.PRIMARY)
-    with mod.adb() as db:
-        assert db.execute("SELECT status FROM commands WHERE id = ?", (cid,)).fetchone()[0] == "pending"
-    assert mod.kv_get(f"approved:{cid}") == "1" and mod.owner_command("כן", mod.PRIMARY) is None  # one approval, one run
+    assert "10 דקות" in sent[-1] and "🏠 לפטופ" in sent[-1] and "מתחיל עכשיו" in sent[-1]
+    with mod.adb() as db:  # owner 21.11: never parked, never waits for "כן"
+        assert db.execute("SELECT status FROM commands WHERE id = ?", (cid,)).fetchone()[0] != "waiting_approval"
+    assert mod.owner_command("כן", mod.PRIMARY) is None
     # the estimate: Claude is quick, a local 4B model on the laptop is not
     monkeypatch.setattr(mod, "active_provider", lambda *a: ("claude", None))
     assert mod.estimate_run_seconds("שלום", "sonnet")[0] < mod.slow_confirm_seconds()
     monkeypatch.setattr(mod, "active_provider", lambda *a: ("ollama", "bridge-qwen3-4b:latest"))
     monkeypatch.setattr(mod, "provider_hosts", lambda p: [{"url": "http://127.0.0.1:1", "label": "לפטופ"}])
     assert mod.estimate_run_seconds("שלום", "sonnet")[0] >= mod.slow_confirm_seconds()
-
-
-def test_cancelling_a_slow_run_closes_it(agent, monkeypatch):
-    mod, _ = agent
-    monkeypatch.setattr(mod, "send", lambda chat, text, media=None, quoted=None: True)
-    with mod.adb() as db:
-        db.execute("INSERT INTO commands (msg_id, text, at, chat_jid, source, sync) VALUES ('m8', 'x', '2026-11-14 02:00:00', ?, 'wa', 0)", (mod.PRIMARY,))
-        cid = db.execute("SELECT id FROM commands WHERE msg_id = 'm8'").fetchone()[0]
-    mod._ctx.chat = mod.PRIMARY
-    try:
-        mod.ask_slow_approval(cid, mod.PRIMARY, "m8", "wa", (900, "ollama", "m", "נייח"))
-    finally:
-        mod._ctx.chat = None
-    assert "בוטל" in mod.owner_command("בטל", mod.PRIMARY)
-    with mod.adb() as db:
-        assert db.execute("SELECT status FROM commands WHERE id = ?", (cid,)).fetchone()[0] == "done"
 
 
 def test_side_question_is_answered_at_once_and_never_queued(agent, monkeypatch):

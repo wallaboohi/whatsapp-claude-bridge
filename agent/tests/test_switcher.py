@@ -737,6 +737,8 @@ def test_gemini_model_names_with_the_models_prefix_are_not_dropped(agent, monkey
     agent = agent[0]
     assert agent.model_id("models/gemini-flash-lite-latest") == "gemini-flash-lite-latest" and agent.model_id("openai/gpt-oss-120b") == "openai/gpt-oss-120b"
     p = {"models": ["gemini-flash-lite-latest", "gemini-3-flash-preview"], "short": "Gemini"}
-    assert agent._merge_models(p, ["gemini-flash-lite-latest", "gemini-2.5-pro"])[0] == ["gemini-flash-lite-latest"]
+    # owner 21.11 15:10: the provider's own list numbers the models: configured ones first, then every live chat model
+    assert agent._merge_models(p, ["gemini-flash-lite-latest", "gemini-2.5-pro", "gemini-2.5-flash-preview-tts"])[0] == [
+        "gemini-flash-lite-latest", "gemini-2.5-pro"], "a TTS model is not a chat model"
     kept, added, removed = agent._merge_models(p, ["something-else", "other"])
-    assert kept == p["models"] and removed == [], "a full mismatch keeps the configured models"
+    assert kept[:2] == p["models"] and removed == [] and added == ["something-else", "other"], "a full mismatch keeps the configured models first"

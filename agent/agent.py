@@ -2107,12 +2107,13 @@ def _merge_models(p, live):
     others (Groq, Gemini, NVIDIA...) that catalog also lists speech, TTS and embedding models, so only gone ones are dropped."""
     old = [str(m) for m in (p.get("models") or []) if m]
     keep = [m for m in old if m in live]
-    if old and live and not keep:  # owner 21.11: never empty a provider's list because its names are written differently
-        log("model catalog mismatch: none of the configured models is in the provider's list, kept as they are", p.get("short") or "",
+    # owner 21.11 15:10: the bridge numbers the models from the provider's own list at connection and adds them all; it keeps no
+    # registry of its own that goes stale. The configured models (providers.json) only say which come first.
+    added = [m for m in live if m not in old and not any(w in m.lower() for w in NOT_CHAT)]
+    if old and live and not keep:  # never empty a provider's list because its names are written differently
+        log("model catalog mismatch: none of the configured models is in the provider's list, kept first", p.get("short") or "",
             old[:3], live[:3])
-        return old[:int(CFG.get("model_catalog_max", 60))], [], []
-    whole = p.get("kind") == "opencode" or p.get("probe") == "ollama" or p.get("free_list") == "openrouter"
-    added = [m for m in live if m not in old] if whole else []
+        return (old + added)[:int(CFG.get("model_catalog_max", 60))], added, []
     return (keep + added)[:int(CFG.get("model_catalog_max", 60))], added, [m for m in old if m not in live]
 
 
@@ -3327,16 +3328,13 @@ def estimate_run_seconds(prompt, model=None):
     return int(base * (1.6 if len(prompt or "") > 1500 else 1.0)), name, m, place
 
 
-def ask_slow_approval(cid, chat, mid, src, eta):
-    """Park the command and ask the owner before a run that is expected to cross the 5-minute line."""
+def tell_slow_run(mid, src, eta):
+    """Owner 21.11 15:10: a run expected to cross the 5-minute line is announced and starts at once. It used to be parked until the
+    owner answered "כן": when he was away, his messages piled up unanswered (5 parked commands on 21.11)."""
     secs, name, m, place = eta
-    with adb() as db:
-        db.execute("UPDATE commands SET status = 'waiting_approval' WHERE id = ?", (cid,))
-    kv_set(K("pending_slow", chat), str(cid))
     where = "🏠 " + place if where_of(name, m)[0] == "local" else "☁️ ענן"
-    reply(f"⏱ *הפעולה הזו צפויה לקחת כ-{max(1, round(secs / 60))} דקות* על {(providers().get(name) or {}).get('short') or name} · {model_he(m)} ({where}).\n"
-          f"להמשיך? ענה *כן* להתחלה, *בטל* לביטול, או /מודל חינמי לבחירת בינה מהירה יותר (ואז שלח שוב).\n_(הערכה לפי הבינה והמודל הפעילים)_",
-          quoted=mid if src == "wa" else None)
+    reply(f"⏱ *צפוי לקחת כ-{max(1, round(secs / 60))} דקות* על {(providers().get(name) or {}).get('short') or name} · {model_he(m)} ({where}). "
+          "מתחיל עכשיו.\n_(הערכה לפי הבינה והמודל הפעילים; לבינה מהירה יותר: /מודל חינמי)_", quoted=mid if src == "wa" else None)
 
 
 def slow_reply(chat, word):
@@ -3456,7 +3454,8 @@ def model_desc(m):
 # that the journal of the last days shows answering best (answer rate and speed per provider+model+tier). Claude keeps its own router.
 TIER_HE = {1: "קלה", 2: "רגילה", 3: "מורכבת"}
 CODE_WORDS = ("קוד", "סקריפט", "פונקציה", "באג", "python", "agent.py", "קומפיל", "גיט", "regex", "sql", "תקן את", "refactor")
-NOT_CHAT = ("detector", "embed", "guard", "rerank", "whisper", "tts", "video", "image", "moderation")
+NOT_CHAT = ("detector", "embed", "guard", "rerank", "whisper", "tts", "video", "image", "moderation", "audio", "orpheus", "speech",
+            "transcri", "aqa", "robotics", "computer-use", "lyria", "veo", "gliner")  # owner 21.11: the live lists also hold these
 _MODEL_LIST_CACHE = {}
 
 
@@ -8421,10 +8420,8 @@ def run_command(row):
         model, how = pick_model_info(text, chat)
         _ctx.auto_pick = how == "auto"
         eta = estimate_run_seconds(prompt, model)  # owner 14.11: nothing that will cross the 5-minute line starts without his OK
-        if eta[0] >= slow_confirm_seconds() and not kv_get(f"approved:{cid}") and not guest and not text.lstrip().startswith("!!"):
-            ask_slow_approval(cid, chat, mid, src, eta)
-            parked = True
-            return
+        if eta[0] >= slow_confirm_seconds() and not guest:  # owner 21.11 15:10: the bridge never parks a message by itself
+            tell_slow_run(mid, src, eta)
         threading.Thread(target=sync_group_name, args=(chat, effective_model(model)), daemon=True).start()  # the name shows who is answering
         started = time.time()
         status = StatusMsg(effective_model(model), chat, wa=not pc_only(), react_to=mid if src == "wa" else None)
