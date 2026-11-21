@@ -273,3 +273,17 @@ def test_system_map_has_the_ai_lane_with_local_and_remote(dash, monkeypatch):
     assert by["ollama"]["where"] == "local" and by["groq"]["where"] == "remote" and by["claude"]["where"] == "remote"
     assert a["local_hosts"] == [{"label": "לפטופ (ברירת מחדל)", "up": False, "models": 0}]  # nothing listens on port 9
     assert a["ladder"] == ["Claude", "Groq"] and by["groq"]["key"] is False and a["active"] == "claude"
+
+
+def test_the_periodic_provider_check_never_sends_a_model_request(dash, monkeypatch):
+    """Owner 21.11: the dashboard's legend and chip refresh re-checked every keyed provider with a real 1-token request every ~2 minutes
+    (Gemini 3-flash free = 20 requests a day). Only the owner's own test / key save / switch (live=True) may."""
+    srv = dash[0] if isinstance(dash, tuple) else dash
+    monkeypatch.setattr(srv, "_providers", lambda: {"g": {"kind": "anthropic", "base_url": "http://127.0.0.1:8799/p/g", "models": ["m1"], "token": "x"}})
+    calls = []
+    monkeypatch.setattr(srv, "anthropic_probe", lambda *a, **k: calls.append(1) or {"ok": True, "detail": "live", "models": ["m1"]})
+    r = srv.provider_check("g")
+    assert r["ok"] and r["models"] == ["m1"] and calls == []
+    srv._CHK.clear()
+    assert srv.provider_check_cached("g")["ok"] and calls == []
+    assert srv.provider_check("g", live=True)["detail"] == "live" and calls == [1]

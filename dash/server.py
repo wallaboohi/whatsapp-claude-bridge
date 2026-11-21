@@ -710,8 +710,10 @@ def anthropic_probe(p, tok):
         return {"ok": False, "detail": f"לא מגיב: {str(e)[:70]}", "models": models}
 
 
-def provider_check(name):
-    """Reachable now + its models (no secret ever leaves this function)."""
+def provider_check(name, live=False):
+    """Reachable now + its models (no secret ever leaves this function). live=True (the owner pressed test / saved a key) may send one real
+    1-token request to a keyed provider; the periodic refresh of the legend and the chip never does (owner 21.11: it spent a request of the
+    day's 20 on Gemini 3-flash every 2 minutes, with nobody using it)."""
     p = _providers().get(name)
     if not p:
         return {"ok": False, "detail": "ספק לא מוכר", "models": []}
@@ -774,6 +776,8 @@ def provider_check(name):
             return {"ok": False, "detail": "אף מחשב לא מגיב: " + " · ".join(rows), "models": []}
         return {"ok": True, "detail": f"עובד דרך {pick[0].get('label') or pick[0]['url']} · " + " · ".join(rows), "models": pick[1]}
     if p.get("models") and p.get("base_url"):
+        if not live:
+            return {"ok": True, "detail": "מפתח שמור · תגובה בפועל נבדקת בלחיצה על בדיקה או ב-/בדוק מענה", "models": list(p["models"])}
         return anthropic_probe(p, tok)
     try:
         if "11434" in p.get("base_url", ""):
@@ -2163,7 +2167,7 @@ def action(a):
         name = a.get("provider") or ""
         if name not in _providers():
             return {"error": "ספק לא מוכר"}
-        chk = provider_check(name)
+        chk = provider_check(name, live=True)
         if not chk["ok"]:
             return {"error": f"לא מחובר: {chk['detail']}"}
         mdl = a.get("model") or ""
@@ -2199,7 +2203,7 @@ def action(a):
         elif os.path.exists(f):
             os.replace(f, f + f".removed-{dt.datetime.now():%Y%m%d%H%M%S}")  # kept aside, not deleted
         _CHK.pop(a.get("provider"), None)
-        return {"ok": True, "check": provider_check(a.get("provider"))}
+        return {"ok": True, "check": provider_check(a.get("provider"), live=True)}
     if kind == "provider_add":  # legend: a new Anthropic-compatible provider (DeepSeek, ...); the key goes into secrets/ only
         name = re.sub(r"[^a-z0-9_-]", "", (a.get("id") or "").strip().lower())[:30]
         base = (a.get("base_url") or "").strip().rstrip("/")
@@ -2231,7 +2235,7 @@ def action(a):
         if key:
             os.makedirs(os.path.join(ROOT, "secrets"), exist_ok=True)
             open(os.path.join(ROOT, "secrets", name + ".key"), "w", encoding="utf-8").write(key)
-        return {"ok": True, "id": name, "check": provider_check(name)}
+        return {"ok": True, "id": name, "check": provider_check(name, live=True)}
     if kind == "engine_set":  # map: the agent engine of this computer
         e = a.get("engine")
         if e not in ENGINES_DASH:
