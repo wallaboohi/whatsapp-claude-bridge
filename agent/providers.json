@@ -362,7 +362,7 @@
    "YB-PC-HW"
   ],
   "pc": "נייח",
-  "python": "C:/Users/walla/AppData/Local/Programs/Python/Python312/python.exe",
+  "python": "%USERPROFILE%/AppData/Local/Programs/Python/Python312/python.exe",
   "timeout": 240,
   "aliases": [
    "claude app",
@@ -456,7 +456,7 @@
    "YB-PC-HW"
   ],
   "pc": "נייח",
-  "python": "C:/Users/walla/AppData/Local/Programs/Python/Python312/python.exe",
+  "python": "%USERPROFILE%/AppData/Local/Programs/Python/Python312/python.exe",
   "timeout": 180,
   "aliases": [
    "jan app",

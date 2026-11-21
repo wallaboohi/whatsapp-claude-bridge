@@ -57,7 +57,7 @@ def test_unfence_writes_the_grant_on_the_peer(agent, monkeypatch):
     mod, _ = agent
     sent = {}
     monkeypatch.setattr(mod, "peer_alias", lambda p: "ybhw")
-    monkeypatch.setattr(mod, "_remote_root", lambda p: "C:/Users/walla/whatsapp-mcp")
+    monkeypatch.setattr(mod, "_remote_root", lambda p: "C:/Users/owner/whatsapp-mcp")
     monkeypatch.setattr(mod, "_remote_python", lambda peer, script, timeout=0: sent.update(script=script) or (0, "@@OK@@", ""))
     assert mod.peer_unfence({"name": "נייח"}, "נייח", "בדיקה") is True
     import base64, json, re

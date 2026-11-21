@@ -94,3 +94,7 @@ agent/providers/*/tools.log
 
 agent/browser_profile/
 whatsapp-mcp-server/*.bak-*
+
+# owner 21.11: local backups never go to git (personal data gate)
+agent/*.pre-*
+tools/*.local-*

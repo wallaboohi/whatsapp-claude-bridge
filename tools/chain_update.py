@@ -26,15 +26,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from chain_config import PCS  # noqa: E402
 
 NOISE = ("WARNING", "vulnerable", "upgraded", "post-quantum", "store now")
-HOME = "C:/Users/walla"  # the bridge lives in C:/Users/walla/whatsapp-mcp on every PC (the ssh user differs)
+HOME = os.path.dirname(ROOT).replace("\\", "/")  # the bridge lives in <home>/whatsapp-mcp on every PC (the ssh user differs)
 REMOTE = r"""
 $ErrorActionPreference = 'Continue'
 $env:Path = 'C:\msys64\ucrt64\bin;' + $env:Path
-Set-Location "C:\Users\walla\whatsapp-mcp"
+Set-Location "@ROOTW@"
 # over ssh Windows will not pass uv's junction (cpython-3.11-...): "untrusted mount point" (os error 448). Use the real folder.
 # PowerShell variables are case-insensitive: $PY and $py would be the SAME variable. Owner 19.11: that
 # collision silently ran the python code as a command, so a Go change was reported as rebuilt without being built.
-$pyexe = "C:\Users\walla\whatsapp-mcp\agent\.venv\Scripts\python.exe"
+$pyexe = "@ROOTW@\agent\.venv\Scripts\python.exe"
 if (-not (Test-Path $pyexe)) {
   $d = Get-ChildItem "$env:APPDATA\uv\python" -Directory -EA 0 | Where-Object Name -match '^cpython-3[.][0-9]+[.][0-9]+-' | Sort-Object Name | Select-Object -Last 1
   if ($d) { $pyexe = $d.FullName + '\python.exe' } else { $pyexe = (Get-Command python -EA SilentlyContinue).Source }
@@ -60,7 +60,7 @@ $go = git diff --name-only $before $after -- whatsapp-bridge | Where-Object { $_
 # already pulled) and never retried. Rebuild whenever the exe on disk is older than the last commit that touched Go code.
 if (-not $go) {
   $gct = [int](git log -1 --format=%ct -- 'whatsapp-bridge/*.go')
-  $bexe = Get-Item "C:\Users\walla\whatsapp-mcp\whatsapp-bridge\whatsapp-bridge.exe" -ErrorAction SilentlyContinue
+  $bexe = Get-Item "@ROOTW@\whatsapp-bridge\whatsapp-bridge.exe" -ErrorAction SilentlyContinue
   if ($bexe -and $gct -gt 0 -and ([DateTimeOffset]$bexe.LastWriteTimeUtc).ToUnixTimeSeconds() -lt $gct) { $go = @('stale-exe.go') }
 }
 $rb = ''
@@ -74,21 +74,29 @@ if ($go -and -not $env:DRY) {
 }
 # owner 21.11 00:22: the laptop already had the new code on disk (merged by hand) but its agent still ran the old one: nothing was
 # pulled, so no restart was asked. Compare the commit the running agent started on with the checkout.
-$runcode = "import sqlite3;db=sqlite3.connect('file:C:/Users/walla/whatsapp-mcp/agent/agent.db?mode=ro',uri=True,timeout=10);r=db.execute('select v from kv where k=?',('running_head',)).fetchone();print(r[0] if r else '')"
+$runcode = "import sqlite3;db=sqlite3.connect('file:@ROOT@/agent/agent.db?mode=ro',uri=True,timeout=10);r=db.execute('select v from kv where k=?',('running_head',)).fetchone();print(r[0] if r else '')"
 $running = (& $pyexe -I -X utf8 -c $runcode 2>$null | Select-Object -Last 1)
 $stale = [bool]$running -and (-not $after.StartsWith($running.Substring(0, [Math]::Min(7, $running.Length))))
 if (($after -ne $before -or $stale) -and -not $env:DRY) {
-  [IO.File]::WriteAllText("C:\Users\walla\whatsapp-mcp\agent\restart.request", "עדכון מדורג בשרשרת: $($after.Substring(0,7))", [Text.UTF8Encoding]::new($false))
+  [IO.File]::WriteAllText("@ROOTW@\agent\restart.request", "עדכון מדורג בשרשרת: $($after.Substring(0,7))", [Text.UTF8Encoding]::new($false))
 }
 @{before=$before; after=$after; hub=$hub; pull="$pull"; go=[bool]$go; rebuild=$rb; rebuild_ok=$rbok; restart=($after -ne $before -or $stale); merged=$merged; running="$running" } | ConvertTo-Json -Compress
 """
 HB = r"""
 import os, subprocess
-req = os.path.exists("C:/Users/walla/whatsapp-mcp/agent/restart.request")
+req = os.path.exists("@ROOT@/agent/restart.request")
 ps = '''Get-CimInstance Win32_Process -Filter "name='python.exe'" | Where-Object { $_.CommandLine -match 'agent[.]py' } | ForEach-Object { $_.CreationDate.ToString('s') } | Sort-Object | Select-Object -First 1'''
 r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True)
 print(("pending " if req else "") + (r.stdout.strip() or "none"))
 """
+
+
+# owner 21.11: no personal path in the published code — the scripts above name the bridge folder as @ROOT@ / @ROOTW@ and
+# get this computer's own one (the same path on every PC of the chain)
+_ROOT_FWD = os.path.dirname(os.path.dirname(os.path.abspath(__file__))).replace("\\", "/")
+for _k, _v in list(globals().items()):
+    if isinstance(_v, str) and "@ROOT" in _v:
+        globals()[_k] = _v.replace("@ROOTW@", _ROOT_FWD.replace("/", "\\")).replace("@ROOT@", _ROOT_FWD)
 
 
 def ssh(host, cmd, timeout=900):

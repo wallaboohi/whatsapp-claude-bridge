@@ -5081,11 +5081,11 @@ def desktop_app_local(p):
 
 def _desktop_ai_cmds(p, args):
     """One command per way of reaching the PC (here, or each ssh alias in turn) that runs desktop_ai.py there in the user's session."""
-    py = ["--python", p["python"]] if p.get("python") else []
+    py = ["--python", os.path.expandvars(p["python"])] if p.get("python") else []
     if desktop_app_local(p):
         return [[shutil.which("uv") or "uv", "run", "-q", "--no-project", *py, "--with", "uiautomation", "python", "-X", "utf8",
                  DESKTOP_AI, *args, "--via-task"]]
-    root = (p.get("root") or "C:/Users/walla/whatsapp-mcp").replace("\\", "/")
+    root = (p.get("root") or ROOT).replace("\\", "/")
     line = " ".join(["uv", "run", "-q", "--no-project"] + [f'"{x}"' if " " in x or "\\" in x else x for x in py]
                     + ["--with", "uiautomation", "python", "-X", "utf8", f"{root}/tools/desktop_ai.py", *args, "--via-task"])
     git_ssh = r"C:\Program Files\Git\usr\bin\ssh.exe"

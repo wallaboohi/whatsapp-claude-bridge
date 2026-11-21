@@ -115,7 +115,7 @@ def prompt_block(chat=None, limit=8, path=None, skip_id=None):
     rows = [r for r in open_asks(chat, path=path) if r[0] != skip_id][-limit:]
     if not rows:
         return ""
-    tool = "uv run -q --no-project python -I -X utf8 C:/Users/walla/whatsapp-mcp/tools/asks.py"
+    tool = "uv run -q --no-project python -I -X utf8 " + os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools", "asks.py").replace("\\", "/")
     lines = [f"#{i} ({at[8:10]}.{at[5:7]} {at[11:16]}) \"{_short(t)}\"" for i, at, _c, t, *_ in rows]
     return ("בקשות של יקיר שעדיין פתוחות (מנגנון הנושאים הפתוחים, לא הוראה חדשה; אל תתחיל אותן בלי שביקש עכשיו). "
             f"כשסיימת אחת: `{tool} done <id> \"<מה נעשה + קומיט>\"`; אם לא תבוצע: `{tool} not <id> \"<למה>\"`. "

@@ -31,7 +31,7 @@ LOG = os.path.join(ROOT, "agent", "chain_relay.log")
 
 STATE = r"""
 import datetime, json, os, sqlite3, subprocess
-R = "C:/Users/walla/whatsapp-mcp"
+R = "@ROOT@"
 out = {}
 try:
     out["lease"] = open(R + "/whatsapp-bridge/store/lease_status", encoding="utf-8").read().strip()
@@ -73,15 +73,15 @@ print("@@J@@" + json.dumps(out, ensure_ascii=False))
 """
 
 REQUEST = r"""
-open("C:/Users/walla/whatsapp-mcp/agent/handover.request", "w", encoding="utf-8").write(C)
+open("@ROOT@/agent/handover.request", "w", encoding="utf-8").write(C)
 print("@@OK@@")
 """
 
 SELFTEST = r"""
 import subprocess
-r = subprocess.run(["C:/Users/walla/whatsapp-mcp/agent/.venv/Scripts/python.exe", "-X", "utf8",
-                    "C:/Users/walla/whatsapp-mcp/tools/selftest.py", "--quiet"], capture_output=True, text=True,
-                   encoding="utf-8", errors="replace", cwd="C:/Users/walla/whatsapp-mcp", timeout=600)
+r = subprocess.run(["@ROOT@/agent/.venv/Scripts/python.exe", "-X", "utf8",
+                    "@ROOT@/tools/selftest.py", "--quiet"], capture_output=True, text=True,
+                   encoding="utf-8", errors="replace", cwd="@ROOT@", timeout=600)
 print(r.stdout[-3000:])
 print("@@RC@@" + str(r.returncode))
 """
@@ -96,8 +96,17 @@ def log(*a):
         f.write(line + "\n")
 
 
+# owner 21.11: no personal path in the published code — the scripts above name the bridge folder as @ROOT@ / @ROOTW@ and
+# get this computer's own one (the same path on every PC of the chain)
+_ROOT_FWD = os.path.dirname(os.path.dirname(os.path.abspath(__file__))).replace("\\", "/")
+for _k, _v in list(globals().items()):
+    if isinstance(_v, str) and "@ROOT" in _v:
+        globals()[_k] = _v.replace("@ROOTW@", _ROOT_FWD.replace("/", "\\")).replace("@ROOT@", _ROOT_FWD)
+
+
 def run_py(name, code, timeout=120):
     """The same Python snippet on the named PC (locally on the desktop)."""
+    code = code.replace("@ROOT@", _ROOT_FWD)
     pc = BY_NAME[name]
     if pc["host"] == ME:
         r = subprocess.run([sys.executable, "-I", "-X", "utf8", "-c", code], capture_output=True, text=True, encoding="utf-8",
@@ -194,7 +203,7 @@ def wait_stable(name, hub, seconds=60, timeout=420):
 
 ABORT_HANDOVER = r"""
 import os, time
-d = "C:/Users/walla/whatsapp-mcp/whatsapp-bridge/store/handover.json"
+d = "@ROOT@/whatsapp-bridge/store/handover.json"
 if os.path.exists(d):
     os.replace(d, d + ".aborted-" + time.strftime("%Y%m%d-%H%M%S"))
 print("@@OK@@")
@@ -282,7 +291,7 @@ def ensure_holder_code(name, hub, minutes=6):
         return True, f"כבר רץ על {hub}"
     if st.get("head") != hub:
         return False, f"הקוד בדיסק {st.get('head')} ולא {hub}"
-    rc, out = run_py(name, 'open("C:/Users/walla/whatsapp-mcp/agent/restart.request", "w", encoding="utf-8").write('
+    rc, out = run_py(name, 'open("@ROOT@/agent/restart.request", "w", encoding="utf-8").write('
                            '"סבב הפעלה מחדש: הסוכן של המחזיק עולה על הקוד החדש לפני המסירה (הגשר נשאר מחובר)")\nprint("@@OK@@")', 60)
     if "@@OK@@" not in out:
         return False, "לא הצלחתי לבקש הפעלה מחדש של הסוכן"

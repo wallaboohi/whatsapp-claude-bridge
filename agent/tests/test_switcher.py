@@ -609,7 +609,7 @@ def test_the_backup_creates_the_folders_in_small_groups_that_fit_a_command_line(
     mod, _ = agent
     sent = []
     monkeypatch.setattr(mod, "_ps_remote", lambda alias, script, timeout=180: sent.append(script) or (0, "", ""))
-    dirs = [f"C:/Users/walla/WhatsApp-Backup/peer-YB-PC-HW/media/97250{i:07d}@s.whatsapp.net" for i in range(400)]  # the laptop's situation
+    dirs = [f"C:/Users/owner/WhatsApp-Backup/peer-YB-PC-HW/media/97250{i:07d}@s.whatsapp.net" for i in range(400)]  # the laptop's situation
     mod.mkdirs_on_peer("4-MINE", dirs)
     assert len(sent) == 20, "400 folders in groups of 20"
     for s in sent:

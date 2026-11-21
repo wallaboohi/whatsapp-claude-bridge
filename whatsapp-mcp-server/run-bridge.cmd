@@ -2,7 +2,7 @@
 rem -------------------------------------------------
 rem  WhatsApp‑MCP Bridge – One‑Click start script
 rem -------------------------------------------------
-cd /d "C:\Users\walla\whatsapp-mcp\whatsapp-mcp-server"
+cd /d "%USERPROFILE%\whatsapp-mcp\whatsapp-mcp-server"
 
 rem Upgrade pip and ensure required packages are installed (user scope)
 python -m pip install --upgrade pip

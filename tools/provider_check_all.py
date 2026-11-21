@@ -65,8 +65,8 @@ def t_codex():
     return c and _run(c + ["exec", "--skip-git-repo-check", "-"], stdin=PROMPT)
 
 
-ROOT = os.path.abspath(os.environ.get("WHATSAPP_MCP_ROOT") or "C:/Users/walla/whatsapp-mcp")
-REMOTE_ROOT = "C:/Users/walla/whatsapp-mcp"  # repository path on the other Windows computers
+ROOT = os.path.abspath(os.environ.get("WHATSAPP_MCP_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+REMOTE_ROOT = ROOT.replace("\\", "/")  # repository path on the other Windows computers (the same as here)
 
 
 def t_gemini():
@@ -267,7 +267,7 @@ def main():
     for name, host, alias, r in rows:
         if host != me and not r.get("error"):
             for fn in ("PROVIDERS-STATUS.md", "PROVIDERS-STATUS.json"):
-                subprocess.run(["scp", "-q", "-o", "BatchMode=yes", os.path.join(home, fn), f"{alias}:C:/Users/walla/whatsapp-mcp/agent/home/{fn}"],
+                subprocess.run(["scp", "-q", "-o", "BatchMode=yes", os.path.join(home, fn), f"{alias}:{REMOTE_ROOT}/agent/home/{fn}"],
                                capture_output=True, timeout=60)
     print(text)
 
