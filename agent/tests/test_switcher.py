@@ -102,7 +102,10 @@ def test_the_earliest_stable_pc_gets_the_bridge_not_a_fresh_one(agent, monkeypat
             "חדר שינה": _alive(now - 10),   # earlier, but back only 10 s ago
             "סלון": _alive(now - 300)}      # later, stable
     view["חדר שינה"]["data"]["chain"] = {"for": "נייח"}
-    assert mod.chain_handback_target(fc, "נייח", view) == "סלון"
+    # owner 21.11 02:30: the bedroom is EARLIER and back but not yet stable: it is waited for, the bridge is not passed to a later PC
+    assert mod.chain_handback_target(fc, "נייח", view) == ""
+    view["חדר שינה"]["up_since"] = now - 120
+    assert mod.chain_handback_target(fc, "נייח", view) == "חדר שינה", "stable for a minute: the earliest PC gets it"
 
 
 def test_a_planned_handover_nobody_took_expires(agent, monkeypatch, tmp_path):
@@ -434,3 +437,46 @@ def test_the_update_rebuilds_a_bridge_exe_that_is_older_than_the_go_code():
     r = m.REMOTE
     assert "stale-exe.go" in r and "LastWriteTimeUtc" in r and "git log -1 --format=%ct" in r, "an old exe is rebuilt even when nothing was pulled"
     assert r.index("stale-exe.go") < r.index("if ($go -and -not $env:DRY)"), "the check comes before the rebuild decision"
+
+
+def test_the_holder_waits_for_an_unstable_desktop_instead_of_passing_to_the_bedroom(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    _env(mod, monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "lease_held", lambda: True)
+    now = time.time()
+    fc = {"for": "נייח", "self_name": "לפטופ", "defer_to": ["חדר שינה", "סלון"]}
+    ready = lambda since: {"status": "up", "data": {"lease": {"mode": True, "policy": True}, "chain": {"for": "נייח"}}, "last": {}, "up_since": since}
+    # live round 4: the desktop had just woken (8 s), the bedroom was stable: the laptop passed the bridge to the bedroom (62 s offline)
+    view = {"נייח": ready(now - 8), "חדר שינה": ready(now - 400)}
+    assert mod.chain_handback_target(fc, "נייח", view) == ""
+    view["נייח"] = ready(now - 70)
+    assert mod.chain_handback_target(fc, "נייח", view) == "נייח", "the desktop is stable: it gets the bridge"
+
+
+def test_the_fence_backoff_does_not_hold_the_receiver_of_a_handover(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    _env(mod, monkeypatch, tmp_path, {"to": "סלון", "at": "2026-11-21T02:17:20", "by": "PERROOM"})
+    fc = {"for": "נייח", "self_name": "סלון", "defer_to": ["חדר שינה"]}
+    view = {"נייח": {"status": "agent_down", "data": None, "last": {}, "since": 1.0}}
+    mod._chain_recent_unfence["נייח"] = time.time() - 30  # a fence 30 s ago (live round 4: take came at fence + 90 s)
+    why, fence = mod.chain_take_blocker(fc, "נייח", view, now=time.time(), passed_from="חדר שינה")
+    assert "נעצר לאחרונה" not in why, why
+    mod._chain_recent_unfence["נייח"] = time.time() - 30
+    (tmp_path / "handover.json").unlink()  # no planned hand-over any more, nothing passed: the loop protection still holds
+    _env(mod, monkeypatch, tmp_path)
+    mod._chain_recent_unfence["נייח"] = time.time() - 30
+    why, fence = mod.chain_take_blocker(fc, "נייח", view, now=time.time())
+    assert "נעצר לאחרונה" in why and fence is None
+
+
+def test_a_fence_that_was_not_undone_leaves_no_backoff(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    _env(mod, monkeypatch, tmp_path, {"to": "לפטופ", "at": "2026-11-21T02:17:20", "by": "x"})
+    monkeypatch.setattr(mod, "_fo_peer", lambda n: n)
+    monkeypatch.setattr(mod, "peer_fence", lambda p, n: True)
+    monkeypatch.setattr(mod, "peer_unfence", lambda p, n, why="": (_ for _ in ()).throw(AssertionError("no unfence while planned")))
+    monkeypatch.setattr(mod, "_chain_note_wait", lambda *a: None)
+    monkeypatch.setattr(mod, "_fo_say", lambda *a: None)
+    monkeypatch.setattr(mod, "chain_pass_marker", lambda h: "")
+    mod.chain_backup_step(FC, "נייח", {}, _view())
+    assert mod._chain_recent_unfence == {}, "no unfence happened, so no backoff is recorded"

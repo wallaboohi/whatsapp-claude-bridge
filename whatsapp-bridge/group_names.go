@@ -92,7 +92,11 @@ func reconcileGroupNames(client *whatsmeow.Client, logger waLog.Logger) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		info, err := client.GetGroupInfo(ctx, jid)
-		if err == nil {
+		if err != nil {
+			// owner 21.11 (live round 4): the laptop never renamed and nothing was logged; WhatsApp can answer 429 rate-overlimit to a
+			// client that just connected. Logged now; the next check is a minute later.
+			logger.Warnf("Group name check failed for %s: %v", jidStr, err)
+		} else {
 			if fix := withHostPrefix(info.Name, prefix); fix != "" {
 				groupNameLastSet[jidStr] = time.Now()
 				if err := client.SetGroupName(ctx, jid, fix); err != nil {

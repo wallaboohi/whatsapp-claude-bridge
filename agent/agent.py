@@ -11235,6 +11235,7 @@ CHAIN_DEFAULTS = {"check_seconds": 2, "http_timeout": 1.5, "machine_timeout": 1.
                   # target did not take the bridge expires after handover_ttl_seconds (file moved aside, the desktop returns).
                   "stable_seconds": 60, "fence_backoff_seconds": 90, "handover_ttl_seconds": 300}
 _chain_recent_unfence = {}  # pn -> when a fence of it was last undone (no fence/unfence loop: owner 20.11 21:30)
+_chain_recent_fence = {}  # pn -> when it was last fenced (not repeated every round while a take-over waits: live round 4)
 _chain = {}  # peer name -> {"data", "last", "misses", "since", "machine", "probing", "seen", "via"}
 _chain_lock = threading.Lock()
 _chain_wake = threading.Event()
@@ -11499,7 +11500,9 @@ def chain_take_blocker(fc, host, view, now=None, passed_from="", fenced=()):
     if hs == "agent_down" and host not in fenced and not (planned and not planned_here):
         if now - (hv.get("since") or now) < grace and not planned_here:
             return f"\"{host}\" מפעיל מחדש את הסוכן (המחשב עונה)", None
-        if _recently_unfenced(host, now):
+        if _recently_unfenced(host, now) and not planned_here and not passed_from:
+            # owner 21.11 02:30 (live round 4): this backoff held the salon and the laptop for 40-55 s AFTER the identity was handed to
+            # them (take at exactly fence + 90 s). It stops fence/unfence loops; an explicit hand-over to this PC is not one.
             return f"\"{host}\": הסוכן לא עונה והגשר שלו נעצר לאחרונה ובוטל; ממתין", None
         return f"\"{host}\": הסוכן לא עונה {int(now - hv['since'])} שנ' והמחשב כן", host
     for pn, v in view.items():
@@ -11520,7 +11523,7 @@ def chain_take_blocker(fc, host, view, now=None, passed_from="", fenced=()):
             known = bool(v.get("last"))
             if known and now - (v.get("since") or now) < grace:
                 return f"\"{pn}\" החזיק ומפעיל מחדש את הסוכן", None
-            if _recently_unfenced(pn, now):
+            if _recently_unfenced(pn, now) and not planned_here and not passed_from:
                 return f"\"{pn}\": הגשר שלו נעצר לאחרונה ובוטל; ממתין", None
             return f"\"{pn}\": הסוכן לא עונה והמחשב כן; אולי הגשר שלו מחובר", pn
     return "", None
@@ -11546,8 +11549,6 @@ def chain_handback_target(fc, host, view):
         v = view.get(pn) or {}
         if v.get("status") != "up":
             continue
-        if not _chain_stable(v):
-            continue  # owner 20.11 21:50: back for less than stable_seconds: the holder keeps the bridge
         d = v.get("data") or {}
         lease = d.get("lease") or {}
         if not lease.get("mode"):
@@ -11557,9 +11558,15 @@ def chain_handback_target(fc, host, view):
         if pn == host:
             if _alive_holds_lease(d) and mine:
                 continue  # both connected (it came back cut off): it lets go first (chain_host_step), then it is the target
+            if not _chain_stable(v):
+                # owner 21.11 02:30 (live round 4): the desktop was back but not yet stable; the laptop skipped it and passed the bridge
+                # to the bedroom, which did not take it: 62 s offline. An earlier PC that is back is WAITED for, never skipped.
+                return ""
             return pn
         if d.get("holds") or _alive_holds_lease(d) or (d.get("chain") or {}).get("for") != host:
             continue  # it holds something itself, or runs code without the chain hand-over (or backs up another host)
+        if not _chain_stable(v):
+            return ""  # owner 20.11 21:50: back for less than stable_seconds: the holder keeps the bridge and does not pass it on
         return pn
     return ""
 
@@ -11666,15 +11673,20 @@ def chain_backup_step(fc, host, st, view, now=None):
         why, fence = chain_take_blocker(fc, host, view, now, passed, fenced)
         if not fence:
             break
+        if time.time() - _chain_recent_fence.get(fence, 0) < 20:
+            fenced.add(fence)  # fenced a few seconds ago and nothing changed: no second ssh round every second while we wait
+            continue
         if not peer_fence(_fo_peer(fence), fence):
             why, unfenced = f"{why}; לא הצלחתי לעצור את הגשר שלו דרך ssh", fence
             break
+        _chain_recent_fence[fence] = time.time()
         fenced.add(fence)
     if why and fenced:
         for pn in fenced:  # owner 19.11: fenced and then not taking over left NOBODY connected for 20 minutes
             if not handover_read().get("to"):  # away by a planned hand-over: must stay fenced, its bridge would clash with the holder
                 peer_unfence(_fo_peer(pn), pn, why)
-            _chain_recent_unfence[pn] = time.time()
+                _chain_recent_unfence[pn] = time.time()  # only an undone fence counts (live round 4: it was set without an unfence)
+                _chain_recent_fence.pop(pn, None)  # unfenced: a later fence is a new one
     if why:
         _chain_note_wait(host, why)
         if unfenced and kv_get(f"fo_chain_fence_said:{host}") != unfenced:
@@ -11700,7 +11712,7 @@ def chain_backup_step(fc, host, st, view, now=None):
         for pn in fenced:
             if not handover_read().get("to"):
                 peer_unfence(_fo_peer(pn), pn, msg)
-            _chain_recent_unfence[pn] = time.time()
+                _chain_recent_unfence[pn] = time.time()
         _chain_backoff[host] = time.time() + 30
         _chain_note_wait(host, msg)
         if kv_get(f"fo_chain_fail_said:{host}") != msg:
