@@ -98,3 +98,5 @@ whatsapp-mcp-server/*.bak-*
 # owner 21.11: local backups never go to git (personal data gate)
 agent/*.pre-*
 tools/*.local-*
+agent/nas_backup.log
+agent/nas_backup_status.json

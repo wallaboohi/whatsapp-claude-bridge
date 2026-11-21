@@ -333,8 +333,32 @@ def restart_gate(what="restart"):
         time.sleep(15)
 
 
+def smoke_check():
+    """Owner 21.11 (the code guard): the code on disk must load before the agent leaves for it. A new Python process imports the
+    agent and the bridge's own module; "" when it loads, else the error."""
+    try:
+        r = subprocess.run([sys.executable, "-X", "utf8", "-c", "import agent, bridge_direct"], cwd=HERE, capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", timeout=120, creationflags=NO_WINDOW,
+                           env=dict(os.environ, YB_SMOKE="1"))
+    except Exception as e:
+        return f"{type(e).__name__}: {e}"
+    if r.returncode == 0:
+        return ""
+    return ((r.stderr or r.stdout or "").strip().splitlines() or ["?"])[-1][:300]
+
+
 def restart_now(reason):
     """Exit cleanly; run-agent.cmd starts the agent again within ~15 s and the new process reports in the group."""
+    err = smoke_check()
+    if err:  # owner 21.11: never leave a working agent for code that does not load
+        RESTART_REQ.clear()
+        log("restart refused by the code guard: the code on disk does not load |", err)
+        try:
+            send(PRIMARY, CFG["reply_prefix"] + "🛡️ *השומר עצר את ההפעלה מחדש:* הקוד בדיסק לא נטען, ולכן הגרסה שרצה נשארת.\n"
+                 f"_שגיאה:_ `{err[:200]}`")
+        except Exception:
+            pass
+        return
     try:
         restart_gate("agent restart")
     except Exception:

@@ -164,6 +164,80 @@ def agent_rollback(st):
     return "rolled back"
 
 
+RESTART_MIN = 10  # owner 21.11 20:45: down this long for any reason (not only after a code change) -> raised again
+GOOD_TAG_MIN = 60  # a commit healthy this long gets a "good-<time>" tag: always a known place to go back to
+
+
+def ensure_task(name):
+    """The scheduled task that keeps a part running (its .cmd loops); started when it is not running."""
+    ps = f"$t = Get-ScheduledTask -TaskName '{name}' -ErrorAction SilentlyContinue; if ($t -and $t.State -ne 'Running') {{ Start-ScheduledTask -TaskName '{name}'; 'started' }}"
+    r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, creationflags=NO_WINDOW, timeout=60)
+    return "started its task" if "started" in (r.stdout or "") else "task was running"
+
+
+def raise_again(st, part, now):
+    """Owner 21.11: the guard raises the agent / the bridge again when it is down, whatever the reason (a hang, a crash)."""
+    key = f"{part}_raised_at"
+    if now - st.get(key, 0) < RESTART_MIN * 60:
+        return "raised a moment ago"
+    st[key] = now
+    if part == "agent":
+        kill_agent()  # a hung agent; its loop (run-agent.cmd) starts it again
+        how = ensure_task("WhatsApp agent")
+        notice("agent", f"🛡️ השומר: הסוכן לא הגיב {RESTART_MIN} דקות, הופעל מחדש ({how}).")
+    else:
+        kill("whatsapp-bridge.exe")  # its loop (run-bridge.cmd) starts it again
+        how = ensure_task("WhatsApp bridge")
+        notice("bridge", f"🛡️ השומר: הגשר לא ענה {RESTART_MIN} דקות, הופעל מחדש ({how}).")
+    log(part, "raised again:", how)
+    return "raised again: " + how
+
+
+def snapshot_work(st):
+    """Owner 21.11 17:02: a hosted AI's `git reset --hard` wiped work that was not committed. Every check keeps a copy of what is
+    not committed (tracked and new files, not ignored ones) as refs/guard/wip/<time> — never touching the files, the index or HEAD.
+    Restore: git checkout <ref> -- <path>."""
+    rc, dirty = git("status", "--porcelain")
+    if rc or not dirty.strip():
+        return "clean"
+    import tempfile
+    idx = os.path.join(tempfile.gettempdir(), "yb-guard-index")
+    env = dict(os.environ, GIT_INDEX_FILE=idx)
+
+    def g(*a):
+        r = subprocess.run(["git", *a], cwd=ROOT, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=300, creationflags=NO_WINDOW)
+        return r.returncode, (r.stdout or "").strip()
+    g("read-tree", "HEAD")
+    g("add", "-A", "--", ".", ":(exclude)outbox", ":(exclude)agent/outbox", ":(exclude)agent/tmp")
+    rc, tree = g("write-tree")
+    if rc or not tree or tree == st.get("wip_tree"):
+        return "no change since the last copy"
+    rc, commit = g("commit-tree", tree, "-p", "HEAD", "-m", f"guard: work not committed, {dt.datetime.now():%Y-%m-%d %H:%M}")
+    if rc:
+        return "copy failed"
+    ref = f"refs/guard/wip/{dt.datetime.now():%Y%m%d-%H%M%S}"
+    git("update-ref", ref, commit)
+    st["wip_tree"] = tree
+    log("work not committed kept as", ref)
+    return ref
+
+
+def tag_good(st, head, now):
+    since = st.get("good_since") or {}
+    if since.get("head") != head:
+        st["good_since"] = {"head": head, "at": now}
+        return ""
+    if since.get("tagged") or now - since.get("at", now) < GOOD_TAG_MIN * 60:
+        return ""
+    tag = f"good-{dt.datetime.now():%Y%m%d-%H%M}"
+    rc, out = git("tag", tag, head)
+    since["tagged"] = tag if rc == 0 else ""
+    st["good_since"] = since
+    log("good version tagged", tag, head[:7])
+    return tag
+
+
 def check(act=True):
     c = cfg()
     st = load(STATE, {})
@@ -190,6 +264,21 @@ def check(act=True):
     if act and not aok and now - st["agent_bad_since"] >= GRACE_MIN * 60:
         out["agent_action"] = agent_rollback(st)
         st["agent_bad_since"] = now
+    if act and not aok and "agent_action" not in out and now - st["agent_bad_since"] >= RESTART_MIN * 60:
+        out["agent_action"] = raise_again(st, "agent", now)
+    if act and not bok and "bridge_action" not in out and now - st["bridge_bad_since"] >= RESTART_MIN * 60:
+        out["bridge_action"] = raise_again(st, "bridge", now)
+    if act:
+        try:
+            out["work_copy"] = snapshot_work(st)
+        except Exception as e:
+            out["work_copy"] = f"failed: {e}"
+        if aok and bok:
+            rc, head = git("rev-parse", "HEAD")
+            if rc == 0:
+                t = tag_good(st, head, now)
+                if t:
+                    out["good_tag"] = t
     st["checked"] = dt.datetime.now().isoformat(timespec="seconds")
     save(STATE, st)
     return out

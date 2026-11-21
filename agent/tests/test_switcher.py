@@ -970,3 +970,14 @@ def test_the_restart_command_has_its_common_spelling_too(agent, monkeypatch):
         assert "מפעיל את הסוכן מחדש" in agent.owner_command("/הפעלה מחדש", agent.PRIMARY) and agent.RESTART_REQ.is_set()
     finally:
         agent.RESTART_REQ.clear()
+
+
+def test_the_agent_never_restarts_into_code_that_does_not_load(agent, monkeypatch):
+    mod = agent[0]
+    sent = []
+    monkeypatch.setattr(mod, "smoke_check", lambda: "SyntaxError: bad line")
+    monkeypatch.setattr(mod, "send", lambda chat, text, **k: sent.append(text) or True)
+    monkeypatch.setattr(mod.os, "_exit", lambda code: (_ for _ in ()).throw(AssertionError("must not exit")))
+    mod.RESTART_REQ.set()
+    mod.restart_now("test")
+    assert not mod.RESTART_REQ.is_set() and "השומר עצר" in sent[-1] and "SyntaxError" in sent[-1]
