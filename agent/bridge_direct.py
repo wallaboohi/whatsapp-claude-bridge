@@ -433,6 +433,31 @@ def split_rules(text):
     return "\n".join(always).strip(), out
 
 
+def rules_file(chat, items):
+    """The full text of every rule in the contents, numbered, in a file a CLI provider reads with its own file tool."""
+    d = os.path.join(PROVIDERS_DIR, "_rules")
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, re.sub(r"[^0-9A-Za-z]+", "_", chat or "chat")[:40] + ".md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("# כללי הגשר לשיחה הזו (נכתב על ידי הגשר)\n\n" + "\n\n".join(f"## {i}. {t}\n{b}" for i, (t, b) in enumerate(items, 1)) + "\n")
+    return path
+
+
+def cli_rules_text(name, chat, rules):
+    """Owner 21.11 19:05: a CLI provider gets the bridge's way like the others: what the bridge is, where its toolbox is, the rules the
+    owner marked "כלל בסיס" in full, every other rule as one line of contents — and the full text in a file it reads when needed."""
+    always, items = split_rules(rules)
+    rel = os.path.relpath(os.path.dirname(toolbox_dir(name)), ROOT).replace("\\", "/")
+    intro = (f"אתה בינה שמתארחת בגשר ווצאפ של יקיר (YB גשר AI לווצאפ). הגשר הוא תוכנה עצמאית: הוא מקבל את ההודעות ומפרסם את התשובה שלך. "
+             f"כלי הווצאפ של הגשר זמינים לך דרך שרת ה-MCP 'whatsapp'. ארגז הכלים שלך בגשר: {rel}/tools/ (כלי שהורדת או כתבת — שמור שם; "
+             f"תוכן כל ארגזי הכלים: agent/providers/INDEX.md). התשובה הסופית שלך נשלחת לקבוצה אוטומטית.")
+    if not items:
+        return intro + "\n\n" + always
+    path = rules_file(chat, items)
+    return (intro + "\n\n" + always + f"\n\nתוכן עניינים של שאר כללי הגשר. לפני פעולה שנוגעת לכלל, קרא את הסעיף בקובץ {path}:\n"
+            + rules_contents(items))
+
+
 def rules_contents(items):
     return "\n".join(f"{i}. {t}" for i, (t, _) in enumerate(items, 1))
 

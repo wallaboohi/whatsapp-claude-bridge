@@ -4818,6 +4818,23 @@ def engine_endpoint(name, model=None):
 BRIDGE_NOTICE_RE = re.compile(r"^(_|[✅📝🛣🔥⏳⏸▶⚠📎📋🤖🔀🔌🕐🔧🔁🖥💻📅📥📤🔄⛔🔎📊⚙🔖]|\{|קיבלתי את ההודעה שלך)")
 
 
+EXCHANGE_LINE = "━━━━━━━ ✦ ━━━━━━━"
+
+
+def split_exchange(text):
+    """(question, answer) of the owner's message the bridge edited into question + status rows + answer, or None. Owner 21.11 19:05:
+    cut to 300 characters, such a message reached the provider as the question and the status rows, never the answer."""
+    t = text or ""
+    if EXCHANGE_LINE not in t:
+        return None
+    question = t.split(EXCHANGE_LINE, 1)[0]
+    answer = t.split("תשובה:", 1)[1] if "תשובה:" in t else (t.rsplit(EXCHANGE_LINE, 1)[1] if t.count(EXCHANGE_LINE) > 1 else "")
+
+    def clean(s):
+        return " ".join(re.sub(r"[\u200e\u200f_*]|🤖", " ", s).split())
+    return clean(question), clean(answer)
+
+
 def pack_speaker(text, mine):
     """Who said it, for the context that goes to the hosted AI; "" = the message is not sent to it. Owner 21.11: the bridge's own notices
     (after the reply mark: an italic line, or one that opens with a status symbol: "⏳ working", "✅ back up", the provider list, quota and
@@ -4851,12 +4868,18 @@ def conversation_pack(chat, n=15):
                               (chat, n * 8)).fetchall()
     except Exception:
         rows = []
-    lines = []
+    entries = []
     for ts, mine, text in reversed(rows):
+        hhmm = str(ts)[11:16]
+        ex = split_exchange(text) if mine else None
+        if ex:
+            q, a = ex
+            entries.append("\n".join(x for x in ((f"[{hhmm}] הבעלים: {q[:300]}" if q else ""), (f"[{hhmm}] הבינה: {a[:700]}" if a else "")) if x))
+            continue
         who = pack_speaker(text, mine)
         if who:
-            lines.append(f"[{str(ts)[11:16]}] {who}: {' '.join((text or '').split())[:300]}")
-    lines = lines[-n:]
+            entries.append(f"[{hhmm}] {who}: {' '.join((text or '').split())[:300]}")
+    lines = [e for e in entries[-n:] if e]
     if lines:
         parts.append("ההודעות האחרונות בשיחה (מהישנה לחדשה):\n" + "\n".join(lines))
     parts.append("אם צריך עוד הקשר, קרא הודעות לפי דרישה בכלי הווצאפ (list_messages, search_all, get_message_context). תשובתך לשיחה הזו נשלחת אוטומטית, אז אל תשלח אותה בעצמך. הודעה לאדם או לקבוצה אחרת: רק דרך send_message, שיוצר טיוטה עם כרטיס אישור, ורק כשיקיר ביקש (agent/home/AI-KNOWLEDGE.md).")
@@ -5150,6 +5173,9 @@ def _run_cli_core(name, p, prompt, model, append, chat, on_stage, timeout, sess=
     if not exe or (remote and not remote_cli_ready(c)):
         raise ProviderDown(name, "unreachable", 30)
     resuming = bool(sess and sess.get("resume"))  # owner 20.11 11:22: a continued CLI session already holds the rules and the conversation
+    if not resuming and not getattr(_ctx, "probe", False):  # owner 21.11 19:05: the CLIs are not left out of the bridge's way
+        import bridge_direct as bd
+        append = bd.cli_rules_text(name, chat or PRIMARY, append or "")
     append = (HEBREW_RULE if resuming else ((append or "") + "\n\n" + HEBREW_RULE)).strip()  # owner 14.11: the CLIs never got the Hebrew rule (they leave before it is added)
     pack = "" if resuming or getattr(_ctx, "probe", False) else conversation_pack(chat or PRIMARY) + "\n\n---\nההודעה הנוכחית (ענה עליה):\n"
     full = ((append + "\n\n") if append else "") + pack + prompt + HEBREW_TAIL

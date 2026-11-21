@@ -886,3 +886,25 @@ def test_a_cli_provider_also_writes_the_summary_every_14_answers(agent, monkeypa
     monkeypatch.setattr(agent, "note_answer_for_summary", lambda chat, name, prov, model, summarizer=None: seen.append((name, summarizer is not None)))
     agent._run_cli("codex", p, "q", None, None, "x@g.us", None, 60)
     assert seen == [("codex", True)]
+
+
+def test_an_edited_exchange_reaches_the_provider_as_question_and_answer(agent):
+    """Owner 21.11 19:05: the owner's message edited into question + status rows + answer was cut to 300 characters: the provider got
+    the question and the status rows, never the answer."""
+    agent = agent[0]
+    msg = ("*לאיזה פרמטר היתה מוסיף בר התקדמות*\n_*━━━━━━━ ✦ ━━━━━━━*_\n‏_🖥️ נתיב: *יקיר נייח*_\n‏_🧠 ספק: *גמיני*_\n"
+           "‏_*━━━━━━━ ✦ ━━━━━━━*_\n‏_📝 *תשובה:*_\n‏_🤖 בר התקדמות מתאים לפרמטר *המכסה*. 🤖_")
+    q, a = agent.split_exchange(msg)
+    assert q == "לאיזה פרמטר היתה מוסיף בר התקדמות" and a.startswith("בר התקדמות מתאים לפרמטר המכסה") and "נתיב" not in a
+    assert agent.split_exchange("שאלה רגילה") is None
+
+
+def test_a_cli_provider_gets_the_bridge_way_rules_as_contents_with_a_file(agent, tmp_path, monkeypatch):
+    agent = agent[0]
+    import bridge_direct as bd
+    monkeypatch.setattr(bd, "PROVIDERS_DIR", str(tmp_path / "providers"))
+    rules = "- *עברית תמיד (כלל בסיס):* תמיד עברית.\n- *שמות, לא מספרים:* בלי מספרי טלפון.\n\nהקבוצה הנוכחית \"ויוי\"."
+    text = bd.cli_rules_text("codex", "x@g.us", rules)
+    assert "תמיד עברית" in text and "1. שמות, לא מספרים" in text and "בלי מספרי טלפון" not in text and "הקבוצה הנוכחית" in text
+    path = text.split("בקובץ ")[1].split(":")[0] + ":" + text.split("בקובץ ")[1].split(":")[1]
+    assert "בלי מספרי טלפון" in open(path.strip(), encoding="utf-8").read() and "MCP 'whatsapp'" in text
