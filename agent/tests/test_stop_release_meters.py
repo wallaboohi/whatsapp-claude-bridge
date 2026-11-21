@@ -151,11 +151,11 @@ def test_meter_of_a_free_api_is_the_bridge_daily_count(agent, monkeypatch):
     assert snap["windows"][0]["w"] == "יומי" and snap["windows"][0]["pct"] == 25
 
 
-def test_availability_check_runs_at_six_and_eighteen_with_meters(agent, monkeypatch):
+def test_availability_check_runs_once_a_day_at_six_with_meters(agent, monkeypatch):
     mod, _ = agent
     import inspect
     src = inspect.getsource(mod.scheduler)
-    assert '"engine_probe_time", "06:00"' in src and '"engine_probe_time_pm", "18:00"' in src
+    assert '"engine_probe_time", "06:00"' in src and '"engine_probe_time_pm"' not in src, "owner 22.11: once a day"
     assert "hourly_engine_status)" not in src, "no hourly check any more"
     done = []
     monkeypatch.setattr(mod, "engine_status_report", lambda live=False: done.append("inv"))
