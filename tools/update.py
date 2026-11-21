@@ -123,14 +123,31 @@ def update_dashboard(assets):
                        capture_output=True, creationflags=NO_WINDOW)
 
 
+def tell(text):
+    """Owner 22.11: a failed update is told in the bridge-log group. The update stops the agent, so the message waits in
+    agent/watchdog_notice.json and the agent sends it there when it is up again (report_watchdog_notice)."""
+    path = os.path.join(ROOT, "agent", "watchdog_notice.json")
+    try:
+        items = json.load(open(path, encoding="utf-8"))
+    except (OSError, ValueError):
+        items = []
+    items.append({"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "kind": "update", "text": text})
+    json.dump(items[-20:], open(path, "w", encoding="utf-8"), ensure_ascii=False)
+
+
+FAILED = []  # the self-test checks that failed (for the message)
+
+
 def selftest(simulate_fail):
     if simulate_fail:
+        FAILED.append("בדיקה מדומה")
         return False
     out = subprocess.run([uv(), "run", "-q", "--no-sync", "python", "-X", "utf8", os.path.join(ROOT, "tools", "selftest.py"), "--quiet"],
                          cwd=os.path.join(ROOT, "agent"), capture_output=True, text=True, encoding="utf-8")
     log(out.stdout[-1500:])
     res = json.load(open(os.path.join(ROOT, "agent", "selftest.json"), encoding="utf-8"))
     # the dashboard-app check depends on the machine, everything else must pass
+    FAILED.extend(r["name"] for r in res if not r["ok"] and r["name"] != "אפליקציה (EXE)")
     return all(r["ok"] for r in res if r["name"] != "אפליקציה (EXE)")
 
 
@@ -158,40 +175,35 @@ def main():
     shutil.copy(BRIDGE_EXE, BRIDGE_EXE + ".bak") if os.path.exists(BRIDGE_EXE) else None
     log(f"מעדכן {old_ver} ← {target} / updating {old_ver} → {target}")
     stop_services()
-    ok = False
+    ok, why = False, ""
     try:
         git("fetch", "--tags", "--quiet", "origin", check=False)
-        if old_branch:  # stay on the branch (developer machines keep working on it): fast-forward only
-            git("merge", "--ff-only", "--quiet", target)
-        else:
-            git("checkout", "--quiet", target)
+        if not old_branch:  # owner 22.11: never onto a tag — an install stays on its branch
+            raise RuntimeError("ההתקנה לא על ענף (HEAD מנותק), לכן לא עודכנה")
+        git("merge", "--ff-only", "--quiet", target)  # fast-forward only
         new_bridge(assets)
         sync_deps()
         update_dashboard(assets)
         start_services()
         ok = selftest("--simulate-fail" in args)
     except Exception as e:
+        why = str(e)[-300:]
         log(f"✖ שגיאה בעדכון / update error: {e}")
     if ok:
         log(f"✔ עודכן לגרסה {current_version()} / updated to {current_version()}")
         if os.path.exists(BRIDGE_EXE + ".bak"):
             os.remove(BRIDGE_EXE + ".bak")
         return 0
-    log("↩ הבדיקה נכשלה — חוזר לגרסה הקודמת / self-test failed — rolling back")
-    stop_services()
-    if old_branch:
-        git("checkout", "--quiet", old_branch)
-        git("reset", "--hard", "--quiet", old_ref)  # undo the fast-forward (tracked files were clean before the update)
-    else:
-        git("checkout", "--quiet", old_ref)
-    if os.path.exists(BRIDGE_EXE + ".bak"):
-        os.replace(BRIDGE_EXE + ".bak", BRIDGE_EXE)
+    # owner 22.11: a failed update is never undone by itself (no reset, no hard) — the code stays as it is, everything is
+    # raised again, and the owner gets the reason in the bridge-log group
+    why = why or ("הבדיקה העצמית נכשלה: " + ", ".join(FAILED) if FAILED else "הבדיקה העצמית נכשלה")
+    log(f"✖ העדכון נכשל / update failed: {why}")
     try:
-        sync_deps()
+        start_services()
     except Exception as e:
-        log(f"sync after rollback: {e}")
-    start_services()
-    log(f"↩ הוחזר לגרסה {old_ver} / restored {old_ver}")
+        log(f"start after failure: {e}")
+    tell(f"⚠️ העדכון האוטומטי {old_ver} ← {target} נכשל: {why}. לא בוצעה חזרה לאחור; הקוד נשאר כפי שהוא "
+         f"({git('rev-parse', '--short', 'HEAD', check=False)}). הגשר הקודם שמור ב-whatsapp-bridge.exe.bak.")
     return 2
 
 
