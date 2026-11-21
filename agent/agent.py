@@ -7429,6 +7429,20 @@ class StatusMsg:
         ]
         if det and not final:
             rows.append(f"🔎 פרט: _{det}_")
+            rows.append(f"_🔧 כלי: *{cur}*_")
+            rows.append(f"_📂 יעד: *{det}*_")
+        if final:
+            rows.append("_✅ *סיימתי*_")
+        icons = []
+        for n in self.steps:
+            ic = stage_icon(n["text"].split(" · ", 1)[0].strip())
+            if ic and ic not in icons:
+                icons.append(ic)
+        rows.append(f"_🪜 שלבים: *{len(self.steps)}*_")
+        if icons:
+            rows.append("_" + " ".join(icons[-6:]) + "_")
+        ctx = re.search(r"הקשר:\s*([^·]+)", meter or "")
+        rows.append(f"_🧮 הקשר: *{ctx.group(1).strip() if ctx else 'לא נמדד'}*_")
         rows.append(f"_⏱️ *{self._elapsed()}* · 📊 *{m.group(1) + '%' if m else '—'}* · 💰 *{self._cost():.2f}$*_")
         return rows
 
