@@ -63,6 +63,35 @@ def personal_data_scan(patterns):
     return hits
 
 
+# owner 21.11: GitHub's secret scanning refused v1.2.2 (provider .toml files with API keys); the same patterns as the daily sync
+# (agent.py KEY_RX), checked here before anything is bumped or tagged
+KEY_RX = re.compile(r"AIza[0-9A-Za-z_\-]{30,}|gsk_[0-9A-Za-z]{30,}|nvapi-[0-9A-Za-z_\-]{30,}|sk-[0-9A-Za-z_\-]{30,}|ghp_[0-9A-Za-z]{30,}"
+                    r"|(?:api_?key|token|secret|password)\s*[=:]\s*[\"'][0-9A-Za-z_\-\.]{24,}[\"']", re.I)
+
+
+def key_scan():
+    """The lines added by the commits that GitHub has not seen yet, checked for keys. [(commit, file)]"""
+    subprocess.run(["git", "fetch", "-q", "origin"], cwd=ROOT, capture_output=True)
+    out = subprocess.run(["git", "log", "-p", "--no-color", "--format=@@commit %h", "origin/main..HEAD"], cwd=ROOT, capture_output=True,
+                         text=True, encoding="utf-8", errors="replace").stdout
+    hits, commit, path = [], "", ""
+    for line in out.splitlines():
+        if line.startswith("@@commit "):
+            commit = line.split()[1]
+        elif line.startswith("+++ "):
+            path = line[6:] if line.startswith("+++ b/") else line[4:]
+        elif line.startswith("+") and not line.startswith("+++") and KEY_RX.search(line) and (commit, path) not in hits:
+            hits.append((commit, path))
+    return hits
+
+
+# owner 21.11: on GitHub's build server there is no hub and no NAS — two tests that pulled from hub passed here and failed there.
+# The first test run sees both remotes as unreachable addresses, like the build server.
+# (url.insteadOf rewrites every hub / NAS address; a second remote.<name>.url would only be added next to the real one)
+NO_REMOTES = {"GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_0": "url.C:/no-such-remote/hub/.insteadOf", "GIT_CONFIG_VALUE_0": "4-MINE:",
+              "GIT_CONFIG_KEY_1": "url.C:/no-such-remote/nas/.insteadOf", "GIT_CONFIG_VALUE_1": "//10.0.0.154/"}
+
+
 def main():
     if len(sys.argv) < 2 or not re.fullmatch(r"\d+\.\d+\.\d+", sys.argv[1]):
         sys.exit("שימוש: release.cmd X.Y.Z \"מה השתנה\" [--dry-run]")
@@ -76,6 +105,10 @@ def main():
         sys.exit("✖ " + why)
     if run(["git", "status", "--porcelain", "--untracked-files=no"]).strip() and not dry:
         sys.exit("✖ יש שינויים שלא נשמרו (commit) — שמור אותם קודם.")
+    keys = key_scan()
+    if keys:
+        sys.exit("✖ נמצא מה שנראה כמפתח בקומיטים שעוד לא עלו ל-GitHub (GitHub יחסום את הדחיפה):\n"
+                 + "\n".join(f"{c} {f}" for c, f in keys[:10]) + "\nצריך להוציא אותם מהקומיטים לפני השחרור.")
 
     # 1. version everywhere (read before writing; keep each file's line endings)
     for rel in ("VERSION", "dash/VERSION"):
@@ -108,7 +141,7 @@ def main():
         # (20.11 03:09: PermissionError in .pytest_tmp) failed the night release
         base = os.path.join(ROOT, ".pytest_tmp", f"release-{dt.datetime.now():%Y%m%d-%H%M%S}-{len(when or 'now')}-{os.getpid()}")
         run([uv, "run", "-q", "--no-sync", "--group", "dev", "pytest", "-q", "-p", "no:cacheprovider", "--basetemp", base, "tests"],
-            cwd=os.path.join(ROOT, "agent"), env={"FAKE_NOW": when} if when else None)
+            cwd=os.path.join(ROOT, "agent"), env={"FAKE_NOW": when} if when else NO_REMOTES)
     run([uv, "run", "-q", "python", "-c", "import main, extras"], cwd=os.path.join(ROOT, "whatsapp-mcp-server"))
     claude = shutil.which("claude")
     if claude:
