@@ -11532,7 +11532,11 @@ def chain_take_blocker(fc, host, view, now=None, passed_from="", fenced=()):
             continue
         s, d = v["status"], v.get("data") or {}
         if s == "up":
-            if host in (d.get("holds") or []) or _alive_holds_lease(d):
+            if _alive_holds_lease(d) or (host in (d.get("holds") or []) and not planned_here):
+                # owner 21.11 02:50 (live round 5): the laptop was handed the bridge on purpose but waited ~60 s because the bedroom,
+                # which had already passed the IDENTITY on, still held the host's automations until its release restart ended; the
+                # relay's 60 s floor then failed the hop. Holding only the automations does not block a hand-over named to this PC;
+                # holding the identity itself always does (never two connections).
                 return f"\"{pn}\" מחזיק כבר את העבודה", None
             if pn in before and _chain_ready(d) and not planned_here:
                 # owner 21.11 00:55 (live round 2, salon -> laptop): the bedroom is before the laptop and ready, so the laptop never

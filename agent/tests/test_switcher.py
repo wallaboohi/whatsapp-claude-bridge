@@ -502,3 +502,37 @@ def test_the_relay_state_ignores_an_old_marker_with_nothing_running():
     import ast
     ast.parse(m.STATE)
     assert "commands WHERE status = 'running'" in m.STATE and "< 180" in m.STATE, "an unfinished marker blocks only with a command running or when it is young"
+
+
+# ---- owner 21.11 02:50 (live round 5): the salon -> laptop hop failed: the bedroom had passed the IDENTITY on but still held the host's
+# automations until its release restart ended, and "the bedroom already holds the work" blocked the laptop for about a minute.
+
+def _holds_view(bedroom_holds_identity=False):
+    ready = {"agent_alive": True, "holds": ["נייח"], "lease": {"mode": True, "policy": True, "held": bedroom_holds_identity}}
+    return {"נייח": {"status": "agent_down", "data": None, "last": {}, "since": 1.0},
+            "חדר שינה": {"status": "up", "data": ready, "last": {}},
+            "סלון": {"status": "up", "data": {"agent_alive": True, "holds": ["נייח"], "lease": {"mode": True, "policy": True, "held": False}}, "last": {}}}
+
+
+def test_a_pc_that_only_holds_the_automations_does_not_block_a_planned_handover(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    _env(mod, monkeypatch, tmp_path, {"to": "לפטופ", "at": "2026-11-21T02:48:40", "by": "salon-pc"})
+    fc = {"for": "נייח", "self_name": "לפטופ", "defer_to": ["חדר שינה", "סלון"]}
+    why, fence = mod.chain_take_blocker(fc, "נייח", _holds_view(), now=10_000.0, passed_from="סלון", fenced=("נייח",))
+    assert (why, fence) == ("", None), why
+
+
+def test_a_pc_that_holds_the_identity_always_blocks(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    _env(mod, monkeypatch, tmp_path, {"to": "לפטופ", "at": "2026-11-21T02:48:40", "by": "salon-pc"})
+    fc = {"for": "נייח", "self_name": "לפטופ", "defer_to": ["חדר שינה", "סלון"]}
+    why, fence = mod.chain_take_blocker(fc, "נייח", _holds_view(bedroom_holds_identity=True), now=10_000.0, passed_from="סלון", fenced=("נייח",))
+    assert "מחזיק כבר את העבודה" in why, "never two connections on one identity"
+
+
+def test_without_a_handover_a_pc_holding_the_work_still_blocks(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    _env(mod, monkeypatch, tmp_path)  # no planned hand-over
+    fc = {"for": "נייח", "self_name": "לפטופ", "defer_to": ["חדר שינה", "סלון"]}
+    why, fence = mod.chain_take_blocker(fc, "נייח", _holds_view(), now=10_000.0, fenced=("נייח",))
+    assert "מחזיק כבר את העבודה" in why, "the normal rule is unchanged"
