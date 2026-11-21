@@ -435,6 +435,13 @@ def _day_sync_tests(go, py):
 REBUILD_NOTES = []
 
 
+def _code_dirty(porcelain):
+    """Owner 21.11: the tracked changes that are bridge code. A scratch worktree of another Claude session (.claude/worktrees/*),
+    committed as a gitlink by the daily sync, shows as " m" and made every bridge rebuild on the laptop stop at "saving the unsaved
+    changes failed" (live update 21.11 02:05)."""
+    return "\n".join(l for l in (porcelain or "").splitlines() if l.strip() and ".claude/worktrees/" not in l)
+
+
 def _rebuild_bridge():
     """Build the bridge next to the running one, swap the exe and stop the old process (run-bridge.cmd starts the new one)."""
     bdir = os.path.join(ROOT, "whatsapp-bridge")
@@ -444,6 +451,7 @@ def _rebuild_bridge():
     if os.path.exists(ROLLBACK_HOLD):
         return "הבנייה נעצרה: הקוד הוחזר לגרסה קודמת (agent/rollback.hold)"
     _, dirty = _git("status", "--porcelain", "--untracked-files=no")
+    dirty = _code_dirty(dirty)
     if dirty.strip():
         _git("add", "-u")
         rc, out = _git(*_git_author(), "commit", "-q", "-m", "Save unsaved changes before bridge rebuild")

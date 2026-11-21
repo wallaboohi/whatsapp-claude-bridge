@@ -415,3 +415,10 @@ def test_the_grant_forces_every_group_to_be_verified_again(agent, monkeypatch, t
     mod.kv_set(mod.K("name_verified_at", chat), str(mod.time.time()))
     assert mod.lease_grant("test") is True
     assert mod.kv_get(mod.K("name_verified_at", chat)) == "0", "a bridge that was offline may have missed a rename"
+
+
+def test_a_scratch_worktree_gitlink_does_not_stop_the_bridge_rebuild(agent):
+    mod, _ = agent
+    assert mod._code_dirty(" m .claude/worktrees/agent-ad2300d519a4e23fb\n") == "", "the laptop rebuild stopped on exactly this line"
+    assert mod._code_dirty(" M whatsapp-bridge/main.go\n m .claude/worktrees/x\n") == " M whatsapp-bridge/main.go", "real changes still count"
+    assert mod._code_dirty("") == "" and mod._code_dirty(None) == ""
