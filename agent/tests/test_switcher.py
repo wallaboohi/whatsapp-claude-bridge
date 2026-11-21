@@ -919,5 +919,5 @@ def test_the_answer_and_the_memory_hold_no_speaker_line_no_quote_and_no_decorati
     assert agent.clean_answer("מה מצב הגשר ומה עוד צריך לבדוק בו היום", "מה מצב הגשר?").startswith("מה מצב הגשר ומה"), "a real answer stays"
     assert agent.tidy("*שלום* _עולם_ ✅ 🧠") == "שלום עולם"
     import bridge_direct as bd
-    for part in ("מזג", "החלטות של יקיר", "שאלות שהבינה שאלה", "התחייבויות", "תקלות", "ממתין לאישור", "(נבדק)", "בלי אייקונים"):
+    for part in ("מזג", "מה יקיר רוצה", "מה יקיר צריך", "נקודות שיקיר דיבר עליהן", "החלטות של יקיר", "שאלות שהבינה שאלה", "התחייבויות", "תקלות", "ממתין לאישור", "(נבדק)", "בלי אייקונים"):
         assert part in bd.SUMMARY_TEMPLATE
