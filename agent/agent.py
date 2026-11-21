@@ -2046,7 +2046,15 @@ def _models_from_http(p):
     except Exception:
         return []
     rows = d.get("data") if isinstance(d.get("data"), list) else (d.get("models") or [])
-    return [str(m.get("id")) for m in rows if isinstance(m, dict) and m.get("id")]
+    return [model_id(m.get("id")) for m in rows if isinstance(m, dict) and m.get("id")]
+
+
+def model_id(m):
+    """A model id as the bridge stores and sends it. Owner 21.11: Gemini's list says "models/gemini-flash-lite-latest" while the
+    bridge (and the chat request) use "gemini-flash-lite-latest"; compared as they were, all three Gemini models looked gone and the
+    live list was emptied (models_live.json: 0 models, 11:37)."""
+    m = str(m or "").strip()
+    return m[len("models/"):] if m.startswith("models/") else m
 
 
 def live_models(name, force=False):
@@ -2055,7 +2063,7 @@ def live_models(name, force=False):
     ent = _cat["data"].get(name) or {}
     ttl = max(60, int(float(CFG.get("model_catalog_minutes", 10)) * 60))
     if not force and ent.get("models") and time.time() - (ent.get("at") or 0) < ttl:
-        return list(ent["models"])
+        return [model_id(m) for m in ent["models"]]
     kind = p.get("kind")
     if kind == "opencode":
         got = _models_from_opencode() if opencode_bin() else []
@@ -2067,12 +2075,12 @@ def live_models(name, force=False):
         got = []  # brings its own model, or Claude's own fixed list
     else:
         got = _models_from_http(p)
-    got = [str(m) for m in (got or []) if m]
+    got = [model_id(m) for m in (got or []) if m]
     if got:
         _cat["data"][name] = {"at": time.time(), "models": got}
         _catalog_save()
         return got
-    return list(ent.get("models") or [])
+    return [model_id(m) for m in ent.get("models") or []]
 
 
 def live_valid_model(name, model, force=False):
@@ -2099,6 +2107,10 @@ def _merge_models(p, live):
     others (Groq, Gemini, NVIDIA...) that catalog also lists speech, TTS and embedding models, so only gone ones are dropped."""
     old = [str(m) for m in (p.get("models") or []) if m]
     keep = [m for m in old if m in live]
+    if old and live and not keep:  # owner 21.11: never empty a provider's list because its names are written differently
+        log("model catalog mismatch: none of the configured models is in the provider's list, kept as they are", p.get("short") or "",
+            old[:3], live[:3])
+        return old[:int(CFG.get("model_catalog_max", 60))], [], []
     whole = p.get("kind") == "opencode" or p.get("probe") == "ollama" or p.get("free_list") == "openrouter"
     added = [m for m in live if m not in old] if whole else []
     return (keep + added)[:int(CFG.get("model_catalog_max", 60))], added, [m for m in old if m not in live]
@@ -4804,7 +4816,7 @@ def pack_speaker(text, mine):
     return "הבעלים" if mine else "אחר"
 
 
-def conversation_pack(chat, n=14):
+def conversation_pack(chat, n=10):
     """Owner 14.11: what another engine's fresh session needs to continue this conversation: the hand-off note and the last messages of the chat
     (the owner's and the bridge's own answers), plus the way to read more on demand."""
     parts = []
@@ -6058,7 +6070,7 @@ def claude(prompt, model=None, session=True, timeout=900, on_stage=None, chat=No
             log(f"claude skipped ({why}) for", chat)
             return None
     if session and not _ctx.failover_used and active_engine() == "claude" and kv_get(K("gap", chat)):
-        prompt = ("חלק מהשיחה הזו התנהל בלי הסשן הזה (בינה או חשבון אחרים, או סשן חדש). כך נראתה השיחה; המשך משם:\n" + conversation_pack(chat, 20) + "\n\n---\n" + prompt)
+        prompt = ("חלק מהשיחה הזו התנהל בלי הסשן הזה (בינה או חשבון אחרים, או סשן חדש). כך נראתה השיחה; המשך משם:\n" + conversation_pack(chat) + "\n\n---\n" + prompt)
         kv_set(K("gap", chat), "")
     # owner 19.11: the work account (Claude of the laptop) keeps its own session there, so it remembers the conversation
     # instead of starting fresh on every message; this computer's session id is never sent to it

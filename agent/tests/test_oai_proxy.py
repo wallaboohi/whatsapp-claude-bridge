@@ -97,7 +97,7 @@ def proxy(tmp_path, monkeypatch):
                     {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "79188s"}]}}]).encode()
                 self.send_response(429)
             elif seen.get("quota") and seen["auth"] in seen["quota"]:
-                raw = json.dumps({"error": {"message": "rate limit"}}).encode()
+                raw = json.dumps({"error": {"message": seen.get("quota_text") or "You exceeded your current quota (requests per day)"}}).encode()
                 self.send_response(429)
             elif seen.get("fail"):
                 raw = json.dumps({"error": {"message": "bad key"}}).encode()
@@ -217,6 +217,7 @@ import pytest
 def _no_real_proxy_log(tmp_path, monkeypatch):
     """The tests start a real proxy against a fake upstream: its request log must not land in the real agent/oai_proxy.log."""
     monkeypatch.setattr(px, "PROXY_LOG", str(tmp_path / "oai_proxy.test.log"))
+    monkeypatch.setattr(px, "EXHAUSTED", {})  # a used-up daily quota of one test never answers another test's request
 
 
 def test_the_proxy_logs_request_size_and_the_upstream_error_but_never_the_prompt_or_a_key(tmp_path, monkeypatch):
@@ -263,3 +264,19 @@ def test_per_minute_token_quota_is_told_as_a_rate_limit():
     text, secs, daily = px.quota_detail(raw)
     assert "Rate limit" in text and "250000 input tokens per minute" in text and not daily and secs == 0
     assert px.quota_detail("plain text") == ("", 0, False)
+
+
+def test_a_per_minute_limit_or_a_busy_model_does_not_try_the_second_key(proxy, tmp_path):
+    """Owner 21.11: one failure became 6 identical requests (Claude Code's retries x the second key). The second account is
+    tried only when the first one's DAILY quota or balance is out; a per-minute limit goes back once."""
+    base, seen = proxy
+    (tmp_path / "secrets" / "t.key2").write_text("SECOND-KEY", encoding="utf-8")
+    body = {"model": "claude-x", "max_tokens": 5, "messages": [{"role": "user", "content": "ping"}]}
+    seen["quota"] = ["Bearer SECRET-KEY"]
+    seen["quota_text"] = "Resource has been exhausted (e.g. check quota)."
+    seen["calls"] = 0
+    assert _post(base + "/p/t/v1/messages", body)[0] == 429 and seen["calls"] == 1, "no second request with the other key"
+    seen["quota_text"] = "Rate limit reached on tokens per day (TPD)"
+    st, raw = _post(base + "/p/t/v1/messages", body)
+    assert st == 200 and seen["auth"] == "Bearer SECOND-KEY"
+    assert px.second_key_helps(402, "") and not px.second_key_helps(429, "Rate limit: tokens per minute")

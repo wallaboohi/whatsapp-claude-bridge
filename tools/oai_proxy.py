@@ -303,6 +303,16 @@ def quota_detail(raw):
             + " (free tier)" + (f". {retry_text(secs)}" if secs else "")), secs, daily
 
 
+def second_key_helps(code, raw):
+    """Owner 21.11: one failure turned into 6 identical requests: Claude Code retries, and each try also went again with the second
+    key. The second account answers only when the FIRST one's quota or balance is used up (402, a daily quota, a "per day" text);
+    a per-minute limit or a busy model ("Resource has been exhausted" with no details) is sent back once, as it is."""
+    if code == 402:
+        return True
+    _, _, daily = quota_detail(raw)
+    return daily or bool(re.search(r"(?i)per.?day|daily|\bRPD\b|\bTPD\b|insufficient_quota|exceeded your current quota", raw or ""))
+
+
 def retry_text(secs):
     secs = max(0, int(secs))
     h, m = secs // 3600, (secs % 3600) // 60
@@ -443,7 +453,7 @@ class Handler(BaseHTTPRequestHandler):
                         msg = detail + " | " + msg
                         if daily and secs and not (key2 and hdr["Authorization"] != "Bearer " + key2):
                             EXHAUSTED[(name, req.get("model"))] = (time.time() + secs, detail)
-                if e.code in QUOTA_CODES and key2 and hdr["Authorization"] != "Bearer " + key2:
+                if e.code in QUOTA_CODES and key2 and hdr["Authorization"] != "Bearer " + key2 and second_key_helps(e.code, raw_err):
                     hdr["Authorization"] = "Bearer " + key2  # owner 17.11 22:31: the first account's quota is out, the second account answers
                     continue
                 cap = token_cap(msg, req) if e.code == 400 and attempt < 3 else None

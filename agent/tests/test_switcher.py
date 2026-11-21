@@ -729,3 +729,14 @@ def test_the_provider_list_and_availability_never_send_a_model_request(agent, mo
     r = agent.quota_free_check("g")
     assert r["ok"] and r["models"] == ["m1", "m2"] and "/בדוק מענה" in r["detail"]
     assert agent.quota_free_check("o")["detail"] == "plain"
+
+
+def test_gemini_model_names_with_the_models_prefix_are_not_dropped(agent, monkeypatch):
+    """Owner 21.11: Google lists "models/gemini-flash-lite-latest"; compared to "gemini-flash-lite-latest" every Gemini model looked
+    gone and the live list was emptied. The prefix is removed, and a list that matches none of the configured names never empties it."""
+    agent = agent[0]
+    assert agent.model_id("models/gemini-flash-lite-latest") == "gemini-flash-lite-latest" and agent.model_id("openai/gpt-oss-120b") == "openai/gpt-oss-120b"
+    p = {"models": ["gemini-flash-lite-latest", "gemini-3-flash-preview"], "short": "Gemini"}
+    assert agent._merge_models(p, ["gemini-flash-lite-latest", "gemini-2.5-pro"])[0] == ["gemini-flash-lite-latest"]
+    kept, added, removed = agent._merge_models(p, ["something-else", "other"])
+    assert kept == p["models"] and removed == [], "a full mismatch keeps the configured models"
