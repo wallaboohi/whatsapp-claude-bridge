@@ -277,6 +277,48 @@ def token_cap(message, req):
     return int(m.group(1)) if m and int(m.group(1)) < sent else None
 
 
+EXHAUSTED = {}  # (provider, upstream model) -> (until, message): a daily quota that is used up is answered here, without another request
+
+
+def quota_detail(raw):
+    """(message, seconds until it returns, is it a daily quota) of an upstream quota error, from the structured details Google sends
+    (quotaId / quotaValue / model / retryDelay); ("", 0, False) when there are none. Owner 21.11: Gemini's 3-flash free tier is 20
+    requests PER DAY per model, and the agent only ever saw "Resource has been exhausted" and called it "rate"."""
+    ids = re.findall(r'"quotaId"\s*:\s*"([^"]+)"', raw or "")
+    if not ids:
+        return "", 0, False
+    qid = ids[0]
+    val = (re.findall(r'"quotaValue"\s*:\s*"([^"]+)"', raw) or [""])[0]
+    model = (re.findall(r'"model"\s*:\s*"([^"]+)"', raw) or [""])[0]
+    unit = ("requests per day" if "RequestsPerDay" in qid else "requests per minute" if "RequestsPerMinute" in qid
+            else "input tokens per minute" if "InputTokensPerMinute" in qid or "InputTokensPerModelPerMinute" in qid
+            else "input tokens per day" if "TokensPerDay" in qid else qid)
+    daily = "PerDay" in qid
+    secs = 0
+    m = re.search(r'"retryDelay"\s*:\s*"(?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?"', raw or "")
+    if m:
+        secs = int(m.group(1) or 0) * 3600 + int(m.group(2) or 0) * 60 + int(float(m.group(3) or 0))
+    return (f"{'You exhausted your daily quota' if daily else 'Rate limit'}: {val} {unit}" + (f" for {model}" if model else "")
+            + " (free tier)" + (f". {retry_text(secs)}" if secs else "")), secs, daily
+
+
+def retry_text(secs):
+    secs = max(0, int(secs))
+    h, m = secs // 3600, (secs % 3600) // 60
+    return f"retry in {h}h{m}m" if h else f"retry in {max(1, m)}m"
+
+
+def is_quota_ping(body):
+    """Claude Code asks its API once at every start with a single message "quota" and max_tokens 1 (its own check that the key works).
+    It is answered here: a request to the provider that says nothing, and one of the 20 a day of a free model."""
+    msgs = body.get("messages") or []
+    if len(msgs) != 1 or msgs[0].get("role") != "user" or body.get("tools") or int(body.get("max_tokens") or 0) > 1:
+        return False
+    c = msgs[0].get("content")
+    text = c if isinstance(c, str) else "".join(b.get("text", "") for b in c or [] if isinstance(b, dict))
+    return text.strip().lower() == "quota"
+
+
 def upstream_message(raw, fallback=""):
     """The human message of an upstream error body: a dict, a one-item list (Gemini) or plain text."""
     try:
@@ -369,6 +411,15 @@ class Handler(BaseHTTPRequestHandler):
         if rest != "v1/messages":
             return self._json(404, error_body(404, "not found"))
         req = to_openai(body, p)
+        if is_quota_ping(body):
+            proxy_log("local", name, req, 200, "Claude Code's start-up \"quota\" ping answered here, no request to the provider")
+            return self._json(200, {"id": "msg_local_ping", "type": "message", "role": "assistant", "model": body.get("model") or req["model"],
+                                    "content": [{"type": "text", "text": "ok"}], "stop_reason": "max_tokens", "stop_sequence": None,
+                                    "usage": {"input_tokens": 1, "output_tokens": 1}})
+        used_up = EXHAUSTED.get((name, req.get("model")))
+        if used_up and used_up[0] > time.time():
+            proxy_log("local", name, req, 429, "daily quota already used up: answered here, no request to the provider")
+            return self._json(429, error_body(429, used_up[1].split(". retry in")[0] + ". " + retry_text(used_up[0] - time.time())))
         if os.environ.get("OAI_PROXY_DEBUG"):  # shape of the conversation only: roles, and the first characters of a tool result
             print("   <-", [(m["role"], (m.get("content") or "")[:60] if m["role"] == "tool" else len(str(m.get("content") or ""))) for m in req["messages"]][-4:], flush=True)
         key = read_key(p)
@@ -385,6 +436,12 @@ class Handler(BaseHTTPRequestHandler):
                 raw_err = e.read().decode("utf-8", "replace")
                 msg = upstream_message(raw_err, e.reason)
                 proxy_log("ERR", name, req, e.code, raw_err)
+                if e.code in QUOTA_CODES:
+                    detail, secs, daily = quota_detail(raw_err)
+                    if detail:
+                        msg = detail + " | " + msg
+                        if daily and secs and not (key2 and hdr["Authorization"] != "Bearer " + key2):
+                            EXHAUSTED[(name, req.get("model"))] = (time.time() + secs, detail)
                 if e.code in QUOTA_CODES and key2 and hdr["Authorization"] != "Bearer " + key2:
                     hdr["Authorization"] = "Bearer " + key2  # owner 17.11 22:31: the first account's quota is out, the second account answers
                     continue

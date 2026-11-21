@@ -698,3 +698,19 @@ def test_provider_list_is_shown_from_kept_checks_with_the_time_on_top(agent, mon
         _t.sleep(0.05)
     assert len(calls) > n, "and a new check ran in the background"
     agent.CHECK_CACHE.clear()
+
+
+def test_context_for_the_hosted_ai_has_no_bridge_notices_or_commands(agent):
+    """Owner 21.11: the bridge's own messages (reply mark: working, back up, provider list, quota notices) and the owner's slash commands are
+    not conversation and are not sent to a paid or rate-limited AI; the owner's words and the AI's answers are."""
+    agent = agent[0]
+    ai = "*שאלה?* *━━━━━━━ ✦ ━━━━━━━* _ספק_ גמיני תשובה"
+    assert agent.pack_speaker("🤖 _⏳ מבצע את הפקודה /ספק…_", 1) == ""
+    assert agent.pack_speaker("🤖 ✅ *עליתי מחדש* שעה 11:26", 1) == ""
+    assert agent.pack_speaker("/ספק 3", 1) == "" and agent.pack_speaker("/בדוק מענה", 1) == ""
+    assert agent.pack_speaker("🗑️ (ההודעה נמחקה)", 1) == ""
+    assert agent.pack_speaker("🤖 כן. המקרא קיים בקובץ agent/emoji_legend.md", 1) == "הבינה"  # an AI answer with the reply mark stays
+    assert agent.pack_speaker("🤖 קיבלתי את ההודעה שלך 🙏 היא בטיפול.", 1) == ""
+    assert agent.pack_speaker("מי מולי? איזה מודל?", 1) == "הבעלים"
+    assert agent.pack_speaker(ai, 1) == "הבינה"
+    assert agent.pack_speaker("שלום מריטה", 0) == "אחר"

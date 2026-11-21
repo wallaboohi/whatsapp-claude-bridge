@@ -19,7 +19,7 @@ def test_a_fresh_session_gets_the_conversation_and_the_way_to_read_more(agent, m
     monkeypatch.setattr(mod, "handoff_path", lambda chat: str(tmp_path / "handoff.md"))
     (tmp_path / "handoff.md").write_text("סיכום: דיברנו על המנוע החלופי", encoding="utf-8")
     c = mod.PRIMARY
-    _fake_messages(mod, monkeypatch, [("1", c, "me", "מה המצב של הגשר?", "2026-11-14 08:01:00", 1), ("2", c, "me", "🤖 _הגשר תקין, גרסה 1.1.1_", "2026-11-14 08:01:30", 1),
+    _fake_messages(mod, monkeypatch, [("1", c, "me", "מה המצב של הגשר?", "2026-11-14 08:01:00", 1), ("2", c, "me", "🤖 הגשר תקין, גרסה 1.1.1", "2026-11-14 08:01:30", 1),
                                       ("3", "other@g.us", "x", "הודעה מקבוצה אחרת", "2026-11-14 08:02:00", 0)])
     pack = mod.conversation_pack(c)
     assert "סיכום: דיברנו על המנוע החלופי" in pack and "[08:01] הבעלים: מה המצב של הגשר?" in pack and "[08:01] הבינה: 🤖" in pack
@@ -53,7 +53,7 @@ def test_the_gap_note_brings_claude_up_to_date_after_a_failover(agent, monkeypat
     monkeypatch.setattr(mod, "PROVIDER_FILE", str(tmp_path / "provider.json"))
     monkeypatch.setattr(mod, "ENGINE_FILE", str(tmp_path / "engine.json"))
     c = mod.PRIMARY
-    _fake_messages(mod, monkeypatch, [("1", c, "me", "שאלה בזמן המכסה", "2026-11-14 08:01:00", 1), ("2", c, "me", "🤖 _תשובה מהבינה החלופית_", "2026-11-14 08:02:00", 1)])
+    _fake_messages(mod, monkeypatch, [("1", c, "me", "שאלה בזמן המכסה", "2026-11-14 08:01:00", 1), ("2", c, "me", "🤖 תשובה מהבינה החלופית", "2026-11-14 08:02:00", 1)])
     seen = []
     monkeypatch.setattr(mod, "_run_auto", lambda prompt, *a, **k: seen.append(prompt) or {"result": "ok", "session_id": "s1"})
     monkeypatch.setattr(mod, "failover_target", lambda: None)

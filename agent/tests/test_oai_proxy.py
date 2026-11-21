@@ -90,7 +90,13 @@ def proxy(tmp_path, monkeypatch):
             seen["auth"] = self.headers.get("Authorization")
             req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             seen["req"] = req
-            if seen.get("quota") and seen["auth"] in seen["quota"]:
+            seen["calls"] = seen.get("calls", 0) + 1
+            if seen.get("daily"):
+                raw = json.dumps([{"error": {"code": 429, "message": "Resource has been exhausted", "status": "RESOURCE_EXHAUSTED", "details": [
+                    {"@type": "type.googleapis.com/google.rpc.QuotaFailure", "violations": [{"quotaMetric": "m", "quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier", "quotaDimensions": {"model": "gemini-3-flash"}, "quotaValue": "20"}]},
+                    {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "79188s"}]}}]).encode()
+                self.send_response(429)
+            elif seen.get("quota") and seen["auth"] in seen["quota"]:
                 raw = json.dumps({"error": {"message": "rate limit"}}).encode()
                 self.send_response(429)
             elif seen.get("fail"):
@@ -226,3 +232,34 @@ def test_the_proxy_logs_request_size_and_the_upstream_error_but_never_the_prompt
     assert "ERR gemini" in text and "status=429" in text and "quotaValue" in text and "messages=2" in text and "tools=3" in text
     assert "est_input_tokens=" in text and "ok  gemini" in text.replace("ok ", "ok  ", 1) or "ok  gemini" in text
     assert "SECRET PROMPT TEXT" not in text, "the prompt is never written"
+
+
+def test_gemini_daily_quota_is_told_as_a_daily_quota_and_not_asked_again(proxy):
+    """Owner 21.11: Gemini 3-flash free tier = 20 requests PER DAY per model; the agent only saw "Resource has been exhausted" and called it
+    "rate" (15 minutes). The message now says what ran out and when it returns, and a used-up model is answered here, not asked again."""
+    base, seen = proxy
+    seen["daily"] = True
+    body = {"model": "claude-x", "max_tokens": 5, "messages": [{"role": "user", "content": "ping"}]}
+    st, raw = _post(base + "/p/t/v1/messages", body)
+    msg = json.loads(raw)["error"]["message"]
+    assert st == 429 and "daily quota" in msg and "20 requests per day" in msg and "gemini-3-flash" in msg and "retry in 21h59m" in msg, msg
+    calls = seen["calls"]
+    st, raw = _post(base + "/p/t/v1/messages", body)
+    assert st == 429 and seen["calls"] == calls, "the second request does not reach the provider"
+    assert "retry in 21h" in json.loads(raw)["error"]["message"]
+
+
+def test_claude_code_quota_ping_is_answered_here(proxy):
+    base, seen = proxy
+    ping = {"model": "claude-haiku", "max_tokens": 1, "messages": [{"role": "user", "content": "quota"}]}
+    st, raw = _post(base + "/p/t/v1/messages", ping)
+    assert st == 200 and json.loads(raw)["content"][0]["text"] == "ok" and seen.get("calls", 0) == 0
+    assert px.is_quota_ping(ping) and not px.is_quota_ping(dict(ping, max_tokens=100)) and not px.is_quota_ping(dict(ping, tools=[{"name": "x"}]))
+    assert not px.is_quota_ping({"max_tokens": 1, "messages": [{"role": "user", "content": "quota please"}]})
+
+
+def test_per_minute_token_quota_is_told_as_a_rate_limit():
+    raw = '[{"error": {"code": 429, "details": [{"violations": [{"quotaId": "GenerateContentInputTokensPerModelPerMinute-FreeTier", "quotaValue": "250000"}]}]}}]'
+    text, secs, daily = px.quota_detail(raw)
+    assert "Rate limit" in text and "250000 input tokens per minute" in text and not daily and secs == 0
+    assert px.quota_detail("plain text") == ("", 0, False)

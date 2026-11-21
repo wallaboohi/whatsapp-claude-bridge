@@ -4772,6 +4772,26 @@ def engine_endpoint(name, model=None):
     return None
 
 
+BRIDGE_NOTICE_RE = re.compile(r"^(_|[✅📝🛣🔥⏳⏸▶⚠📎📋🤖🔀🔌🕐🔧🔁🖥💻📅📥📤🔄⛔🔎📊⚙🔖]|\{|קיבלתי את ההודעה שלך)")
+
+
+def pack_speaker(text, mine):
+    """Who said it, for the context that goes to the hosted AI; "" = the message is not sent to it. Owner 21.11: the bridge's own notices
+    (after the reply mark: an italic line, or one that opens with a status symbol: "⏳ working", "✅ back up", the provider list, quota and
+    status lines; in 3 days 1291 of the 1351 messages with the mark, 2.8M characters, the rest are AI answers) and the owner's slash
+    commands are not conversation: sending them to a paid or rate-limited AI is waste, and misleads it. What stays: the owner's own words,
+    others' messages, and the AI's answers (the reply mark followed by plain text, or the header block)."""
+    t = (text or "").strip()
+    pre = (CFG.get("reply_prefix") or "🤖").strip()
+    if not t or re.match(r"^/\s*\S", t) or t == "🗑️ (ההודעה נמחקה)" or re.match(r"^\W*⚠️\s*מכסת\s", t):
+        return ""
+    if t.startswith(pre):
+        return "" if BRIDGE_NOTICE_RE.match(t[len(pre):].lstrip()) else "הבינה"
+    if mine and "━━━━━━━ ✦ ━━━━━━━" in t[:200]:
+        return "הבינה"
+    return "הבעלים" if mine else "אחר"
+
+
 def conversation_pack(chat, n=14):
     """Owner 14.11: what another engine's fresh session needs to continue this conversation: the hand-off note and the last messages of the chat
     (the owner's and the bridge's own answers), plus the way to read more on demand."""
@@ -4785,16 +4805,15 @@ def conversation_pack(chat, n=14):
     try:
         with mdb() as db:
             rows = db.execute("SELECT timestamp, is_from_me, content FROM messages WHERE chat_jid = ? AND coalesce(content, '') != '' ORDER BY timestamp DESC LIMIT ?",
-                              (chat, n)).fetchall()
+                              (chat, n * 8)).fetchall()
     except Exception:
         rows = []
-    pre = (CFG.get("reply_prefix") or "🤖").strip()
     lines = []
     for ts, mine, text in reversed(rows):
-        if re.match(r"^\W*⚠️\s*מכסת\s", text or ""):  # owner 20.11 16:03: another provider's quota warning is not this one's
-            continue
-        who = "הבינה" if (text or "").lstrip().startswith(pre) else ("הבעלים" if mine else "אחר")
-        lines.append(f"[{str(ts)[11:16]}] {who}: {' '.join((text or '').split())[:300]}")
+        who = pack_speaker(text, mine)
+        if who:
+            lines.append(f"[{str(ts)[11:16]}] {who}: {' '.join((text or '').split())[:300]}")
+    lines = lines[-n:]
     if lines:
         parts.append("ההודעות האחרונות בשיחה (מהישנה לחדשה):\n" + "\n".join(lines))
     parts.append("אם צריך עוד הקשר, קרא הודעות לפי דרישה בכלי הווצאפ (list_messages, search_all, get_message_context). תשובתך לשיחה הזו נשלחת אוטומטית, אז אל תשלח אותה בעצמך. הודעה לאדם או לקבוצה אחרת: רק דרך send_message, שיוצר טיוטה עם כרטיס אישור, ורק כשיקיר ביקש (agent/home/AI-KNOWLEDGE.md).")
