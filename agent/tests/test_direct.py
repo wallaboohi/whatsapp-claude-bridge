@@ -214,3 +214,23 @@ def test_a_used_up_daily_quota_is_skipped_until_the_providers_own_reset(provider
     with pytest.raises(bd.DirectError):
         bd.run("gemini", p, "", "m1", "", "hi", mcp=FakeMcp())
     assert bd.exhausted_until("gemini", "m1") == 0, "a per-minute limit is not a daily quota"
+
+
+def test_every_account_of_a_provider_is_used_in_turn(provider, box, monkeypatch):
+    """Owner 21.11 20:40 ("add the keys"): one account's refused key or used-up daily quota moves the same request to the next one."""
+    p, state = provider
+    (box / "secrets").mkdir(exist_ok=True)
+    p = dict(p, key_file="g.key")
+    for i, name in enumerate(("g.key", "g.key2", "g.key3")):
+        (box / "secrets" / name).write_text(f"K{i + 1}", encoding="utf-8")
+    keys = bd.keys_for(p)
+    assert keys == ["K1", "K2", "K3"]
+    daily = {"error": {"message": "requests per day limit exceeded", "details": [{"retryDelay": "3600s"}]}}
+    state["replies"] = [(401, {"error": {"message": "bad key"}}, {}), (429, daily, {}), (200, _answer("ok"), {})]
+    assert bd.run("gemini", p, keys, "m1", "", "hi", mcp=FakeMcp())["text"] == "ok"
+    assert [h["Authorization"] for h in state["headers"]] == ["Bearer K1", "Bearer K2", "Bearer K3"]
+    assert bd.exhausted_until("gemini", "m1", 3) == 0, "one account out is not the model out"
+    state["replies"] = [(429, {"error": {"message": "Rate limit: tokens per minute"}}, {})]
+    with pytest.raises(bd.DirectError):
+        bd.run("gemini", p, keys, "m1", "", "hi", mcp=FakeMcp())
+    assert state["headers"][-1]["Authorization"] == "Bearer K1", "a per-minute limit does not burn the other accounts"

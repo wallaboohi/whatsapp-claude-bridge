@@ -844,7 +844,7 @@ def test_a_model_whose_daily_quota_is_out_is_skipped_until_its_reset(agent, monk
     monkeypatch.setattr(agent, "providers", lambda: {"g": p})
     monkeypatch.setattr(agent, "live_valid_model", lambda n, m, force=False: m)
     monkeypatch.setattr(agent, "group_prompt", lambda chat: "")
-    monkeypatch.setattr(bd, "exhausted_until", lambda name, model: 9e9 if model == "pro3" else 0)
+    monkeypatch.setattr(bd, "exhausted_until", lambda name, model, accounts=None: 9e9 if model == "pro3" else 0)
     agent.kv_set("last_good_model:g", "lite")
     tried = []
     monkeypatch.setattr(bd, "run", lambda name, prov, key, model, *a, **k: tried.append(model) or {"text": "ok", "in": 1, "out": 1, "tools": []})

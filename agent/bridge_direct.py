@@ -497,6 +497,30 @@ def _base(p):
     return base
 
 
+def keys_for(p, token=""):
+    """Every account key of a provider, in order: secrets/<key_file>, then <key_file>2, 3 ... (owner 21.11: "add the keys"; one
+    account's used-up quota or refused key moves the request to the next account instead of stopping)."""
+    kf = p.get("key_file")
+    out = []
+    if kf:
+        for i in range(1, 10):
+            path = os.path.join(ROOT, "secrets", kf + ("" if i == 1 else str(i)))
+            try:
+                k = open(path, encoding="utf-8").read().strip()
+            except OSError:
+                continue
+            if k and k not in out:
+                out.append(k)
+    if token and token not in out:
+        out.append(token)
+    return out or [""]
+
+
+def _key_moves_on(code, raw):
+    """True when another account may answer: the key refused (401/403), no balance (402), or a daily quota used up."""
+    return code in (401, 402, 403) or (code == 429 and _daily_until(raw) is not None)
+
+
 def _retry_seconds(headers, body):
     ra = (headers or {}).get("retry-after") or (headers or {}).get("Retry-After")
     if ra and str(ra).strip().isdigit():
@@ -527,14 +551,18 @@ def _exhausted_file(name):
     return os.path.join(provider_dir(name), "exhausted.json")
 
 
-def exhausted_until(name, model):
+def exhausted_until(name, model, accounts=None):
     """Owner 21.11 18:45: a model whose daily quota the provider said is used up is skipped only until the time the provider gave
-    (never removed). 0 = usable."""
+    (never removed). With several accounts it is skipped only when every account's quota is out. 0 = usable."""
     try:
-        until = float(json.load(open(_exhausted_file(name), encoding="utf-8")).get(model) or 0)
+        d = json.load(open(_exhausted_file(name), encoding="utf-8"))
     except (OSError, ValueError):
         return 0
-    return until if until > time.time() else 0
+    n = accounts or max(1, len([k for k in d if k.startswith(f"{model}#")]) or 1)
+    times = [float(d.get(f"{model}#{i}") or d.get(model if i == 0 else "") or 0) for i in range(n)]
+    if not times or min(times) <= time.time():
+        return 0
+    return min(times)
 
 
 def _note_exhausted(name, model, until):
@@ -550,7 +578,24 @@ def _note_exhausted(name, model, until):
 
 
 def _post(name, p, key, body, timeout):
-    """One request; one more only when the provider itself says when (retry-after / retryDelay up to 60 s)."""
+    """One request; one more only when the provider itself says when (retry-after / retryDelay up to 60 s). `key` may be a list of the
+    provider's account keys: when one account's key is refused or its daily quota is out, the next account gets the same request."""
+    keys = key if isinstance(key, (list, tuple)) else [key]
+    last = None
+    for i, k in enumerate(keys):
+        try:
+            return _post_one(name, p, k, body, timeout, i)
+        except DirectError as e:
+            last = e
+            if i + 1 < len(keys) and _key_moves_on(e.code, e.raw):
+                _append(os.path.join(provider_dir(name), "requests.log"), {"at": _now(), "model": body.get("model"),
+                        "next_account": i + 2, "why": e.code})
+                continue
+            raise
+    raise last or DirectError(0, "no key")
+
+
+def _post_one(name, p, key, body, timeout, key_index=0):
     url = _base(p) + "/chat/completions"
     hdr = {"Content-Type": "application/json", "User-Agent": UA}
     if key:
@@ -573,7 +618,7 @@ def _post(name, p, key, body, timeout):
             if e.code == 429:
                 until = _daily_until(raw)
                 if until:
-                    _note_exhausted(name, body.get("model"), until)
+                    _note_exhausted(name, f"{body.get('model')}#{key_index}", until)
                     raise DirectError(e.code, raw)
             if e.code == 503 and wait is None:
                 wait = BUSY_RETRY_SEC

@@ -5642,9 +5642,10 @@ def _run_direct(name, p, prompt, model, chat, on_stage, timeout):
     import bridge_direct as bd
     m = live_valid_model(name, model or last_good_model(name, p))
     probe = getattr(_ctx, "probe", False)
-    if bd.exhausted_until(name, m) and not probe:  # owner 21.11 18:45: its daily quota is out until the provider's own reset time
+    keys = bd.keys_for(p, p.get("token") or "")  # owner 21.11: every account of the provider, one after the other
+    if bd.exhausted_until(name, m, len(keys)) and not probe:  # owner 21.11 18:45: its daily quota is out until the provider's own reset
         alt = live_valid_model(name, last_good_model(name, p))
-        if alt and alt != m and not bd.exhausted_until(name, alt):
+        if alt and alt != m and not bd.exhausted_until(name, alt, len(keys)):
             log("direct run:", name, m, "daily quota used up until", time.strftime("%H:%M", time.localtime(bd.exhausted_until(name, m))), "->", alt)
             m = alt
     system = "" if probe else ((group_prompt(chat) or "") + "\n\n" + HEBREW_RULE).strip()
@@ -5657,7 +5658,7 @@ def _run_direct(name, p, prompt, model, chat, on_stage, timeout):
             ev = {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": tool, "input": args}]}}
             on_stage(_stage_of(ev) or "🔧 מפעיל כלי", _detail_of(tool, args))
     t0 = time.time()
-    key = provider_key(p) or p.get("token") or ""
+    key = keys
     try:
         try:
             r = bd.run(name, p, key, m, system, user, on_tool=on_tool, timeout=timeout or 600)
@@ -5666,7 +5667,7 @@ def _run_direct(name, p, prompt, model, chat, on_stage, timeout):
             # one (same provider), instead of the owner sending it again (gemini-2.5-pro 404 four times, 18:00; a 503 / 429 that passed
             # half a minute later)
             fallback = live_valid_model(name, last_good_model(name, p))
-            if not fallback or fallback == m or probe or bd.exhausted_until(name, fallback):
+            if not fallback or fallback == m or probe or bd.exhausted_until(name, fallback, len(keys)):
                 raise
             log("direct run failed on", name, m, "-> once more on the last model that answered:", fallback, "|", e.raw[:160])
             if on_stage:
