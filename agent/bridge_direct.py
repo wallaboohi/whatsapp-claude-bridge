@@ -601,12 +601,21 @@ def probe(name, p, key, model, text, max_tokens=200, timeout=90):
     return ok, "" if ok else "the answer had no content"
 
 
+SUMMARY_TEMPLATE = (
+    "כתוב תקציר זיכרון של השיחה שלמטה, בעברית, בלי אייקונים ובלי עיצוב, עד 20 שורות, כדי שבינה אחרת תמשיך ממנו. אם למעלה יש סיכום קודם — "
+    "מזג אותו (הזיכרון מצטבר, לא מתחיל מחדש). מלא רק סעיפים שיש להם תוכן, בסדר הזה: "
+    "1) כותרת: התאריך וטווח השעות שהתקציר מכסה. 2) נושא ומטרה: שורה אחת. 3) החלטות של יקיר, כל אחת עם השעה. "
+    "4) מה בוצע: קבצים, פקודות, שינויים — בשם מדויק. 5) פתוח והצעד הבא. 6) שאלות שהבינה שאלה ויקיר עוד לא ענה. "
+    "7) התחייבויות של הבינה שעוד לא בוצעו. 8) תקלות שקרו ומה מצבן. 9) מה ממתין לאישור של יקיר (טיוטות, פעולות). "
+    "10) העדפות ותיקונים שיקיר נתן. 11) עובדות מדויקות — שמות, מספרים, נתיבים, מזהים — בציטוט, לא בפרפרזה. 12) מה אסור לעשות. "
+    "ליד כל טענה כתוב (נבדק) או (לא נבדק). רק התקציר, בלי הקדמה.")
+
+
 def summarize(name, p, key, model, text, timeout=120):
     """A short summary of the conversation by the provider itself (no tools): the memory a provider without its own session keeps."""
     field = (p.get("upstream") or {}).get("max_tokens_field") or "max_tokens"
-    body = {"model": model, field: 900, "messages": [
-        {"role": "system", "content": "סכם בעברית, עד 12 שורות, את השיחה שלמטה כדי שבינה אחרת תוכל להמשיך אותה: מה יקיר ביקש, מה הוחלט, "
-                                      "מה נעשה, מה עוד פתוח, והעדפות שלו שעלו. רק הסיכום, בלי הקדמה."},
+    body = {"model": model, field: 1600, "messages": [
+        {"role": "system", "content": SUMMARY_TEMPLATE},
         {"role": "user", "content": text}]}
     out = _post(name, p, key, body, timeout)
     return (((out.get("choices") or [{}])[0].get("message")) or {}).get("content", "").strip()

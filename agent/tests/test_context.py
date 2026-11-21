@@ -22,7 +22,7 @@ def test_a_fresh_session_gets_the_conversation_and_the_way_to_read_more(agent, m
     _fake_messages(mod, monkeypatch, [("1", c, "me", "מה המצב של הגשר?", "2026-11-14 08:01:00", 1), ("2", c, "me", "🤖 הגשר תקין, גרסה 1.1.1", "2026-11-14 08:01:30", 1),
                                       ("3", "other@g.us", "x", "הודעה מקבוצה אחרת", "2026-11-14 08:02:00", 0)])
     pack = mod.conversation_pack(c)
-    assert "סיכום: דיברנו על המנוע החלופי" in pack and "[08:01] הבעלים: מה המצב של הגשר?" in pack and "[08:01] הבינה: 🤖" in pack
+    assert "סיכום: דיברנו על המנוע החלופי" in pack and "[08:01] הבעלים: מה המצב של הגשר?" in pack and "[08:01] הבינה: הגשר תקין, גרסה 1.1.1" in pack  # owner 21.11: the memory holds no icons
     identity = mod.group_prompt(c)
     assert f'קבוצת בדיקה" (מזהה: {c}' in identity and "get_group_info" in identity and "set_group_name" in identity
     assert "הודעה מקבוצה אחרת" not in pack  # only this conversation

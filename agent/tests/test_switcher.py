@@ -908,3 +908,16 @@ def test_a_cli_provider_gets_the_bridge_way_rules_as_contents_with_a_file(agent,
     assert "תמיד עברית" in text and "1. שמות, לא מספרים" in text and "בלי מספרי טלפון" not in text and "הקבוצה הנוכחית" in text
     path = text.split("בקובץ ")[1].split(":")[0] + ":" + text.split("בקובץ ")[1].split(":")[1]
     assert "בלי מספרי טלפון" in open(path.strip(), encoding="utf-8").read() and "MCP 'whatsapp'" in text
+
+
+def test_the_answer_and_the_memory_hold_no_speaker_line_no_quote_and_no_decoration(agent):
+    """Owner 21.11 19:15: the process message already holds his message, the process and the answer: no "🗣️ מדבר" line and no quote of
+    his message in the answer (every provider), and the memory has no icons, markers, nudges ("?", ".") or repeated questions."""
+    agent = agent[0]
+    ans = "🗣️ מדבר: ויוי · 🏠 מקומי · במודל gemini\n\n\"מה מצב הגשר?\"\n\nהגשר מחובר ✅"
+    assert agent.clean_answer(ans, "מה מצב הגשר?") == "הגשר מחובר ✅"
+    assert agent.clean_answer("מה מצב הגשר ומה עוד צריך לבדוק בו היום", "מה מצב הגשר?").startswith("מה מצב הגשר ומה"), "a real answer stays"
+    assert agent.tidy("*שלום* _עולם_ ✅ 🧠") == "שלום עולם"
+    import bridge_direct as bd
+    for part in ("מזג", "החלטות של יקיר", "שאלות שהבינה שאלה", "התחייבויות", "תקלות", "ממתין לאישור", "(נבדק)", "בלי אייקונים"):
+        assert part in bd.SUMMARY_TEMPLATE

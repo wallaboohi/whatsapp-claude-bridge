@@ -4819,6 +4819,29 @@ BRIDGE_NOTICE_RE = re.compile(r"^(_|[✅📝🛣🔥⏳⏸▶⚠📎📋🤖🔀
 
 
 EXCHANGE_LINE = "━━━━━━━ ✦ ━━━━━━━"
+SPEAKER_RX = re.compile(r"^\W*🗣\S*\s*\*?מדבר")
+DECOR_RX = re.compile("[\u200e\u200f*_~`\ufe0f\u2600-\u27bf\u2190-\u21ff\u2b00-\u2bff\U0001f000-\U0001faff]")
+
+
+def clean_answer(answer, question=""):
+    """Owner 21.11 19:15: the process message already holds his message, the process and the answer: the answer does not open with a
+    "🗣️ מדבר" line or with a quote of his own message (every provider; also when a provider does not follow the rule)."""
+    lines = (answer or "").strip().splitlines()
+    while lines and (not lines[0].strip() or SPEAKER_RX.match(lines[0].strip())):
+        lines.pop(0)
+    qn = re.sub(r"[\W_]+", "", question or "")
+    if lines and len(qn) > 3:
+        first = re.sub(r"[\W_]+", "", lines[0])
+        if first and (first == qn or (len(first) >= 8 and first in qn and len(first) >= len(qn) * 0.8)):
+            lines.pop(0)
+            while lines and not lines[0].strip():
+                lines.pop(0)
+    return "\n".join(lines).strip()
+
+
+def tidy(text):
+    """Memory without decoration: no WhatsApp markers, direction marks or icons (owner 21.11 19:15)."""
+    return " ".join(DECOR_RX.sub(" ", text or "").split())
 
 
 def split_exchange(text):
@@ -4832,7 +4855,8 @@ def split_exchange(text):
 
     def clean(s):
         return " ".join(re.sub(r"[\u200e\u200f_*]|🤖", " ", s).split())
-    return clean(question), clean(answer)
+    # the answer keeps its lines, so a first line that only quotes the owner's message can still be told apart (clean_answer)
+    return clean(question), "\n".join(clean(l) for l in answer.splitlines()).strip()
 
 
 def pack_speaker(text, mine):
@@ -4868,17 +4892,29 @@ def conversation_pack(chat, n=15):
                               (chat, n * 8)).fetchall()
     except Exception:
         rows = []
-    entries = []
+    entries, last_q = [], ""
     for ts, mine, text in reversed(rows):
         hhmm = str(ts)[11:16]
         ex = split_exchange(text) if mine else None
         if ex:
             q, a = ex
+            a = clean_answer(a, q)
+            if "━━━" in a:  # an example (a whole status message) inside the answer: its place, not its rows
+                a = a.split("━━━", 1)[0].strip(" .\n") + " [נשלחה דוגמה]"
+            q, a = tidy(q), tidy(a)
+            if q in ("?", ".", "") or q == last_q:
+                q = ""
+            last_q = q or last_q
             entries.append("\n".join(x for x in ((f"[{hhmm}] הבעלים: {q[:300]}" if q else ""), (f"[{hhmm}] הבינה: {a[:700]}" if a else "")) if x))
             continue
         who = pack_speaker(text, mine)
         if who:
-            entries.append(f"[{hhmm}] {who}: {' '.join((text or '').split())[:300]}")
+            t = tidy(text)
+            if who == "הבעלים" and (t in ("?", ".", "??", "?.") or t == last_q):
+                continue  # a nudge or the same question sent again after a failure
+            if who == "הבעלים":
+                last_q = t
+            entries.append(f"[{hhmm}] {who}: {t[:300]}")
     lines = [e for e in entries[-n:] if e]
     if lines:
         parts.append("ההודעות האחרונות בשיחה (מהישנה לחדשה):\n" + "\n".join(lines))
@@ -5456,7 +5492,7 @@ def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
     if (res.get("result") or "").strip() and not getattr(_ctx, "probe", False):
         # owner 21.11 19:00: a CLI's own session also ends (daily, or after session_max_runs); its summary is written every 14 answers
         note_answer_for_summary(chat, name, p, model, summarizer=lambda text: (_run_cli_core(
-            name, p, CLI_SUMMARY_PROMPT + "\n\n" + text, model, None, chat, None, 300, None) or {}).get("result", "").strip())
+            name, p, _cli_summary_prompt() + "\n\n" + text, model, None, chat, None, 300, None) or {}).get("result", "").strip())
     if sess is not None:
         new_id = res.get("cli_session") or (sess["id"] if spec.get("id") == "preset" else None)
         if new_id:
@@ -5529,8 +5565,9 @@ def _codex_stage(event):
 
 
 SUMMARY_EVERY = 14
-CLI_SUMMARY_PROMPT = ("סכם בעברית, עד 12 שורות, את השיחה שלמטה כדי שבינה אחרת תוכל להמשיך אותה: מה יקיר ביקש, מה הוחלט, מה נעשה, "
-                      "מה עוד פתוח, והעדפות שלו שעלו. רק הסיכום, בלי הקדמה, בלי כלים.")
+def _cli_summary_prompt():
+    import bridge_direct as bd
+    return bd.SUMMARY_TEMPLATE + " בלי כלים."
 
 
 def note_answer_for_summary(chat, name, p, model, summarizer=None):
@@ -7599,7 +7636,7 @@ class StatusMsg:
             send(self.chat, self._final())
 
     def _full(self, answer):
-        a = answer.strip()
+        a = clean_answer(answer, getattr(self, "source_content", "") or "")
         return self._final() + "\n_📝 *תשובה:*_\n" + (italic(a) if CFG.get("reply_italic", True) else a)
 
     def finalize(self, answer=None):
