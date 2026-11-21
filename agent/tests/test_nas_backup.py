@@ -21,16 +21,18 @@ def test_a_clean_code_copy_every_day_kept_thirty_days(tmp_path):
     note = nb.code_daily(str(tmp_path), today.isoformat())
     assert note.startswith("ok") and "1 older" in note
     names = sorted(os.listdir(folder))
-    assert names == sorted([f"{kept.isoformat()}.zip", f"{today.isoformat()}.zip", "notes.txt"]), "only dated zips over 30 days go"
-    with zipfile.ZipFile(folder / f"{today.isoformat()}.zip") as z:
+    new = [n for n in names if n.startswith(today.isoformat() + "-")]
+    assert len(new) == 1 and f"{kept.isoformat()}.zip" in names and "notes.txt" in names and f"{old.isoformat()}.zip" not in names
+    with zipfile.ZipFile(folder / new[0]) as z:
         files = z.namelist()
     assert "agent/agent.py" in files and not any(f.startswith("secrets/") for f in files), "only what git keeps"
 
 
-def test_a_full_image_every_seven_days(tmp_path):
+def test_one_full_image_every_seven_days(tmp_path):
     assert nb.full_due(str(tmp_path)), "none yet: due"
-    full = tmp_path / "full"
-    (full / (dt.date.today() - dt.timedelta(days=3)).isoformat()).mkdir(parents=True)
+    (tmp_path / "full").mkdir()
+    mark = tmp_path / "full" / "_updated.txt"
+    mark.write_text((dt.date.today() - dt.timedelta(days=3)).isoformat(), encoding="utf-8")
     assert not nb.full_due(str(tmp_path))
-    (full / (dt.date.today() - dt.timedelta(days=3)).isoformat()).rename(full / (dt.date.today() - dt.timedelta(days=7)).isoformat())
+    mark.write_text((dt.date.today() - dt.timedelta(days=7)).isoformat(), encoding="utf-8")
     assert nb.full_due(str(tmp_path))

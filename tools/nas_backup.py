@@ -2,11 +2,11 @@
 its content").
 
 Runs outside the agent (Task Scheduler, daily 02:30), so it works when the agent is down. The owner's rule (21.11 23:10):
-  every day   the code with its history (git push to "nas", a new dated branch, never forced) and a clean copy of the code
-              (git archive: only what git keeps) as <NAS>/<PC>/code-daily/<date>.zip — kept 30 days, the older zips deleted
-  every 7 days a full image, code included: <NAS>/<PC>/full/<date>/ = every file of the bridge folder (store / media, secrets,
+  every 12 h  the code with its history (git push to "nas", a new dated branch, never forced) and a clean copy of the code
+              (git archive: only what git keeps) as <NAS>/<PC>/code-daily/<date>-<HHMM>.zip — kept 30 days, older ones deleted
+  every 7 days ONE full image, code included, updated in place: <NAS>/<PC>/full/image/ = every file of the bridge folder (store / media, secrets,
               config, agent/home, provider folders ...), a consistent copy of every SQLite database (sqlite backup API) and the
-              bridge's data outside its folder (_outside: the CLIs' settings, the bridge's Claude memory). Full images are kept.
+              bridge's data outside its folder (_outside: the CLIs' settings, the bridge's Claude memory).
 The result: agent/nas_backup.log and agent/nas_backup_status.json (the agent reports a failure in the bridge-log group).
 
   python tools/nas_backup.py [--dest \\\\host\\share\\dir] [--full]
@@ -69,19 +69,19 @@ def snapshot_db(src, dst):
         a.close()
 
 
-def copy_tree(src, dst):
-    """robocopy /E (copy and update, never delete at the destination). Exit codes below 8 are success."""
-    xd = []
+def copy_tree(src, dst, mirror=False):
+    """robocopy /E (copy and update), or /MIR for the one full image (owner 22.11: it replaces itself). Below 8 is success."""
+    xd = ["/XD", "_outside"] if mirror else []
     for d in SKIP_DIRS:
         xd += ["/XD", d]
-    rc, out = run(["robocopy", src, dst, "/E", "/R:2", "/W:5", "/MT:8", "/NP", "/NFL", "/NDL", "/NJH",
+    rc, out = run(["robocopy", src, dst, "/MIR" if mirror else "/E", "/R:2", "/W:5", "/MT:8", "/NP", "/NFL", "/NDL", "/NJH",
                    "/XF", "*.db", "*.db-wal", "*.db-shm", "*.db-journal", *xd], timeout=7200)
     summary = " ".join(l.strip() for l in out.splitlines() if l.strip().startswith(("Dirs", "Files", "Bytes")))[:300]
     return rc < 8, f"robocopy {rc}: {summary}"
 
 
-CODE_KEEP_DAYS = 30  # owner 21.11 23:10: a clean code copy every day, kept 30 days, the older ones deleted
-FULL_EVERY_DAYS = 7  # owner 21.11 23:10: every 7 days everything, code included — a full image
+CODE_KEEP_DAYS = 30  # owner 21.11 23:10 / 22.11: a clean code copy every 12 hours, kept 30 days, the older ones deleted
+FULL_EVERY_DAYS = 7  # owner 22.11: every 7 days ONE full image (code included), updated in place
 
 
 def code_daily(base, day):
@@ -89,30 +89,29 @@ def code_daily(base, day):
     CODE_KEEP_DAYS are deleted (the owner's own rule; only this folder, only these dated zips)."""
     folder = os.path.join(base, "code-daily")
     os.makedirs(folder, exist_ok=True)
-    rc, out = run(["git", "archive", "--format=zip", "-o", os.path.join(folder, f"{day}.zip"), "HEAD"], timeout=600)
+    name = f"{day}-{dt.datetime.now():%H%M}.zip"  # twice a day
+    rc, out = run(["git", "archive", "--format=zip", "-o", os.path.join(folder, name), "HEAD"], timeout=600)
     if rc:
         return "failed: " + out.strip()[-200:]
     cut = dt.date.today() - dt.timedelta(days=CODE_KEEP_DAYS)
     gone = 0
-    for f in glob.glob(os.path.join(folder, "????-??-??.zip")):
+    for f in glob.glob(os.path.join(folder, "????-??-??*.zip")):
         try:
             if dt.date.fromisoformat(os.path.basename(f)[:10]) < cut:
                 os.remove(f)
                 gone += 1
         except (ValueError, OSError):
             pass
-    return f"ok ({day}.zip" + (f", {gone} older than {CODE_KEEP_DAYS} days deleted)" if gone else ")")
+    return f"ok ({name}" + (f", {gone} older than {CODE_KEEP_DAYS} days deleted)" if gone else ")")
 
 
 def full_due(base):
-    """True when the newest full image is FULL_EVERY_DAYS old or more (or there is none)."""
-    days = []
-    for d in glob.glob(os.path.join(base, "full", "????-??-??")):
-        try:
-            days.append(dt.date.fromisoformat(os.path.basename(d)))
-        except ValueError:
-            pass
-    return not days or (dt.date.today() - max(days)).days >= FULL_EVERY_DAYS
+    """True when the one full image was last updated FULL_EVERY_DAYS ago or more (or never)."""
+    try:
+        last = dt.date.fromisoformat(open(os.path.join(base, "full", "_updated.txt"), encoding="utf-8").read().strip()[:10])
+    except (OSError, ValueError):
+        return True
+    return (dt.date.today() - last).days >= FULL_EVERY_DAYS
 
 
 def main(dest, force_full=False):
@@ -154,7 +153,7 @@ def main(dest, force_full=False):
         log("done in", status["seconds"], "s, ok:", status["ok"], "(no full image today)")
         return 0 if status["ok"] else 1
     # 3. every 7 days: the full image -> <base>/full/<day> (consistent database copies, every file, the data outside the folder)
-    full = os.path.join(base, "full", day)
+    full = os.path.join(base, "full", "image")  # one image, updated in place (owner 22.11)
     stage = tempfile.mkdtemp(prefix="yb-nas-")
     dbs = []
     for src in databases():
@@ -166,7 +165,7 @@ def main(dest, force_full=False):
             log("database copy failed:", rel, e)
     status["steps"]["databases"] = f"{len(dbs)} copied"
     log("databases:", ", ".join(dbs))
-    ok, note = copy_tree(ROOT, full)  # every file but the databases (copied consistently above) and rebuildable caches
+    ok, note = copy_tree(ROOT, full, mirror=True)  # the image = the folder now (files deleted here go there too)
     status["steps"]["files"] = note if ok else "failed: " + note
     log("files:", note)
     for rel in dbs:
@@ -186,6 +185,7 @@ def main(dest, force_full=False):
         extra += 1
     status["steps"]["outside"] = f"{extra} items"
     status["steps"]["full"] = full
+    open(os.path.join(base, "full", "_updated.txt"), "w", encoding="utf-8").write(day)
     shutil.rmtree(stage, ignore_errors=True)  # our own temporary copies
     status["ok"] = code_ok and ok and bool(dbs)
     status["seconds"] = int(time.time() - t0)
