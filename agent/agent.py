@@ -9483,6 +9483,16 @@ def remote_mkdirs_script(dirs):
             f"if(-not (Test-Path -LiteralPath $p -PathType Container)){{ Write-Error ('not a folder: ' + $p); exit 1 }} }}")
 
 
+def mkdirs_on_peer(alias, dirs, per_call=20):
+    """The folders on the other PC, in small groups: one PowerShell command per 20 paths. The laptop was missing hundreds of contact
+    folders and the one command with all of them failed with "The command line is too long" (Windows allows about 8000 characters
+    and the script travels base64 UTF-16 over ssh). Raises when a group fails."""
+    for i in range(0, len(dirs), per_call):
+        code, out, err = _ps_remote(alias, remote_mkdirs_script(dirs[i:i + per_call]))
+        if code:
+            raise RuntimeError("creating the backup folders failed: " + (err.strip() or out.strip())[-180:])
+
+
 def peer_backup_plan(local, remote, cap_bytes):
     """local: [(rel_path, size, mtime)], remote: set of rel paths (any slash style). Newest missing files first, up to
     cap_bytes. Returns (to_copy, skipped_count)."""
@@ -9547,9 +9557,7 @@ def peer_backup(names=None):
             if bydir:
                 dirs = [f"{dest}/media/{d}" for d in bydir if d]
                 if dirs:
-                    code, out, err = _ps_remote(alias, remote_mkdirs_script(dirs))
-                    if code:
-                        raise RuntimeError("creating the backup folders failed: " + (err.strip() or out.strip())[-180:])
+                    mkdirs_on_peer(alias, dirs)
             copied = nbytes = 0
             for d, rels in bydir.items():
                 for i in range(0, len(rels), 40):  # stay far below the Windows command-line limit

@@ -602,3 +602,28 @@ def test_the_backup_script_runs_in_powershell_for_a_file_in_the_way(agent, tmp_p
     assert squat.is_dir() and (base / "fresh").is_dir()
     moved = [p for p in base.iterdir() if p.name.startswith("972507720836@s.whatsapp.net.file-in-the-way-")]
     assert len(moved) == 1 and moved[0].read_bytes() == b"x" * 100, "the squatting file is kept, only moved"
+
+
+def test_the_backup_creates_the_folders_in_small_groups_that_fit_a_command_line(agent, monkeypatch):
+    import base64
+    mod, _ = agent
+    sent = []
+    monkeypatch.setattr(mod, "_ps_remote", lambda alias, script, timeout=180: sent.append(script) or (0, "", ""))
+    dirs = [f"C:/Users/walla/WhatsApp-Backup/peer-YB-PC-HW/media/97250{i:07d}@s.whatsapp.net" for i in range(400)]  # the laptop's situation
+    mod.mkdirs_on_peer("4-MINE", dirs)
+    assert len(sent) == 20, "400 folders in groups of 20"
+    for s in sent:
+        enc = base64.b64encode(("[Console]::OutputEncoding=[Text.Encoding]::UTF8;" + s).encode("utf-16-le")).decode()
+        assert len(enc) < 7500, "one command stays below the Windows command-line limit (about 8000)"
+    covered = [d for s in sent for d in dirs if f"'{d}'" in s]
+    assert covered == dirs, "every folder is in exactly one group, in order"
+
+
+def test_a_failed_group_stops_the_backup_with_the_reason(agent, monkeypatch):
+    mod, _ = agent
+    monkeypatch.setattr(mod, "_ps_remote", lambda alias, script, timeout=180: (1, "", "not a folder: X"))
+    try:
+        mod.mkdirs_on_peer("4-MINE", ["C:/a", "C:/b"])
+        raise AssertionError("must raise")
+    except RuntimeError as e:
+        assert "creating the backup folders failed" in str(e) and "not a folder" in str(e)
