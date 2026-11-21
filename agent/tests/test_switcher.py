@@ -714,3 +714,18 @@ def test_context_for_the_hosted_ai_has_no_bridge_notices_or_commands(agent):
     assert agent.pack_speaker("מי מולי? איזה מודל?", 1) == "הבעלים"
     assert agent.pack_speaker(ai, 1) == "הבינה"
     assert agent.pack_speaker("שלום מריטה", 0) == "אחר"
+
+
+def test_the_provider_list_and_availability_never_send_a_model_request(agent, monkeypatch):
+    """Owner 21.11: the list's check of a keyed provider behind the translator was a real request (Gemini 3-flash free = 20 a day).
+    The kept check of such a provider is built without any call; every other kind still goes through provider_check."""
+    agent = agent[0]
+    monkeypatch.setattr(agent, "providers", lambda: {
+        "g": {"kind": "anthropic", "base_url": "http://127.0.0.1:8799/p/g", "models": ["m1", "m2"], "key_file": "g.key", "token": "x"},
+        "o": {"kind": "anthropic", "base_url": "http://127.0.0.1:11434", "probe": "ollama", "models": ["a"], "token": "x"}})
+    monkeypatch.setattr(agent, "provider_ready", lambda n: True)
+    monkeypatch.setattr(agent, "anthropic_probe", lambda *a, **k: (_ for _ in ()).throw(AssertionError("a model request was sent")))
+    monkeypatch.setattr(agent, "provider_check", lambda n, prefer=None: {"ok": True, "detail": "plain", "models": []})
+    r = agent.quota_free_check("g")
+    assert r["ok"] and r["models"] == ["m1", "m2"] and "/בדוק מענה" in r["detail"]
+    assert agent.quota_free_check("o")["detail"] == "plain"

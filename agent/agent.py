@@ -3605,6 +3605,18 @@ CHECK_STALE_SEC = 90
 CHECK_REFRESHING = threading.Event()
 
 
+def quota_free_check(k):
+    """provider_check without a model call. provider_check of a keyed provider behind the translator sends a real one-message request (it
+    spends one of the day's requests: Gemini 3-flash free = 20 a day). The list and the availability command must never do that: those
+    providers are shown as "key saved, the real answer is tested only by /בדוק מענה", with their configured models."""
+    p = providers().get(k) or {}
+    if (p.get("kind") not in ("auto", "claude-remote", "claude", "anthropic-key", "opencode", "desktop-app", "cli") and p.get("probe") != "ollama"
+            and not p.get("free_list") and not (p.get("upstream") or {}).get("account_file") and p.get("models") and p.get("base_url")
+            and (p.get("token") or provider_key(p))):
+        return {"ok": provider_ready(k), "detail": "מפתח שמור · תגובה בפועל נבדקת רק ב-/בדוק מענה", "models": list(p.get("models") or [])}
+    return provider_check(k)
+
+
 def refresh_provider_checks():
     """Owner 21.11: /ספק took 8-15 s because it ran a live check of every provider one after the other (ssh to the laptop, the desktop apps,
     the CLIs). The checks now run side by side (4 at a time), their results are kept with the time, and the list is shown from them."""
@@ -3612,7 +3624,7 @@ def refresh_provider_checks():
 
     def one(k):
         try:
-            r = provider_check(k)
+            r = quota_free_check(k)
         except Exception as e:
             r = {"ok": False, "detail": f"הבדיקה נכשלה: {str(e)[:40]}", "models": []}
         with CHECK_LOCK:
@@ -3654,7 +3666,7 @@ def cached_check(k):
         hit = CHECK_CACHE.get(k)
     if hit:
         return hit[1]
-    r = provider_check(k)
+    r = quota_free_check(k)
     with CHECK_LOCK:
         CHECK_CACHE[k] = (time.time(), r)
     return r
