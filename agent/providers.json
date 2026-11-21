@@ -616,5 +616,33 @@
   "cost": "מנוי Cursor",
   "where": "local",
   "how": "אפליקציית Cursor AI Code Editor במחשב דרך tools/desktop_ai.py."
+ },
+ "ovhcloud": {
+  "label": "OVHcloud AI Endpoints · חינמי (בלי מפתח)",
+  "short": "OVHcloud",
+  "kind": "anthropic",
+  "base_url": "http://127.0.0.1:8799/p/ovhcloud",
+  "model": "DeepSeek-V4.1-Flash-1017",
+  "models": [
+   "gpt-oss-120b",
+   "DeepSeek-V4.1-Flash-1017",
+   "Qwen3.5-397B-A17B",
+   "Meta-Llama-3_3-70B-Instruct",
+   "Mistral-Small-3.2-24B-Instruct-2506",
+   "Qwen3.6-27B",
+   "gemma-4-26b-a4b",
+   "gpt-oss-20b"
+  ],
+  "upstream": {
+   "base": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
+  },
+  "aliases": [
+   "ovh",
+   "ovhcloud"
+  ],
+  "how": "OVHcloud AI Endpoints: בלי מפתח 2 בקשות לדקה לכל מודל (docs.ovhcloud.com, AI Endpoints capabilities). המפתח ב-secrets/ovhcloud.key נדחה 22.11 (not allowed on any tenant) — צריך פרויקט Public Cloud עם AI Endpoints.",
+  "cost": "חינם",
+  "where": "remote",
+  "keyless": true
  }
 }

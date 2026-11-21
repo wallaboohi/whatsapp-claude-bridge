@@ -3034,6 +3034,8 @@ def provider_check(name, prefer=None):
         ok = bool(opencode_bin())
         return {"ok": ok, "detail": "מותקן" if ok else "OpenCode לא מותקן במחשב", "models": live_ordered(name)}
     tok = p.get("token") or provider_key(p)
+    if not tok and p.get("keyless") and p.get("models"):  # owner 22.11: OVHcloud answers without a key (2 a minute per model)
+        return {"ok": True, "detail": "בלי מפתח (מכסה מוגבלת)", "models": list(p["models"])}
     if not tok:
         return {"ok": False, "detail": f"חסר מפתח: secrets/{p.get('key_file')}", "models": []}
     if p.get("free_list") == "openrouter":  # no call that spends quota: the live catalog is the list
