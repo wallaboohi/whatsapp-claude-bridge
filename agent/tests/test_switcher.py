@@ -742,3 +742,47 @@ def test_gemini_model_names_with_the_models_prefix_are_not_dropped(agent, monkey
         "gemini-flash-lite-latest", "gemini-2.5-pro"], "a TTS model is not a chat model"
     kept, added, removed = agent._merge_models(p, ["something-else", "other"])
     assert kept[:2] == p["models"] and removed == [] and added == ["something-else", "other"], "a full mismatch keeps the configured models first"
+
+
+def test_a_provider_with_an_upstream_is_run_by_the_bridge_itself(agent, monkeypatch):
+    """Owner 21.11: Gemini, Groq, Cloudflare, NVIDIA... go to bridge_direct: no Claude Code process, no translator check."""
+    agent = agent[0]
+    import bridge_direct as bd
+    p = {"kind": "anthropic", "upstream": {"base": "https://x/v1"}, "model": "m1", "short": "G"}
+    monkeypatch.setattr(agent, "providers", lambda: {"g": p, "claude": {"kind": "claude"}})
+    monkeypatch.setattr(agent, "active_provider", lambda *a, **k: ("g", None))
+    monkeypatch.setattr(agent, "translator_up", lambda *a, **k: (_ for _ in ()).throw(AssertionError("the translator is not asked")))
+    monkeypatch.setattr(agent, "live_valid_model", lambda n, m, force=False: m)
+    monkeypatch.setattr(agent, "group_prompt", lambda chat: "RULES")
+    monkeypatch.setattr(agent.subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no Claude Code process")))
+    got = {}
+    monkeypatch.setattr(bd, "run", lambda name, prov, key, model, system, user, on_tool=None, timeout=600, mcp=None:
+                        got.update(name=name, system=system, user=user) or {"text": "תשובה", "in": 10, "out": 2, "tools": []})
+    res = agent._run_claude("שאלה", None, None, 60, chat=agent.PRIMARY)
+    assert res["result"] == "תשובה" and got["name"] == "g" and "RULES" in got["system"] and "שאלה" in got["user"]
+    monkeypatch.setattr(bd, "run", lambda *a, **k: (_ for _ in ()).throw(bd.DirectError(429, "Rate limit: 8000 tokens per minute")))
+    import pytest as _pt
+    with _pt.raises(agent.ProviderDown) as e:
+        agent._run_claude("שאלה", None, None, 60, chat=agent.PRIMARY)
+    assert e.value.why == "rate"
+
+
+def test_a_restart_file_is_held_until_the_owner_says_restart(agent, monkeypatch):
+    """Owner 21.11: "a restart file only by my direct command" — an AI wrote restart.request by itself at 16:57 and was obeyed."""
+    agent = agent[0]
+    import os as _os
+    sent = []
+    monkeypatch.setattr(agent, "send", lambda chat, text, **k: sent.append(text) or True)
+    agent.RESTART_REQ.clear()
+    open(agent.RESTART_FILE, "w", encoding="utf-8").write("AI wants a restart")
+    try:
+        assert agent.restart_wanted() is None and not _os.path.exists(agent.RESTART_FILE)
+        assert _os.path.exists(agent.RESTART_FILE + ".held") and "AI wants a restart" in sent[-1] and "/הפעל מחדש" in sent[-1]
+        assert agent.restart_wanted() is None and len(sent) == 1, "asked once"
+        agent.RESTART_REQ.set()  # the owner's own /הפעל מחדש
+        assert agent.restart_wanted() == "/הפעל מחדש"
+    finally:
+        agent.RESTART_REQ.clear()
+        for f in (agent.RESTART_FILE, agent.RESTART_FILE + ".held"):
+            if _os.path.exists(f):
+                _os.remove(f)

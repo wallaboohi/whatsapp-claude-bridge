@@ -2278,9 +2278,10 @@ def test_a_dead_translator_is_not_four_dead_rungs(agent, monkeypatch):
     monkeypatch.setattr(mod, "reachable", lambda url, timeout=3: "8799" not in str(url))
     mod._translator.update(at=0.0, ok=False)
     assert mod.translator_url(mod.providers()["groq"]) and not mod.translator_up()
-    assert mod.auto_pick() == "groq"  # every rung behind the dead translator waits, and the first one fails at once
-    with pytest.raises(mod.ProviderDown):
-        mod.provider_env("groq")  # not after a network timeout
+    assert mod.auto_pick() == "groq"
+    # owner 21.11: Groq, Gemini, NVIDIA, Cloudflare are spoken to by the bridge itself (bridge_direct): a dead translator stops none of them
+    env, model = mod.provider_env("groq")
+    assert model == "openai/gpt-oss-120b" and "8799" not in env.get("ANTHROPIC_BASE_URL", "")
 
 
 def test_the_wait_after_a_failure_is_the_servers_own_reset(agent):
@@ -2347,7 +2348,8 @@ def test_auto_provider_env_and_check(agent, monkeypatch):
     _keys(mod, monkeypatch, "groq")
     monkeypatch.setattr(mod, "auto_pick", lambda skip=(): "groq")
     env, model = mod.provider_env("auto")
-    assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8799/p/groq" and model == "openai/gpt-oss-120b" and mod._ctx.provider_used == "groq"
+    # owner 21.11: no translator address any more: the bridge itself talks to Groq (bridge_direct)
+    assert "8799" not in env.get("ANTHROPIC_BASE_URL", "") and model == "openai/gpt-oss-120b" and mod._ctx.provider_used == "groq"
     monkeypatch.setattr(mod, "active_provider", lambda *a: ("auto", None))
     assert mod.ai_tag("opus").startswith("🗣️ מדבר: Groq")  # the tag names the provider that really ran
     monkeypatch.undo()

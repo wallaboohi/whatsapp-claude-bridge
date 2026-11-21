@@ -88,3 +88,6 @@ agent/emoji_legend_contexts.xlsx
 /tmp/
 
 agent/oai_proxy.log
+
+agent/providers/*/requests.log
+agent/providers/*/tools.log

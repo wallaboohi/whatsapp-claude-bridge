@@ -868,7 +868,8 @@ RESUME_RX = re.compile(r"ממשיך|אמשיך|נמשיך|בהודעה הבאה|
 def note_resume(chat, answer, started):
     """After an answer: if this run asked for a restart and left work, remember to continue it after the restart."""
     try:
-        if not os.path.exists(RESTART_FILE) or os.path.getmtime(RESTART_FILE) < started - 5:
+        rf = RESTART_FILE if os.path.exists(RESTART_FILE) else RESTART_FILE + ".held"  # owner 21.11: the request is held for his command
+        if not os.path.exists(rf) or os.path.getmtime(rf) < started - 5:
             return
         todo = ""
         if os.path.exists(CONTINUE_FILE):
@@ -2813,6 +2814,8 @@ def provider_env(name=None, model=None):
         if not opencode_bin():
             raise ProviderDown(name, "unreachable", 30)
         return dict(os.environ), model or p.get("model") or None
+    if p.get("kind") == "anthropic" and p.get("upstream"):  # owner 21.11: the bridge talks to it by itself (bridge_direct), no translator
+        return dict(os.environ), (model or p.get("model") or None)
     if p.get("kind") == "anthropic":
         m = model or p.get("model") or ""
         h = provider_host(p, m)
@@ -5478,6 +5481,36 @@ def _codex_stage(event):
     return None
 
 
+def _run_direct(name, p, prompt, model, chat, on_stage, timeout):
+    """Owner 21.11 (OWNER-SPEC 1-5, 14): the bridge itself talks to the provider. It sends the connection message (what the bridge is +
+    how to reach its tools), the bridge rules, the last 10 messages and this message; the provider reaches every bridge tool through
+    bridge_tools / bridge_call and keeps its own tools with save_tool. Returns a Claude-shaped result like the CLI runs."""
+    import bridge_direct as bd
+    m = live_valid_model(name, model or p.get("model"))
+    probe = getattr(_ctx, "probe", False)
+    system = "" if probe else ((group_prompt(chat) or "") + "\n\n" + HEBREW_RULE).strip()
+    user = (prompt if probe else conversation_pack(chat or PRIMARY) + "\n\n---\nההודעה הנוכחית (ענה עליה):\n" + prompt + HEBREW_TAIL)
+    if on_stage:
+        on_stage(f"🧠 {AI_HE.get(name) or p.get('short') or name} חושב", "")
+
+    def on_tool(tool, args):
+        if on_stage:
+            ev = {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": tool, "input": args}]}}
+            on_stage(_stage_of(ev) or "🔧 מפעיל כלי", _detail_of(tool, args))
+    t0 = time.time()
+    try:
+        r = bd.run(name, p, provider_key(p) or p.get("token") or "", m, system, user, on_tool=on_tool, timeout=timeout or 600)
+    except bd.DirectError as e:
+        reason, minutes = classify_down(e.raw) or (("unreachable", 5) if e.code == 0 else ("error", 15))
+        raise ProviderDown(name, reason, minutes, raw=e.raw[-600:]) from None
+    finally:
+        _ctx.run_seconds = time.time() - t0
+    if not r["text"]:
+        raise ProviderDown(name, "error", 15, raw="empty answer")
+    return {"type": "result", "result": r["text"], "is_error": False, "session_id": None,
+            "usage": {"input_tokens": r["in"], "output_tokens": r["out"]}, "total_cost_usd": 0, "model": m}
+
+
 def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat=None, tools=None, max_budget=None, stoppable=None, fork=False):
     """One headless Claude Code run; the prompt goes in on stdin (no command-line length limit, no cmd.exe quoting).
     tools="" = a restricted run: no tools and no MCP servers at all (for classifying other people's text)."""
@@ -5495,6 +5528,9 @@ def _run_claude(prompt, model, resume, timeout, on_stage=None, append=None, chat
     if (providers().get(getattr(_ctx, "provider_used", None)) or {}).get("kind") == "opencode" and not guest and tools != "":
         eng = _ctx.engine_used = "opencode"
     _pc = providers().get(getattr(_ctx, "provider_used", None)) or {}
+    if _pc.get("kind") == "anthropic" and _pc.get("upstream") and not guest and tools != "":  # owner 21.11: no Claude Code, no translator
+        _ctx.engine_used = "direct"
+        return _run_direct(_ctx.provider_used, _pc, prompt, pmodel or None, chat, on_stage, timeout)
     if _pc.get("kind") == "cli" and not guest and tools != "":  # owner 14.11: an agent CLI of this computer is the engine and the AI
         _ctx.engine_used = "cli"
         return _run_cli(_ctx.provider_used, _pc, prompt, pmodel or None, append, chat, on_stage, timeout)
@@ -9003,16 +9039,33 @@ def side_worker(chat):
 
 
 def restart_wanted():
-    """A restart was asked for (/הפעל מחדש or restart.request): returns the reason, or None."""
+    """A restart the owner asked for (/הפעל מחדש): returns the reason, or None. Owner 21.11: "a restart file only by my direct
+    command" — at 16:57 an AI hosted in the bridge wrote restart.request by itself (the rule was only words; the file was obeyed).
+    A restart.request is now held, never obeyed: the owner is told and restarts with /הפעל מחדש."""
     if RESTART_REQ.is_set():
         return "/הפעל מחדש"
     if os.path.exists(RESTART_FILE):
-        try:
-            reason = open(RESTART_FILE, encoding="utf-8").read().strip()[:200]
-        except (OSError, ValueError):  # a file not in UTF-8 must not break the check
-            reason = ""
-        return reason or "בקשת Claude"
+        hold_restart_file()
     return None
+
+
+def hold_restart_file():
+    """Move restart.request aside (restart.request.held, never deleted), remember why, and ask the owner once."""
+    try:
+        reason = open(RESTART_FILE, encoding="utf-8").read().strip()[:200]
+    except (OSError, ValueError):  # a file not in UTF-8 must not break the check
+        reason = ""
+    try:
+        os.replace(RESTART_FILE, RESTART_FILE + ".held")
+    except OSError:
+        return
+    kv_set("restart_held", json.dumps({"at": dt.datetime.now().isoformat(timespec="seconds"), "reason": reason}, ensure_ascii=False))
+    log("restart request held, only the owner's /הפעל מחדש restarts:", reason)
+    try:
+        send(PRIMARY, CFG["reply_prefix"] + f"🔒 *בקשה להפעלה מחדש:* {reason or 'בלי סיבה'}\n"
+             "הגשר לא מופעל מחדש בלי פקודה ממך. להפעלה מחדש שלח */הפעל מחדש*.")
+    except Exception as e:
+        log("restart held notice failed", e)
 
 
 _restart_seen = {"at": 0.0}
@@ -14258,6 +14311,14 @@ if __name__ == "__main__":
         _px = _ilu.module_from_spec(_spec)
         _spec.loader.exec_module(_px)
         log("oai proxy", "started" if _px.start_in_thread() else "port taken (another copy serves)")
+        try:  # owner 21.11: a folder and a toolbox for every provider, the shared toolbox and INDEX.md (providers 1 and 12 keep agent/home)
+            import bridge_direct as _bd
+            _names = [n for n in provider_order() if n != "auto"]
+            _bd.remember_providers(_names)
+            _made = _bd.ensure_folders(_names)
+            log("provider folders", ("created " + str(len(_made))) if _made else "ready")
+        except Exception as e:
+            log("provider folders failed", e)
         if engine_ready("qwen"):
             log("qwen settings", "updated" if ensure_qwen_settings() else "up to date")
             _w = ensure_cli_mcp()
