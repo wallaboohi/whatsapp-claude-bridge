@@ -7411,6 +7411,18 @@ class StatusMsg:
         except Exception:
             return 0.0
 
+    def _quota_text(self):
+        """The provider's usage windows from its last saved meter ("5 שעות 12% · שבועי 85%"), without a new probe."""
+        try:
+            snap = meter_get(self._provider_code())
+            by = {}
+            for x in (snap or {}).get("windows") or []:
+                by.setdefault(x["w"], x)
+            parts = [f"{w} {by[w]['pct']}%" for w in ["יומי", "5 שעות", "שבועי", "חודשי"] if w in by]
+            return " · ".join(parts) or ((snap or {}).get("note") or "לא נמדד")
+        except Exception:
+            return "לא נמדד"
+
     def _status_rows(self, final=False):
         """Owner 21.11 17:11: fixed rows in the owner's exact format; a detail row shows only when the run has one."""
         spinner = "✅" if final else ("⏳" if self.tick % 2 == 0 else "⌛")
@@ -7454,6 +7466,7 @@ class StatusMsg:
             rows.append("_" + " ".join(icons[-6:]) + "_")
         ctx = re.search(r"הקשר:\s*([^·]+)", meter or "")
         rows.append(f"_🧮 הקשר: *{ctx.group(1).strip() if ctx else 'לא נמדד'}*_")
+        rows.append(f"_🪫 מכסה: *{self._quota_text()}*_")
         rows.append(f"_⏱️ *{self._elapsed()}* · 📊 *{m.group(1) + '%' if m else '—'}* · 💰 *{self._cost():.2f}$*_")
         return rows
 
