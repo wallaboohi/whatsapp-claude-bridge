@@ -168,7 +168,10 @@ def test_fire_reaction_is_queued_once(agent, monkeypatch):
 def test_meter_full_marks_private_claude_unavailable(agent, monkeypatch):
     mod, _ = agent
     t = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=10)).isoformat()
-    monkeypatch.setattr(mod, "claude_usage", lambda max_age=0: {"seven_day": {"utilization": 100.0, "resets_at": t}})
+    # owner 22.11: meter_full reads only what entering the provider read once (no meter read of its own)
+    monkeypatch.setitem(mod._usage_cache, "at", mod.time.time())
+    monkeypatch.setitem(mod._usage_cache, "v", {"seven_day": {"utilization": 100.0, "resets_at": t}})
+    monkeypatch.setattr(mod, "claude_usage", lambda max_age=0: (_ for _ in ()).throw(AssertionError("no meter read of its own")))
     monkeypatch.setattr(mod, "limit_raw", lambda: None)
     assert mod.meter_full()[0] == "seven_day"
     assert not mod.provider_ready("claude")
@@ -182,3 +185,12 @@ def test_copilot_login_is_named_and_cools(agent):
     assert mod.classify_down(raw)[0] == "login"
     line = mod.error_line_he(raw, "copilot")
     assert "לא מחוברת" in line and "Claude" not in line
+
+
+def test_a_silent_meter_never_blocks_entering_claude(agent, monkeypatch):
+    """Owner 22.11: /ספק 1 failed with "המנוי לא מחובר: לא הצלחתי לקרוא את מד השימוש" while the meter only answered 429."""
+    mod, _ = agent
+    reads = []
+    monkeypatch.setattr(mod, "claude_usage", lambda max_age=120: reads.append(max_age))
+    c = mod.provider_check("claude")
+    assert c["ok"] and "לא חוסם" in c["detail"] and reads == [0], "read once, on entering, and never blocking"

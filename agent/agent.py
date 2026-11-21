@@ -3011,8 +3011,10 @@ def provider_check(name, prefer=None):
         return {"ok": ok, "detail": remote_claude_account(p) if ok else "הלפטופ לא עונה ב-ssh או ש-Claude לא מחובר בו",
                 "models": [k for k in MODELS if k != "auto"]}
     if p["kind"] == "claude":
-        u = claude_usage()
-        return {"ok": bool(u), "detail": claude_account() if u else "לא הצלחתי לקרוא את מד השימוש",
+        # owner 22.11: the meter is read once, on entering the provider, and its silence never blocks the switch (a 429 from the
+        # meter was shown as "המנוי לא מחובר" and /ספק 1 failed while Claude itself was fine)
+        u = claude_usage(max_age=0)
+        return {"ok": True, "detail": claude_account() if u else "מד השימוש לא ענה כרגע (לא חוסם)",
                 "models": [k for k in MODELS if k != "auto"]}
     if p["kind"] == "anthropic-key":
         k = provider_key(p)
@@ -4623,7 +4625,9 @@ def meter_full(max_age=120):
     """(window key, utilization %, reset) of the first full window of this machine's Claude plan, from the cached meter; None when
     nothing is full or the meter is unavailable. Owner 19.11 10:59: the desktop's weekly limit stood at 100% while the bridge said
     "✅ זמין", because only a limit seen in a run (limit_until) counted."""
-    u = claude_usage(max_age=max_age) or {}
+    # owner 22.11: never a meter read of its own (the automatic pick and the /ספק list called this all the time and the meter
+    # answered 429) — only what entering the provider read once
+    u = (_usage_cache.get("v") if _usage_cache.get("at") else None) or {}
     for key in WINDOW_HE:
         x = u.get(key) or {}
         try:
@@ -13741,7 +13745,7 @@ def push_loop():
                 if n % 60 == 0:  # every 10 minutes
                     if watches_people():
                         push_watch_waiting()
-                    push_watch_usage()
+                    # owner 22.11: the 80% usage push is cancelled (it did not work for sure and kept reading the meter)
         except Exception:
             log("push_loop error", traceback.format_exc())
         n += 1
