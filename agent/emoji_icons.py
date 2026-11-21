@@ -612,6 +612,23 @@ def lookup(word):
     return None
 
 
+# owner 21.11 13:39: "עובד" as a verb ("does it work?", "not working") is not a worker 👷. Words that are both a noun and a verb get no
+# icon when the sentence reads as a question / complaint about something working (a negation or question word before them,
+# or the word ends the message with "?").
+VERB_AMBIG = {"עובד", "עובדת", "עובדים", "עובדות", "פועל", "פועלת", "פועלים", "פועלות"}
+VERB_CONTEXT = set("לא למה האם איך מדוע עדיין כבר שוב סוף סוף מתי זה הוא היא הכל הכול כרגע".split())
+
+
+def _is_verb_use(toks, k, text):
+    core = toks[k][2]
+    if not any(c in VERB_AMBIG for c in candidates(core)):
+        return False
+    for j in range(max(0, k - 3), k):
+        if toks[j][2] in VERB_CONTEXT:
+            return True
+    return text[toks[k][1] - 1:toks[k][1]] == "?" or text[toks[k][3]:toks[k][1]].strip("*_~").startswith("?")
+
+
 def _special(core):
     if _CLOCK.match(core) or (_TIME.match(core) and not core[:1].isdigit()):
         return (("⏰", "🕗", "⌚"), "time", 3)
@@ -695,6 +712,9 @@ def plan(text):
         if hit:
             hits[i] = hit
         i += 1
+    for k in list(hits):  # noun/verb words used as a verb (owner 21.11: "למה זה לא עובד" got 👷)
+        if _is_verb_use(toks, k, text):
+            del hits[k]
     # adjacent time words: one emoji, after the last of them ("מחר ב-8" → only after ב-8)
     for k in sorted(hits):
         if k + 1 in hits and hits[k][1] == hits[k + 1][1] == "time":
