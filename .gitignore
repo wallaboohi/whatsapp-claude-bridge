@@ -91,3 +91,6 @@ agent/oai_proxy.log
 
 agent/providers/*/requests.log
 agent/providers/*/tools.log
+
+agent/browser_profile/
+whatsapp-mcp-server/*.bak-*

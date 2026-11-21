@@ -51,7 +51,7 @@ def test_a_provider_saves_its_own_tool_and_runs_it_next_time(box):
     assert "saved" in bd.save_tool("gemini", "hello", "says hello", code)
     assert bd.call_tool("gemini", "hello", {"who": "yakir"}, FakeMcp()).strip() == "hello yakir"
     toc = bd.contents("gemini", FakeMcp())
-    assert "- hello: says hello" in toc and "get_status: The bridge status." in toc and "web_search" in toc
+    assert "- hello: says hello" in toc and "get_status: The bridge status." in toc and "fetch_url" in toc  # web search now comes from the bridge's tool server (three search APIs), not from here
     assert "hello" not in bd.contents("groq", FakeMcp()).split("## הכלים שלך")[1], "another provider's toolbox is its own"
     bd.save_tool("gemini", "common", "for all", code, shared=True)
     assert "common" in bd.contents("groq", FakeMcp())

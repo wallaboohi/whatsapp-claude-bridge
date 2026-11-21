@@ -318,7 +318,6 @@ BRIDGE_TOOLS = {
     "edit_file": (tool_edit_file, "Replace exact text in a file.", _schema({"path": S, "old": S, "new": S, "replace_all": {"type": "boolean"}}, ["path", "old", "new"])),
     "list_files": (tool_list_files, "List files by a name pattern (e.g. *.py) under a folder.", _schema({"pattern": S, "path": S})),
     "search_text": (tool_search_text, "Search file contents with a regular expression.", _schema({"pattern": S, "path": S, "file_pattern": S}, ["pattern"])),
-    "web_search": (tool_web_search, "Search the web. Returns titles, links and short snippets.", _schema({"query": S, "max_results": {"type": "integer"}}, ["query"])),
     "fetch_url": (tool_fetch_url, "Read a web page as plain text.", _schema({"url": S, "max_chars": {"type": "integer"}}, ["url"])),
 }
 
@@ -365,7 +364,7 @@ def contents(provider, mcp=None):
     m = mcp or MCP
     rows = ["## כלי הווצאפ של הגשר"]
     try:
-        rows += [f"- {t['name']}: {_first_line(t.get('description'))}" for t in m.tools()]
+        rows += [f"- {t['name']}: {_first_line(t.get('description'))}" for t in m.tools() if t["name"] not in BRIDGE_TOOLS]
     except Exception as e:
         rows.append(f"- (שרת כלי הווצאפ לא זמין כרגע: {str(e)[:80]})")
     rows += ["## כלים כלליים של הגשר"] + [f"- {n}: {v[1]}" for n, v in BRIDGE_TOOLS.items()]

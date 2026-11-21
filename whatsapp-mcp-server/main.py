@@ -477,5 +477,56 @@ def phone_tools_index() -> Dict[str, List[str]]:
         "data": ["list_transcripts", "list_polls", "list_drafts"],
     }
 
+# owner 21.11 20:00: the bridge's browser and web search serve every AI the bridge hosts (the CLIs reach them through this server,
+# the bridge's own providers through bridge_call). browser.py: Playwright + the installed Chrome, a profile of the bridge's own.
+import browser as _browser  # noqa: E402
+
+
+@mcp.tool()
+def web_search(query: str, max_results: int = 8) -> Dict[str, Any]:
+    """Search the web. Three tools in a row so it never gets stuck: LangSearch, then Tavily, then Jina."""
+    return _browser.web_search(query, max_results)
+
+
+@mcp.tool()
+def browser_open(url: str) -> Dict[str, Any]:
+    """Open a web page in the bridge's browser (a real Chrome, JavaScript runs) and return its title and text."""
+    return _browser.browser_open(url)
+
+
+@mcp.tool()
+def browser_read() -> Dict[str, Any]:
+    """The text of the page now open in the bridge's browser."""
+    return _browser.browser_read()
+
+
+@mcp.tool()
+def browser_click(target: str) -> Dict[str, Any]:
+    """Click in the bridge's browser: visible text of a link / button, or a CSS selector."""
+    return _browser.browser_click(target)
+
+
+@mcp.tool()
+def browser_type(selector: str, text: str, submit: bool = False) -> Dict[str, Any]:
+    """Type into a field of the page (CSS selector); submit=true presses Enter."""
+    return _browser.browser_type(selector, text, submit)
+
+
+@mcp.tool()
+def browser_screenshot() -> str:
+    """A screenshot of the page in the bridge's browser; returns the image path (send it with send_file)."""
+    return _browser.browser_screenshot()
+
+
+@mcp.tool()
+def fetch_url(url: str, max_chars: int = 20000) -> str:
+    """Read a web page as plain text, quickly and without a browser (static pages; for JavaScript pages use browser_open)."""
+    import importlib.util as _ilu, os as _o
+    spec = _ilu.spec_from_file_location("bridge_direct", _o.path.join(_o.path.dirname(_o.path.dirname(_o.path.abspath(__file__))), "agent", "bridge_direct.py"))
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.tool_fetch_url(url, max_chars)
+
+
 # Expose ASGI app for uvicorn
 app = mcp.http_app()
