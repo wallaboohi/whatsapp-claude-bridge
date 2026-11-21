@@ -575,3 +575,30 @@ def test_the_host_grants_itself_when_nobody_holds_the_identity(agent, monkeypatc
     granted = _host_start_env(mod, monkeypatch, {"חדר שינה": {"agent_alive": True, "lease": {"held": False}}, "סלון": None})
     mod.session_host_start(False, [])
     assert granted == ["host start"], "an ordinary restart / crash recovery of the host is unchanged"
+
+
+# ---- owner 21.11 03:30: the nightly peer backup failed every night on one file: on the salon and the laptop the "folder" of a contact was
+# a FILE (a copy into a folder that did not exist yet had created a file with the folder's name), and the mkdir error was ignored.
+
+def test_the_backup_moves_a_file_standing_on_a_folder_name_aside_and_checks_the_result(agent):
+    mod, _ = agent
+    s = mod.remote_mkdirs_script(["C:/b/peer-X/media/972507720836@s.whatsapp.net", "C:/b/peer-X/media/other"])
+    assert "-PathType Leaf" in s and "Move-Item" in s and ".file-in-the-way-" in s, "a file in the way is moved aside, never deleted"
+    assert "-PathType Container" in s and "exit 1" in s, "the folder must really exist afterwards, else the backup says so"
+    assert "'C:/b/peer-X/media/972507720836@s.whatsapp.net','C:/b/peer-X/media/other'" in s
+    assert "Remove-Item" not in s, "nothing is deleted"
+
+
+def test_the_backup_script_runs_in_powershell_for_a_file_in_the_way(agent, tmp_path):
+    import subprocess
+    mod, _ = agent
+    base = tmp_path / "media"
+    base.mkdir()
+    squat = base / "972507720836@s.whatsapp.net"
+    squat.write_bytes(b"x" * 100)  # the live finding: a file with the folder's name
+    script = mod.remote_mkdirs_script([str(squat).replace("\\", "/"), str(base / "fresh").replace("\\", "/")])
+    r = subprocess.run(["powershell", "-NoProfile", "-Command", script], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert squat.is_dir() and (base / "fresh").is_dir()
+    moved = [p for p in base.iterdir() if p.name.startswith("972507720836@s.whatsapp.net.file-in-the-way-")]
+    assert len(moved) == 1 and moved[0].read_bytes() == b"x" * 100, "the squatting file is kept, only moved"
