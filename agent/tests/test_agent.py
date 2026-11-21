@@ -961,15 +961,15 @@ def test_status_layout_keeps_fixed_rows_and_moving_progress_icon(agent):
     b = st._text()
     st.finish()
     assert "⏳" in a and "⌛" in b, "the progress icon alternates on every edit"
-    assert all(label in a for label in ("נתיב", "ספק", "מודל", "דרך", "פירוט", "שלבים", "לקח לי", "הקשר"))
+    assert all(label in a for label in ("נתיב", "ספק", "מודל", "דרך", "שיחה", "שלב", "⏱️", "📊", "💰"))
     host = mod.pc_he(mod.CFG.get("host_label") or mod.socket.gethostname())  # owner 18.11: Hebrew PC names
     assert mod.pc_he("YB-PC-HW") == "מחשב יקיר נייח" and mod.pc_he("PERROOM") == "מחשב חדר נייח"
     assert mod.pc_he("salon-pc") == "מחשב סלון נייח" and mod.pc_he("lap-yakir") == "מחשב עבודה נייד"
     # owner 15.11/17.11: header line, then the computer is the first detail line
     short = host[len("מחשב "):] if host.startswith("מחשב ") else host
     assert short in [l for l in a.split(chr(10)) if "נתיב" in l][0]
-    assert a.index("נתיב") < a.index("ספק") < a.index("מודל") < a.index("דרך") < a.index("פירוט") < a.index("שלבים") < a.index("לקח לי") < a.index("הקשר")
-    assert "מגבלת" not in st._final() and "$" not in st._final(), "no usage/money line in the regular chat (owner 09.11 07:14)"
+    assert a.index("נתיב") < a.index("ספק") < a.index("מודל") < a.index("דרך") < a.index("שיחה") < a.index("שלב:") < a.index("⏱️") < a.index("📊") < a.index("💰")
+    assert "מגבלת" not in st._final(), "no usage-limit line in the regular chat (owner 09.11 07:14); the cost is part of the 21.11 17:11 metrics line"
     mod._account_cache.update(at=mod.time.time() + 3600, v="me@example.com (Pro)")
     rep = mod.owner_command("/תקרה")
     assert "me@example.com" in rep
@@ -2987,8 +2987,7 @@ def test_finished_status_lists_step_durations_and_total(agent, monkeypatch):
     st.steps = [{"at": "", "ts": 1000.0, "text": "🧵 קריאת הקשר"}, {"at": "", "ts": 1003.0, "text": "💬 ניסוח תשובה"}]
     st.ended = 1011.0
     text = st._final()
-    assert "סיימתי" in text and "0:11" in text
-    assert "🧵" in text and "💬" in text
+    assert "✅ שלב: קריאת הקשר ← *ניסוח תשובה*" in text and "0:11" in text
 
 
 def test_send_want_id_returns_bridge_message_id(agent, monkeypatch):
@@ -3080,7 +3079,7 @@ def test_quick_answer_gets_finished_status_only_when_wa(agent, monkeypatch):
     loud = mod.StatusMsg("", "chat@g.us", wa=True)
     loud.timer.cancel()
     loud.send_finished()
-    assert len(sent) == 1 and "סיימתי" in sent[0]
+    assert len(sent) == 1 and "✅ שלב" in sent[0]
 
 
 def test_failover_chain_defers_to_earlier_backup_and_holder(agent, monkeypatch):

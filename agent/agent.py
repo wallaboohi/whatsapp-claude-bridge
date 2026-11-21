@@ -7286,6 +7286,7 @@ class StatusMsg:
         # owner 18.11 22:58: 👀 (the bridge saw it) -> ⏳ ↔ ⌛ every 3 s (on its way) -> 🧠 (the AI works) -> the stage icons
         self.glass = Hourglass(self.chat, self.react_to, first="") if self.react_to else None
         self.steps, self.tick, self.ended = [], 0, None
+        self.resumed = session_active(self.chat)
         self.source_content = ""  # owner's own WhatsApp message, when it can carry the live status itself
         self.hold, self.loop_done = False, threading.Event()  # owner 17.11 15:15: hold = the answer will be merged into this message
         if not getattr(_ctx, "side_run", False):
@@ -7350,30 +7351,8 @@ class StatusMsg:
     def _detail_lines(self):
         return [speaker_line(self.ai_short, self.ai_model, self.ai_location or "☁️ ענן")]
 
-    # Owner 20.11 17:38: keep each status field in a fixed row, with the icon/value column after the same separator.
-    LABEL_W = 5
-    # Owner 21.11 16:02 (option א): the status is a monospace code block, the only place WhatsApp keeps spaces. Width W cells; the icon sits
-    # in the same cells in every row (right of centre, under the ✦), the label on the right, the value ends at the left edge.
-    W = 30
-    ICON_COL = 14
-    FENCE = "```"
-    DIVIDER = "━" * 14 + "✦" + "━" * 15
-
-    @classmethod
-    def _lab(cls, word):
-        nb = "\u00a0"  # a hard space: WhatsApp keeps it, so every label has the same width
-        return f"`{nb}{word}{nb * (cls.LABEL_W - len(word) + 1)}`"
-
-    def _route_row(self):
-        pc = pc_he(CFG.get("host_label") or socket.gethostname())
-        pc = pc[len("מחשב "):] if pc.startswith("מחשב ") else pc
-        loc = self.ai_location or "☁️ ענן"
-        icon, _, word = loc.partition(" ")
-        parts = [f"🖥️ *{pc}*"] + ([f"🧠 *{self.ai_short}*"] if self.ai_short else [])
-        if self.ai_model:
-            parts.append(f"🔖 *{model_he(self.ai_model)}*")
-        parts.append(f"{icon} *{word or loc}*")
-        return f"🛣️ {self._lab('נתיב')} ┃ " + " · ".join(parts)
+    # Owner 21.11 17:11 (exact format): italic rows "icon label: *value*", the divider and the metrics line in italic.
+    DIVIDER = "_*━━━━━━━ ✦ ━━━━━━━*_"
 
     def _provider_code(self):
         try:
@@ -7412,90 +7391,49 @@ class StatusMsg:
         owner = "\n".join(l if not l.strip() or l.strip().startswith("*") else f"*{l.strip()}*" for l in self.source_content.split("\n"))
         return owner + "\n" + formatted[len(prefix):]
 
-    @staticmethod
-    def _cells(text):
-        """Width in monospace cells: an emoji is two, a variation selector or joiner none."""
-        n = 0
-        for ch in text:
-            o = ord(ch)
-            if o in (0xFE0F, 0x200D, 0x200F, 0x200E):
-                continue
-            n += 2 if o >= 0x1F000 or o in (0x231B, 0x23F3, 0x2705, 0x2601, 0x23F1) else 1
-        return n
-
-    @classmethod
-    def _fit(cls, text, width):
-        text = str(text)
-        if cls._cells(text) <= width:
-            return text
-        while text and cls._cells(text) > width - 1:
-            text = text[:-1]
-        return text + "…"
-
-    @classmethod
-    def _aligned_row(cls, label, icon, value="", right="", left_prefix=""):
-        """Label (and an optional `right` part) on the right, the icon in the fixed column, the value ending at the left edge."""
-        head = (label + (" " + right if right else "")).strip()
-        head = cls._fit(head, cls.ICON_COL - 1)
-        pad = " " * (cls.ICON_COL - cls._cells(head))
-        room = cls.W - cls.ICON_COL - 2 - 1
-        value = cls._fit(left_prefix + value, room) if value else ""
-        gap = " " * (cls.W - cls.ICON_COL - 2 - cls._cells(value)) if value else ""
-        return head + pad + icon + gap + value
+    def _cost(self):
+        try:
+            with adb() as db:
+                r = db.execute("SELECT COALESCE(SUM(cost), 0) FROM claude_runs WHERE chat = ? AND at >= ?",
+                               (self.chat, dt.datetime.fromtimestamp(self.t0 - 1).isoformat())).fetchone()
+            return float(r[0] or 0)
+        except Exception:
+            return 0.0
 
     def _status_rows(self, final=False):
-        """Fixed field order and icon column for the owner's 20.11 status layout request."""
+        """Owner 21.11 17:11: fixed rows in the owner's exact format; a detail row shows only when the run has one."""
         spinner = "✅" if final else ("⏳" if self.tick % 2 == 0 else "⌛")
-        provider = self._provider_code()
         st, _, det = self.stage.partition(" · ")
-        head = st.split(" ", 1)[-1] if stage_icon(st) else st
-        meter = ctx_meter_line(self.chat, self.t0 - 1)
-        context = ""
-        if meter:
-            m = re.search(r"הקשר:\s*([^·]+)", meter)
-            context = m.group(1).strip() if m else meter
-        steps = []
-        for item in self.steps:
-            name = item["text"].split(" · ", 1)[0].strip()
-            icon = stage_icon(name)
-            if icon and icon not in steps:
-                steps.append(icon)
-        if not steps and not final:
-            steps = ["📩"]
+        names = [i["text"].split(" · ", 1)[0].strip() for i in self.steps]
+        names = [n.split(" ", 1)[-1] if stage_icon(n) else n for n in names]
+        cur = names[-1] if names else (st.split(" ", 1)[-1] if stage_icon(st) else st)
+        prev = names[-2] if len(names) > 1 else "התחלה"
         pc = pc_he(CFG.get("host_label") or socket.gethostname())
         pc = pc[len("מחשב "):] if pc.startswith("מחשב ") else pc
         loc = self.ai_location or "☁️ ענן"
         loc_icon = "🏠" if loc.startswith("🏠") else "☁️"
         loc_text = loc.split(" ", 1)[-1] if " " in loc else loc
-        # owner 20.11 20:57: fixed shape; the changing values never move a row. פירוט = previous ← current (icon between) + running dots.
         via = ""
         if ", דרך " in loc_text:
             loc_text, via = loc_text.split(", דרך ", 1)
-        names = [i["text"].split(" · ", 1)[0].strip() for i in self.steps]
-        names = [n.split(" ", 1)[-1] if stage_icon(n) else n for n in names]
-        cur = names[-1] if names else head
-        prev = names[-2] if len(names) > 1 else "התחלה"
-        dots = "" if final else "." * (self.tick % 3 + 1)
         where = loc_text + (f", דרך {via or pc}" if loc_icon == "☁️" else "")
+        meter = ctx_meter_line(self.chat, self.t0 - 1)
+        m = re.search(r"\((\d+)%\)", meter or "")
         rows = [
-            self._aligned_row("נתיב", "🖥️", pc),
-            self._aligned_row("ספק", "🧠", self.ai_short or "לא ידוע"),
-            self._aligned_row("מודל", "🧬", self.ai_model or "לא דווח"),
-            self._aligned_row("דרך", loc_icon, where),
-            self._aligned_row("פירוט", spinner, cur + dots, right=f"{self._fit(prev, 6)} ←", left_prefix="← "),
+            f"_🖥️ נתיב: *{pc}*_",
+            f"_🧠 ספק: *{self.ai_short or 'לא ידוע'}*_",
+            f"_🧬 מודל: *{model_he(self.ai_model) if self.ai_model else 'לא דווח'}*_",
+            f"_{loc_icon} דרך: *{where}*_",
+            f"_🧵 שיחה: *{'המשך שיחה' if self.resumed else 'שיחה חדשה'}*_",
+            f"_{spinner} שלב: {prev} ← *{cur}*_",
         ]
-        if final:
-            rows.append(self._aligned_row("", "✅", "סיימתי"))
-        rows.extend([
-            self._aligned_row("שלבים", "🪜", str(len(self.steps))),
-            " " * self.ICON_COL + " ".join(steps[-6:]),
-            self._aligned_row("לקח לי", "⏱️", self._elapsed()),
-            self._aligned_row("הקשר", "🧮", context or "לא נמדד"),
-        ])
+        if det and not final:
+            rows.append(f"🔎 פרט: _{det}_")
+        rows.append(f"_⏱️ *{self._elapsed()}* · 📊 *{m.group(1) + '%' if m else '—'}* · 💰 *{self._cost():.2f}$*_")
         return rows
 
     def _block(self, final=False):
-        return "\n".join([self.FENCE, self.DIVIDER, *self._status_rows(final), self.DIVIDER, self.FENCE])
+        return "\n".join([self.DIVIDER, *self._status_rows(final), self.DIVIDER])
 
     def _text(self):
         # owner 20.11 17:38: one fixed status layout, updated while the run proceeds.
@@ -7518,7 +7456,7 @@ class StatusMsg:
 
     def _full(self, answer):
         a = answer.strip()
-        return self._final() + "\n*תשובה:*\n" + (italic(a) if CFG.get("reply_italic", True) else a)
+        return self._final() + "\n_📝 *תשובה:*_\n" + (italic(a) if CFG.get("reply_italic", True) else a)
 
     def finalize(self, answer=None):
         """Owner 17.11 15:15 (third request): ONE message for the whole exchange. The status message gets its last edit with the

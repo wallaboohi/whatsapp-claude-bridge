@@ -218,23 +218,20 @@ def test_a_stale_asked_hold_is_cleared_without_handing_anything_back(agent, monk
 
 
 
-def test_status_rows_have_one_icon_column_and_one_divider(agent):
-    """Owner 21.11 (option א): the status is a monospace code block; every row is exactly W cells wide, the icon sits in the same cells
-    in every labeled row, the label (and the previous stage) on the right, the value ends at the left edge."""
+def test_status_block_matches_owner_format(agent):
+    """Owner 21.11 17:11: italic rows "icon label: *value*", two dividers, the metrics line, then the answer header."""
     mod, _ = agent
     S = mod.StatusMsg
     st = S("sonnet", wa=False)
     st.set_stage("📖 קורא קבצים", "agent.py")
     rows = st._status_rows()
     st.finish()
-    labeled = [r for r in rows if r.split(" ")[0] in ("נתיב", "ספק", "מודל", "דרך", "פירוט", "שלבים", "לקח", "הקשר")]
-    assert labeled[0].startswith("נתיב")
-    for r in labeled:
-        assert S._cells(r) <= S.W
-        i = next(k for k, ch in enumerate(r) if ord(ch) >= 0x1F000 or ch in "⏳⌛✅☁🏠⏱")
-        assert S._cells(r[:i]) == S.ICON_COL
-        if r.rstrip() != r[:i + 1]:  # a row with a value ends exactly at the line width
-            assert S._cells(r) == S.W
+    labels = ["נתיב", "ספק", "מודל", "דרך", "שיחה", "שלב"]
+    for row, label in zip(rows, labels):
+        assert row.startswith("_") and row.endswith("_") and f" {label}: " in row
+    assert rows[0].startswith("_🖥️ נתיב: *") and "← *" in rows[5]
+    assert any(r.startswith("🔎 פרט: _agent.py_") for r in rows)
+    assert rows[-1].startswith("_⏱️ *") and "📊 *" in rows[-1] and rows[-1].endswith("$*_")
     full = st._full("תשובה קצרה")
-    assert full.count(S.DIVIDER) == 2 and full.count("```") == 2 and full.index("*תשובה:*") > full.rindex(S.DIVIDER)
-    assert S._cells(S.DIVIDER) == S.W
+    assert full.count(S.DIVIDER) == 2 and "```" not in full
+    assert full.index("_📝 *תשובה:*_") > full.rindex(S.DIVIDER) and "תשובה קצרה" in full
