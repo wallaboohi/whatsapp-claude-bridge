@@ -92,6 +92,88 @@ NO_REMOTES = {"GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_0": "url.C:/no-such-remot
               "GIT_CONFIG_KEY_1": "url.C:/no-such-remote/nas/.insteadOf", "GIT_CONFIG_VALUE_1": "//10.0.0.154/"}
 
 
+def workflow_steps(path=None):
+    """The steps of .github/workflows/build.yml that run commands, as GitHub reads them: [{name, cwd, shell, env, run}]. A small
+    reader for this file's shape (no YAML library in the release tool); "uses:" steps are GitHub's own setup."""
+    lines = open(path or os.path.join(ROOT, ".github", "workflows", "build.yml"), encoding="utf-8").read().splitlines()
+    steps, cur, block, env_on = [], None, None, False
+    for ln in lines:
+        s = ln.strip()
+        ind = len(ln) - len(ln.lstrip())
+        if block is not None:
+            if s and ind <= block[0]:
+                cur["run"], block = "\n".join(block[1]), None
+            else:
+                block[1].append(ln[block[0] + 2:] if len(ln) > block[0] + 2 else "")
+                continue
+        if s.startswith("- "):
+            cur = {"name": "", "cwd": "", "shell": "bash", "env": {}, "run": "", "if": ""}
+            steps.append(cur)
+            s, ind = s[2:].strip(), ind + 2
+        if cur is None or ":" not in s:
+            continue
+        k, v = (x.strip() for x in s.split(":", 1))
+        v = re.sub(r"\s+#.*$", "", v).strip()
+        if k != "run" and len(v) > 1 and v[0] == v[-1] == '"':  # a quoted name / value; a command keeps its own quotes
+            v = v[1:-1]
+        if env_on and ind > env_on:
+            cur["env"][k] = v
+            continue
+        env_on = False
+        if k == "env":
+            env_on = ind
+        elif k == "run" and v == "|":
+            block = (ind, [])
+        elif k in ("run", "name", "shell", "if"):
+            cur[k] = v
+        elif k == "working-directory":
+            cur["cwd"] = v
+    if block is not None:
+        cur["run"] = "\n".join(block[1])
+    return [x for x in steps if x["run"] and not x["if"]]  # "Publish release" (if: a tag) is GitHub's job, not a check
+
+
+def github_rehearsal(ref=""):
+    """Owner 21.11: "checks identical to GitHub's, so an upload never fails there again". GitHub builds a clean checkout — only the
+    committed files, no secrets / config / store, no hub and no NAS — and runs build.yml's steps. Here: a clean clone of HEAD and
+    the same steps, read from build.yml itself (a change there is checked here too), everything but publishing. '' or the failure."""
+    import tempfile
+    import glob
+    import stat
+
+    def writable(fn, p, _exc):  # git's object files are read-only on Windows
+        os.chmod(p, stat.S_IWRITE)
+        fn(p)
+    for old in glob.glob(os.path.join(tempfile.gettempdir(), "yb-github-rehearsal*")):  # the tool's own earlier rehearsal copies
+        try:
+            shutil.rmtree(old, onerror=writable)
+        except OSError:
+            pass  # a file still held: left for the next run; every run has its own folder
+    work = os.path.join(tempfile.gettempdir(), f"yb-github-rehearsal-{dt.datetime.now():%Y%m%d-%H%M%S}")
+    r = subprocess.run(["git", "clone", "-q", "--no-local", ROOT, work], capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if r.returncode:
+        return "clone: " + (r.stderr or "")[-300:]
+    if ref:  # an older version (to check that the rehearsal fails where GitHub failed)
+        subprocess.run(["git", "-C", work, "checkout", "-q", ref], capture_output=True)
+    subprocess.run(["git", "-C", work, "remote", "set-url", "origin", "https://github.com/WallaBoohi/whatsapp-claude-bridge"],
+                   capture_output=True)
+    bash = shutil.which("bash") or r"C:\Program Files\Git\bin\bash.exe"
+    env = {**os.environ, "CI": "true", "GITHUB_ACTIONS": "true", "CGO_ENABLED": "1"}
+    env.pop("VIRTUAL_ENV", None)
+    for st in workflow_steps(os.path.join(work, ".github", "workflows", "build.yml")):
+        e = {**env, **st["env"]}
+        if st["shell"].startswith("msys2"):  # GitHub's msys2 UCRT64 with path-type inherit = this PC's UCRT64 gcc first on PATH
+            e["PATH"] = "C:/msys64/ucrt64/bin;" + e["PATH"]
+        print("  ▶ כמו ב-GitHub:", st["name"] or st["run"].splitlines()[0][:60], flush=True)
+        p = subprocess.run([bash, "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", st["run"]], cwd=os.path.join(work, st["cwd"]),
+                           env=e, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=3600)
+        if p.returncode:
+            out = (p.stdout or "") + (p.stderr or "")
+            failed = [l for l in out.splitlines() if l.startswith(("FAILED", "ERROR"))]
+            return f"{st['name']}:\n" + "\n".join(failed[:8] or out.strip().splitlines()[-15:])
+    return ""
+
+
 def main():
     if len(sys.argv) < 2 or not re.fullmatch(r"\d+\.\d+\.\d+", sys.argv[1]):
         sys.exit("שימוש: release.cmd X.Y.Z \"מה השתנה\" [--dry-run]")
@@ -109,6 +191,12 @@ def main():
     if keys:
         sys.exit("✖ נמצא מה שנראה כמפתח בקומיטים שעוד לא עלו ל-GitHub (GitHub יחסום את הדחיפה):\n"
                  + "\n".join(f"{c} {f}" for c, f in keys[:10]) + "\nצריך להוציא אותם מהקומיטים לפני השחרור.")
+    if "--no-rehearsal" not in sys.argv:
+        print("▶ חזרה על הבנייה של GitHub בעותק נקי (רק קבצים שמורים, בלי hub ו-NAS)", flush=True)
+        fail = github_rehearsal()
+        if fail:
+            sys.exit("✖ הבנייה של GitHub הייתה נכשלת — לא נוצר תג ולא נדחף דבר:\n" + fail)
+        print("✔ הבנייה של GitHub עברה בעותק הנקי", flush=True)
 
     # 1. version everywhere (read before writing; keep each file's line endings)
     for rel in ("VERSION", "dash/VERSION"):
