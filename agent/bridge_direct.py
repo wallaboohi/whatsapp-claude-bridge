@@ -576,6 +576,17 @@ def probe(name, p, key, model, text, max_tokens=200, timeout=90):
     return ok, "" if ok else "the answer had no content"
 
 
+def summarize(name, p, key, model, text, timeout=120):
+    """A short summary of the conversation by the provider itself (no tools): the memory a provider without its own session keeps."""
+    field = (p.get("upstream") or {}).get("max_tokens_field") or "max_tokens"
+    body = {"model": model, field: 900, "messages": [
+        {"role": "system", "content": "סכם בעברית, עד 12 שורות, את השיחה שלמטה כדי שבינה אחרת תוכל להמשיך אותה: מה יקיר ביקש, מה הוחלט, "
+                                      "מה נעשה, מה עוד פתוח, והעדפות שלו שעלו. רק הסיכום, בלי הקדמה."},
+        {"role": "user", "content": text}]}
+    out = _post(name, p, key, body, timeout)
+    return (((out.get("choices") or [{}])[0].get("message")) or {}).get("content", "").strip()
+
+
 def run(name, p, key, model, system_text, user_text, on_tool=None, timeout=600, mcp=None):
     """The whole exchange with one provider: the request, every tool round, the final answer. {"text", "in", "out", "tools"}."""
     always, rule_items = split_rules(system_text)

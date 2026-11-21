@@ -849,3 +849,40 @@ def test_a_model_whose_daily_quota_is_out_is_skipped_until_its_reset(agent, monk
     tried = []
     monkeypatch.setattr(bd, "run", lambda name, prov, key, model, *a, **k: tried.append(model) or {"text": "ok", "in": 1, "out": 1, "tools": []})
     assert agent._run_direct("g", p, "q", "pro3", agent.PRIMARY, None, 60)["model"] == "lite" and tried == ["lite"], "no request to the used-up model"
+
+
+def test_every_14_answers_the_provider_summarizes_the_last_15_messages(agent, monkeypatch, tmp_path):
+    """Owner 21.11 18:55: 15 messages of context, and every 14 answers a summary of the last 15 by the provider that answers; the
+    summary belongs to the conversation (another provider can go on from it)."""
+    agent = agent[0]
+    import bridge_direct as bd, inspect, threading as _th
+    assert inspect.signature(agent.conversation_pack).parameters["n"].default == 15
+    p = {"kind": "anthropic", "upstream": {"base": "https://x/v1"}, "model": "lite", "short": "G"}
+    hp = tmp_path / "handoff.md"
+    monkeypatch.setattr(agent, "handoff_path", lambda chat: str(hp))
+    monkeypatch.setattr(agent, "conversation_pack", lambda chat, n=15: f"PACK {n}")
+    got = []
+    monkeypatch.setattr(bd, "summarize", lambda name, prov, key, model, text, timeout=120: got.append((name, model, text)) or "סיכום קצר")
+    started = []
+    monkeypatch.setattr(agent.threading, "Thread", lambda target=None, **k: started.append(target) or type("T", (), {"start": lambda self: None})())
+    chat = "x@g.us"
+    for _ in range(13):
+        agent.note_answer_for_summary(chat, "g", p, "lite")
+    assert not started, "not before 14"
+    agent.note_answer_for_summary(chat, "g", p, "lite")
+    assert len(started) == 1
+    started[0]()
+    assert got == [("g", "lite", "PACK 15")] and "סיכום קצר" in hp.read_text(encoding="utf-8")
+    assert agent.kv_get(f"summary_count:{chat}") == "0"
+
+
+def test_a_cli_provider_also_writes_the_summary_every_14_answers(agent, monkeypatch):
+    """Owner 21.11 19:00: a CLI's own session also ends (daily / after 15 runs), so it is not left out: every 14 answers it summarizes."""
+    agent = agent[0]
+    p = {"kind": "cli", "cli": {"bin": "codex"}, "short": "C"}
+    monkeypatch.setattr(agent, "cli_resume_spec", lambda name, prov: None)
+    monkeypatch.setattr(agent, "_run_cli_core", lambda *a, **k: {"result": "תשובה"})
+    seen = []
+    monkeypatch.setattr(agent, "note_answer_for_summary", lambda chat, name, prov, model, summarizer=None: seen.append((name, summarizer is not None)))
+    agent._run_cli("codex", p, "q", None, None, "x@g.us", None, 60)
+    assert seen == [("codex", True)]

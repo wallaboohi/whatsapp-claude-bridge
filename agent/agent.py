@@ -4835,7 +4835,7 @@ def pack_speaker(text, mine):
     return "הבעלים" if mine else "אחר"
 
 
-def conversation_pack(chat, n=10):
+def conversation_pack(chat, n=15):
     """Owner 14.11: what another engine's fresh session needs to continue this conversation: the hand-off note and the last messages of the chat
     (the owner's and the bridge's own answers), plus the way to read more on demand."""
     parts = []
@@ -5427,6 +5427,10 @@ def _run_cli(name, p, prompt, model, append, chat, on_stage, timeout):
         kv_set("cli_resume_off:" + name, "1")  # fresh worked where the continued one did not: this CLI does not resume the way its help says
         log("cli resume switched off for", name)
         sess = None
+    if (res.get("result") or "").strip() and not getattr(_ctx, "probe", False):
+        # owner 21.11 19:00: a CLI's own session also ends (daily, or after session_max_runs); its summary is written every 14 answers
+        note_answer_for_summary(chat, name, p, model, summarizer=lambda text: (_run_cli_core(
+            name, p, CLI_SUMMARY_PROMPT + "\n\n" + text, model, None, chat, None, 300, None) or {}).get("result", "").strip())
     if sess is not None:
         new_id = res.get("cli_session") or (sess["id"] if spec.get("id") == "preset" else None)
         if new_id:
@@ -5498,6 +5502,37 @@ def _codex_stage(event):
     return None
 
 
+SUMMARY_EVERY = 14
+CLI_SUMMARY_PROMPT = ("סכם בעברית, עד 12 שורות, את השיחה שלמטה כדי שבינה אחרת תוכל להמשיך אותה: מה יקיר ביקש, מה הוחלט, מה נעשה, "
+                      "מה עוד פתוח, והעדפות שלו שעלו. רק הסיכום, בלי הקדמה, בלי כלים.")
+
+
+def note_answer_for_summary(chat, name, p, model, summarizer=None):
+    """Owner 21.11 18:55: every 14 answers in a conversation, the provider that answers writes a summary of its last 15 messages, for
+    the memory of a provider without a session of its own. The summary belongs to the conversation (the hand-off file), so another
+    provider or model can go on from it in the middle ("זה בסדר לשלוח נתונים כאלה בין ספקים")."""
+    k = f"summary_count:{chat}"
+    n = int(kv_get(k) or 0) + 1
+    if n < SUMMARY_EVERY:
+        kv_set(k, str(n))
+        return
+    kv_set(k, "0")
+
+    def write():
+        import bridge_direct as bd
+        try:
+            _ctx.probe = True  # this thread's run is not a conversation turn: no rules / pack added around it
+            text = conversation_pack(chat, 15)
+            summary = (summarizer(text) if summarizer else bd.summarize(name, p, provider_key(p) or p.get("token") or "", model, text))
+            if summary:
+                with open(handoff_path(chat), "w", encoding="utf-8") as f:
+                    f.write(f"{T['handoff_title']} ({dt.datetime.now():%d.%m.%Y %H:%M}, {p.get('short') or name})\n\n{summary}\n")
+                log("conversation summary written", chat, name, model, len(summary))
+        except Exception as e:
+            log("conversation summary failed", chat, name, str(e)[:160])
+    threading.Thread(target=write, daemon=True, name="summary").start()
+
+
 def last_good_model(name, p=None):
     """Owner 21.11 18:05: a provider starts from the model that last answered with it (the bridge remembers it), else its configured
     default. No model is ever removed for a failure: "many failures come for no reason"."""
@@ -5549,6 +5584,7 @@ def _run_direct(name, p, prompt, model, chat, on_stage, timeout):
         _ctx.run_seconds = time.time() - t0
     if r["text"] and not probe:
         kv_set(f"last_good_model:{name}", m)
+        note_answer_for_summary(chat or PRIMARY, name, p, m)
     if not r["text"]:
         raise ProviderDown(name, "error", 15, raw="empty answer")
     return {"type": "result", "result": r["text"], "is_error": False, "session_id": None,
