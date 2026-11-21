@@ -1784,7 +1784,7 @@ def test_backup_pulls_the_hosts_code_fast_forward_only(agent, tmp_path):
     (host / "data.json").write_text('{"a": 1}', encoding="utf-8")
     git(host, "commit", "-q", "-am", "2")
     (backup / "data.json").write_text('{"live": 1}', encoding="utf-8")  # a mirrored data file, changed here
-    fc = {"mirror": [str(backup / "data.json")], "git_pull": [{"path": str(backup), "remote": str(host), "branch": "master"}]}
+    fc = {"mirror": [str(backup / "data.json")], "git_pull": [{"path": str(backup), "remote": str(host), "branch": "master"}], "pull_self": False}  # never the real bridge folder (the GitHub build has no hub)
     assert mod.failover_code_pull(fc) == []
     assert (backup / "auto.py").read_text(encoding="utf-8") == "v2", "same code as the host"
     (host / "auto.py").write_text("v3", encoding="utf-8")

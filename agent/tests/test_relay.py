@@ -94,7 +94,7 @@ def test_backup_code_pull_restarts_only_when_not_holding(agent, monkeypatch, tmp
     (host / "agent" / "agent.py").write_text("v2", encoding="utf-8")
     git(host, "commit", "-q", "-am", "2")
     monkeypatch.setattr(mod, "RESTART_FILE", str(tmp_path / "restart.request"))
-    fc = {"mirror": [], "git_pull": [{"path": str(backup), "remote": str(host), "branch": "master", "restart": True}]}
+    fc = {"mirror": [], "git_pull": [{"path": str(backup), "remote": str(host), "branch": "master", "restart": True}], "pull_self": False}  # never the real bridge folder (the GitHub build has no hub)
     assert mod.failover_code_pull(fc) == []
     assert (backup / "agent" / "agent.py").read_text(encoding="utf-8") == "v2"
     assert (tmp_path / "restart.request").exists(), "a backup standing by restarts freely (owner 12:25)"
