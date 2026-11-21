@@ -74,14 +74,15 @@ QUOTA_CODES = (402, 429)
 PROXY_LOG = os.path.join(ROOT, "agent", "oai_proxy.log")
 
 
-def proxy_log(kind, name, req, status="", detail=""):
+def proxy_log(kind, name, req, status="", detail="", who=""):
     """Owner 21.11: Gemini answered once and then "rate" in a group; the agent only ever saw "Request rejected (429)". One line per upstream
     call: the estimated input tokens (a request above the provider's per-minute INPUT-token quota is refused at once: Gemini free tier
     250000), the number of messages and tools, and for an error the upstream status and message. Never the prompt, never a key."""
     try:
         est = len(json.dumps(req, ensure_ascii=False)) // 4
         line = (f"{time.strftime('%Y-%m-%d %H:%M:%S')} {kind} {name} model={req.get('model')} est_input_tokens={est} "
-                f"messages={len(req.get('messages') or [])} tools={len(req.get('tools') or [])} stream={bool(req.get('stream'))}")
+                f"messages={len(req.get('messages') or [])} tools={len(req.get('tools') or [])} stream={bool(req.get('stream'))}"
+                f" max_tokens={req.get('max_tokens') or req.get('max_completion_tokens')} client={(who or '-')[:32]!r}")
         if status != "":
             line += f" status={status}"
         if detail:
@@ -412,13 +413,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(404, error_body(404, "not found"))
         req = to_openai(body, p)
         if is_quota_ping(body):
-            proxy_log("local", name, req, 200, "Claude Code's start-up \"quota\" ping answered here, no request to the provider")
+            proxy_log("local", name, req, 200, "Claude Code's start-up \"quota\" ping answered here, no request to the provider", self.headers.get("User-Agent"))
             return self._json(200, {"id": "msg_local_ping", "type": "message", "role": "assistant", "model": body.get("model") or req["model"],
                                     "content": [{"type": "text", "text": "ok"}], "stop_reason": "max_tokens", "stop_sequence": None,
                                     "usage": {"input_tokens": 1, "output_tokens": 1}})
         used_up = EXHAUSTED.get((name, req.get("model")))
         if used_up and used_up[0] > time.time():
-            proxy_log("local", name, req, 429, "daily quota already used up: answered here, no request to the provider")
+            proxy_log("local", name, req, 429, "daily quota already used up: answered here, no request to the provider", self.headers.get("User-Agent"))
             return self._json(429, error_body(429, used_up[1].split(". retry in")[0] + ". " + retry_text(used_up[0] - time.time())))
         if os.environ.get("OAI_PROXY_DEBUG"):  # shape of the conversation only: roles, and the first characters of a tool result
             print("   <-", [(m["role"], (m.get("content") or "")[:60] if m["role"] == "tool" else len(str(m.get("content") or ""))) for m in req["messages"]][-4:], flush=True)
@@ -430,12 +431,12 @@ class Handler(BaseHTTPRequestHandler):
         for attempt in (1, 2, 3):  # a retry only after "max_tokens too large" (with the provider's limit) or a quota error (with the 2nd key)
             try:
                 r = urllib.request.urlopen(urllib.request.Request(url, data=json.dumps(req).encode(), headers=hdr, method="POST"), timeout=600)
-                proxy_log("ok ", name, req, r.status)
+                proxy_log("ok ", name, req, r.status, "", self.headers.get("User-Agent"))
                 break
             except urllib.error.HTTPError as e:
                 raw_err = e.read().decode("utf-8", "replace")
                 msg = upstream_message(raw_err, e.reason)
-                proxy_log("ERR", name, req, e.code, raw_err)
+                proxy_log("ERR", name, req, e.code, raw_err, self.headers.get("User-Agent"))
                 if e.code in QUOTA_CODES:
                     detail, secs, daily = quota_detail(raw_err)
                     if detail:
