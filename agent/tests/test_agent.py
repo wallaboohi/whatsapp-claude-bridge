@@ -2985,7 +2985,7 @@ def test_finished_status_lists_step_durations_and_total(agent, monkeypatch):
     st.steps = [{"at": "", "ts": 1000.0, "text": "🧵 קריאת הקשר"}, {"at": "", "ts": 1003.0, "text": "💬 ניסוח תשובה"}]
     st.ended = 1011.0
     text = st._final()
-    assert "*סיימתי*" in text and "*0:11*" in text
+    assert "סיימתי" in text and "0:11" in text
     assert "🧵" in text and "💬" in text
 
 

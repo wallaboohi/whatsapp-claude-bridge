@@ -219,16 +219,22 @@ def test_a_stale_asked_hold_is_cleared_without_handing_anything_back(agent, monk
 
 
 def test_status_rows_have_one_icon_column_and_one_divider(agent):
-    """Owner 20.11 (layout ז): label on the right, every icon in the same column, one divider line; order = נתיב first."""
+    """Owner 21.11 (option א): the status is a monospace code block; every row is exactly W cells wide, the icon sits in the same cells
+    in every labeled row, the label (and the previous stage) on the right, the value ends at the left edge."""
     mod, _ = agent
-    st = mod.StatusMsg("sonnet", wa=False)
+    S = mod.StatusMsg
+    st = S("sonnet", wa=False)
     st.set_stage("📖 קורא קבצים", "agent.py")
-    rows = [r for r in st._status_rows() if r.startswith("_")]
+    rows = st._status_rows()
     st.finish()
-    labeled = [r for r in rows if r.split("_")[1]]
-    assert labeled[0].startswith("_נתיב_")
-    # label + non-breaking gap fills the same width, so the icon starts in the same column in every labeled row
-    cols = {len(r.split("_", 2)[1]) + 2 + len(r.split("_", 2)[2]) - len(r.split("_", 2)[2].lstrip(" ")) for r in labeled}
-    assert cols == {mod.StatusMsg.ICON_COL}
+    labeled = [r for r in rows if r.split(" ")[0] in ("נתיב", "ספק", "מודל", "דרך", "פירוט", "שלבים", "לקח", "הקשר")]
+    assert labeled[0].startswith("נתיב")
+    for r in labeled:
+        assert S._cells(r) <= S.W
+        i = next(k for k, ch in enumerate(r) if ord(ch) >= 0x1F000 or ch in "⏳⌛✅☁🏠⏱")
+        assert S._cells(r[:i]) == S.ICON_COL
+        if r.rstrip() != r[:i + 1]:  # a row with a value ends exactly at the line width
+            assert S._cells(r) == S.W
     full = st._full("תשובה קצרה")
-    assert full.count(mod.StatusMsg.DIVIDER) == 2 and full.index("*תשובה:*") > full.rindex(mod.StatusMsg.DIVIDER)
+    assert full.count(S.DIVIDER) == 2 and full.count("```") == 2 and full.index("*תשובה:*") > full.rindex(S.DIVIDER)
+    assert S._cells(S.DIVIDER) == S.W
