@@ -9118,6 +9118,21 @@ def _kill_old_tunnels():
 
 
 _tunnel_kick = set()  # names of peers whose tunnel the chain watch wants rebuilt now
+_tunnel_beat = [time.time()]  # last turn of the tunnel keeper's loop
+
+
+def tunnel_watchdog():
+    """Owner 21.11 (morning): a tunnel keeper that stops turning (blocked on a pipe, a locked database, anything) is replaced after 90 s by
+    a new one. The old thread stays blocked and harmless; the ssh tunnels left behind are stopped by the new keeper at start-up."""
+    while True:
+        time.sleep(30)
+        try:
+            if CFG.get("peers") and time.time() - _tunnel_beat[0] > 90:
+                log("tunnel keeper stalled for", int(time.time() - _tunnel_beat[0]), "s - starting a new one")
+                _tunnel_beat[0] = time.time()
+                threading.Thread(target=tunnel_keeper, daemon=True).start()
+        except Exception:
+            log("tunnel watchdog", traceback.format_exc())
 
 
 def tunnel_keeper():
@@ -9130,6 +9145,7 @@ def tunnel_keeper():
     _kill_old_tunnels()
     procs, wait, next_try, no_rev = {}, {}, {}, {}
     while True:
+        _tunnel_beat[0] = time.time()  # the watchdog below starts a new keeper when this stops moving
         for p in peers:
             name = p.get("name") or p["tunnel"]
             proc = procs.get(name)
@@ -9152,7 +9168,13 @@ def tunnel_keeper():
             if proc is not None:  # it died
                 err = ""
                 try:
-                    err = (proc.stderr.read() or b"").decode("utf-8", "replace")[-200:]
+                    # owner 21.11 (morning): the bedroom's keeper logged nothing for ~5 h after Tailscale dropped, so no tunnel was rebuilt
+                    # and the chain could never see a peer stable for a minute (no hand-back for 70 min). stderr.read() has no time limit
+                    # and blocks for ever when something still holds the pipe open; communicate() with a limit cannot.
+                    err = (proc.communicate(timeout=3)[1] or b"").decode("utf-8", "replace")[-200:]
+                except subprocess.TimeoutExpired:
+                    _kill_tree(proc)
+                    err = "stderr not closed within 3 s"
                 except Exception:
                     pass
                 wait[name] = min(30, max(2, wait.get(name, 2) * 2))  # owner 18.11 19:42: was 5..120 s
@@ -11641,6 +11663,29 @@ def chain_handback_target(fc, host, view):
     return ""
 
 
+_ts_cache = {"at": 0.0, "ok": True}
+
+
+def tailscale_running():
+    """Owner 21.11 (morning): the bedroom's Tailscale was stopped at about 07:30; it could not see any PC, decided that the desktop was
+    down and took the bridge at 09:31 while the desktop was alive (the desktop was thrown off), and then could not hand it back (every
+    ssh to a Tailscale address timed out): ~70 min of a bridge on a PC without Claude. A PC whose own Tailscale is not running is isolated:
+    it must not conclude that the others are down. True also when there is no Tailscale on this PC or the check fails."""
+    if time.time() - _ts_cache["at"] < 15:
+        return _ts_cache["ok"]
+    ok = True
+    try:
+        exe = shutil.which("tailscale") or r"C:\Program Files\Tailscale\tailscale.exe"
+        if os.path.exists(exe):
+            r = subprocess.run([exe, "status"], capture_output=True, text=True, timeout=6, creationflags=NO_WINDOW)
+            out = ((r.stdout or "") + (r.stderr or "")).lower()
+            ok = not ("tailscale is stopped" in out or "logged out" in out or "needslogin" in out.replace(" ", ""))
+    except Exception:
+        ok = True
+    _ts_cache.update(at=time.time(), ok=ok)
+    return ok
+
+
 def internet_ok(timeout=2.0):
     """This PC reaches WhatsApp at all (a backup without internet must not take the identity)."""
     for h in ("web.whatsapp.com", "g.whatsapp.net"):
@@ -11766,6 +11811,9 @@ def chain_backup_step(fc, host, st, view, now=None):
         return False
     if chain_cfg()["net_check"] and not internet_ok():
         _chain_note_wait(host, "אין כאן אינטרנט")
+        return False
+    if chain_cfg()["net_check"] and not tailscale_running():
+        _chain_note_wait(host, "Tailscale כבוי כאן: אין לי דרך לראות את המחשבים האחרים, לכן לא לוקחים את הגשר")
         return False
     _chain_note_wait(host, "")
     kv_set(f"fo_chain_fence_said:{host}", "")
@@ -14050,7 +14098,7 @@ if __name__ == "__main__":
         failover_resume()  # backup machine still holding another machine's plugins
     except Exception:
         log("failover resume failed", traceback.format_exc())
-    for target in [worker, slow_worker, command_worker, scheduler, event_listener, watchdog, tunnel_keeper, peer_watch, chain_watch, local_health_watch, push_loop, keep_awake, chrome_keeper, adb_keeper, sms_sync_loop, phone_db_loop] + list(_threads):
+    for target in [worker, slow_worker, command_worker, scheduler, event_listener, watchdog, tunnel_keeper, tunnel_watchdog, peer_watch, chain_watch, local_health_watch, push_loop, keep_awake, chrome_keeper, adb_keeper, sms_sync_loop, phone_db_loop] + list(_threads):
         threading.Thread(target=target, daemon=True).start()
     if _defer:
         threading.Thread(target=deferred_plugins, daemon=True).start()

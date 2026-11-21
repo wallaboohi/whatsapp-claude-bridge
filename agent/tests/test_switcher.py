@@ -627,3 +627,49 @@ def test_a_failed_group_stops_the_backup_with_the_reason(agent, monkeypatch):
         raise AssertionError("must raise")
     except RuntimeError as e:
         assert "creating the backup folders failed" in str(e) and "not a folder" in str(e)
+
+
+# ---- owner 21.11 (morning): the bridge ran on the bedroom for 70+ minutes. Its Tailscale was off (it took the bridge while isolated, then
+# could not hand it back) and its tunnel keeper was blocked (no tunnel was rebuilt, so no peer was ever "stable for a minute").
+
+def test_a_backup_does_not_take_the_bridge_while_its_own_tailscale_is_off(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    _env(mod, monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "internet_ok", lambda *a, **k: True)
+    monkeypatch.setattr(mod, "tailscale_running", lambda: False)
+    notes, took = [], []
+    monkeypatch.setattr(mod, "_chain_note_wait", lambda host, why: notes.append(why))
+    monkeypatch.setattr(mod, "failover_activate", lambda *a, **k: took.append(1) or "x")
+    monkeypatch.setattr(mod, "chain_pass_marker", lambda h: "")
+    monkeypatch.setattr(mod, "chain_take_blocker", lambda *a, **k: ("", None))  # nothing else blocks: the host looks down
+    assert mod.chain_backup_step(FC, "נייח", {}, _view("down")) is False
+    assert took == [] and any("Tailscale" in n for n in notes), "isolated: the host looks down only because this PC cannot see anybody"
+
+
+def test_tailscale_stopped_is_detected_and_a_pc_without_tailscale_is_not_blocked(agent, monkeypatch):
+    mod, _ = agent
+
+    class R:
+        returncode = 0
+
+        def __init__(self, text):
+            self.stdout, self.stderr = text, ""
+    monkeypatch.setattr(mod.os.path, "exists", lambda p: True)
+    for text, expected in (("Tailscale is stopped.", False), ("Logged out.", False), ("100.1.1.1  me  user@  windows  -", True)):
+        mod._ts_cache.update(at=0.0, ok=True)
+        monkeypatch.setattr(mod.subprocess, "run", lambda *a, _t=text, **k: R(_t))
+        assert mod.tailscale_running() is expected, text
+    mod._ts_cache.update(at=0.0, ok=True)
+    monkeypatch.setattr(mod.os.path, "exists", lambda p: False)  # no tailscale.exe on this PC
+    assert mod.tailscale_running() is True
+
+
+def test_the_tunnel_keeper_cannot_block_on_a_dead_tunnels_stderr_and_a_watchdog_replaces_a_stalled_one():
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    text = open(os.path.join(here, "agent.py"), encoding="utf-8").read()
+    i = text.index("def tunnel_keeper():")
+    body = text[i:i + 3500]
+    assert "proc.stderr.read()" not in body, "an unbounded read blocked the bedroom's keeper for hours"
+    assert "communicate(timeout=3)" in body and "_tunnel_beat[0] = time.time()" in body
+    assert "def tunnel_watchdog" in text and "tunnel_watchdog," in text, "the watchdog is started with the other threads"
