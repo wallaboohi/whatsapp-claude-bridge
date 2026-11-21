@@ -3472,3 +3472,16 @@ def test_no_provider_name_and_hebrew_actions(agent, monkeypatch):
         st = mod._stage_of({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": tool, "input": {}}]}})
         assert not any("a" <= ch.lower() <= "z" for ch in st), st
     assert mod._detail_of("Grep", {"pattern": "def foo"}) == "def foo"  # raw detail stays (owner 16:09)
+
+
+def test_auto_model_picks_only_models_that_answer(agent, monkeypatch):
+    """Owner 22.11: auto sent a short question to NVIDIA's gemma-3-4b-it (404) while minimax answered."""
+    mod, _ = agent
+    monkeypatch.setattr(mod, "provider_model_list", lambda name: ["small-4b", "big-m3"])
+    monkeypatch.setattr(mod, "model_class", lambda m: (0 if "4b" in m else 2, False))
+    monkeypatch.setattr(mod, "model_record", lambda name, m: (5, 1.0, 2.0))
+    assert mod.auto_model("px", "מה השעה") == "small-4b", "both answer: the small one for a short question"
+    mod.kv_set("model_failed:px:small-4b", "2026-11-22T00:44:06")
+    assert mod.auto_model("px", "מה השעה") == "big-m3", "a model that failed waits until it answers"
+    mod.kv_set("model_failed:px:small-4b", "")
+    assert mod.auto_model("px", "מה השעה") == "small-4b"

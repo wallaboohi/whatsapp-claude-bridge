@@ -3637,6 +3637,17 @@ def auto_model(name, text="", tier=None):
     ms = provider_model_list(name)
     if len(ms) < 2:
         return None
+    # owner 22.11: auto picked by size first and sent a short question to a model that does not answer (NVIDIA gemma-3-4b-it, 404)
+    # while another one answered. Now only models that answer: none that failed since its last answer, and when the bridge knows
+    # any that answered (the last one, the daily check, the journal), only those; the size class is chosen among them.
+    ms = [m for m in ms if not kv_get(f"model_failed:{name}:{m}")] or ms
+    try:
+        snap = json.loads(kv_get("model_answers") or "{}").get(name) or {}
+    except ValueError:
+        snap = {}
+    good = {m for m, r in snap.items() if (r or {}).get("ok")} | {kv_get(f"last_good_model:{name}") or ""}
+    good |= {m for m in ms if (model_record(name, m) or (0, 0))[1] > 0}
+    ms = [m for m in ms if m in good] or ms
     tier = tier or complexity_tier(text)
     code = is_code_task(text)
     default = (providers().get(name) or {}).get("model")
@@ -5761,6 +5772,8 @@ def _run_direct(name, p, prompt, model, chat, on_stage, timeout):
             # owner 21.11 18:05: the model that failed is not the one that last answered: the same message goes at once, once, to that
             # one (same provider), instead of the owner sending it again (gemini-2.5-pro 404 four times, 18:00; a 503 / 429 that passed
             # half a minute later)
+            if not probe:  # owner 22.11: auto does not pick it again until it answers (never removed from the list)
+                kv_set(f"model_failed:{name}:{m}", dt.datetime.now().isoformat(timespec="seconds"))
             fallback = live_valid_model(name, last_good_model(name, p))
             if not fallback or fallback == m or probe or bd.exhausted_until(name, fallback, len(keys)):
                 raise
@@ -5774,6 +5787,8 @@ def _run_direct(name, p, prompt, model, chat, on_stage, timeout):
         raise ProviderDown(name, reason, minutes, raw=e.raw[-600:]) from None
     finally:
         _ctx.run_seconds = time.time() - t0
+    if r["text"]:
+        kv_set(f"model_failed:{name}:{m}", "")  # it answers again (a probe too)
     if r["text"] and not probe:
         kv_set(f"last_good_model:{name}", m)
         note_answer_for_summary(chat or PRIMARY, name, p, m)
