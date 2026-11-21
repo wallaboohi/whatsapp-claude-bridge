@@ -230,8 +230,13 @@
    "opencode/glm-5.3-flash-free",
    "opencode/big-pickle",
    "opencode/nemotron-3.5-super-vl-free",
-   "opencode/longcat-2.5-free"
+   "opencode/longcat-2.5-free",
+   "opencode/iceman-free"
   ],
+  "model_aliases": {
+   "iceman": "opencode/iceman-free",
+   "אייסמן": "opencode/iceman-free"
+  },
   "aliases": [
    "opencode",
    "אופנקוד"

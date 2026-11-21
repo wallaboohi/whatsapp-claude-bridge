@@ -3505,6 +3505,7 @@ MODEL_DESC_RULES = (  # (words that must all be in the lowercase model id, short
     (("ernie",), "מודל כללי של Baidu"),
     (("ling",), "מודל כללי מהיר"),
     (("longcat",), "מודל כללי מהיר"),
+    (("iceman",), "מודל חינמי של OpenCode"),
     (("big-pickle",), "מודל חינמי של OpenCode, כללי"),
 )
 
@@ -7160,6 +7161,7 @@ MODEL_HE = {"sonnet[1m]": "סונט 1M", "claude-haiku-5-5": "הייקו 5.5", "
             "gemma-4-31b-it": "ג'מה 4 31B", "gemma-4-26b-a4b-it": "ג'מה 4 26B", "ernie-5.5-flash-preview": "ארני 5.5 פלאש", "ling-3.2-flash": "לינג 3.2 פלאש",
             "minimax-m3.1-flash": "מינימקס M3.1 פלאש", "llama-3.3-70b-instruct-fp8-fast": "לאמה 3.3 70B", "qwen2.5-coder-32b-instruct": "קוון 2.5 קודר 32B",
             "deepseek-v4.1-flash": "דיפסיק V4.1 פלאש", "glm-5.3-flash": "GLM 5.3 פלאש", "big-pickle": "ביג פיקל", "longcat-2.5": "לונגקאט 2.5",
+            "iceman": "אייסמן",
             "bridge-qwen3-4b": "גשר קוון 3 4B", "dicta": "דיקטה", "aya": "איה", "commandr": "קומנדר", "qwen-tiny": "קוון טייני"}
 
 
