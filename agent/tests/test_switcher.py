@@ -935,3 +935,28 @@ def test_the_provider_list_shows_only_providers_that_really_answered(agent, monk
     assert "Groq" in head and "/בדוק מענה" in t
     silent = t.split("לא ענו בבדיקה האחרונה")[1]
     assert "Gemini" in silent and "מכסת השימוש נגמרה" in silent
+
+
+def test_the_bridge_never_leaves_a_message_stuck_in_its_queue(agent, monkeypatch):
+    """Owner 21.11 19:45: a message whose wait is over goes back to the queue by itself; one stuck with no visible reason gets ONE
+    question in its conversation (send again / take out), and the owner's /תור שלח N · /תור הסר N do it."""
+    agent = agent[0]
+    sent = []
+    monkeypatch.setattr(agent, "send", lambda chat, text, **k: sent.append((chat, text)) or True)
+    monkeypatch.setattr(agent, "reply", lambda text, **k: sent.append(("reply", text)) or True)
+    now = agent.dt.datetime(2026, 11, 21, 20, 0)
+    with agent.adb() as db:
+        db.execute("INSERT INTO commands (msg_id, text, at, chat_jid, source, sync, status, retry_at) VALUES "
+                   "('a1', 'ממתין שעבר זמנו', '2026-11-21 18:00:00', 'g@g.us', 'wa', 0, 'waiting_limit', '2026-11-21 19:00:00')")
+        db.execute("INSERT INTO commands (msg_id, text, at, chat_jid, source, sync, status) VALUES "
+                   "('a2', 'תקוע בלי סיבה', '2026-11-21 19:30:00', 'g@g.us', 'wa', 0, 'pending')")
+        ids = {m: i for i, m in db.execute("SELECT id, msg_id FROM commands WHERE msg_id IN ('a1','a2')")}
+    released, asked = agent.queue_keeper(now)
+    assert (released, asked) == (1, 1)
+    with agent.adb() as db:
+        assert db.execute("SELECT status FROM commands WHERE id = ?", (ids["a1"],)).fetchone()[0] == "pending"
+    assert f"/תור שלח {ids['a2']}" in sent[-1][1] and f"/תור הסר {ids['a2']}" in sent[-1][1]
+    assert agent.queue_keeper(now)[1] == 0, "asked once"
+    assert agent.live_control("g@g.us", "m9", f"/תור הסר {ids['a2']}")
+    with agent.adb() as db:
+        assert db.execute("SELECT status FROM commands WHERE id = ?", (ids["a2"],)).fetchone()[0] == "cancelled"

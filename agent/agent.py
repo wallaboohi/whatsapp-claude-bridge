@@ -8216,6 +8216,63 @@ def pc_rows_only(rows):
     return all((src or "wa") == "pc" and not sync or (chat == LOCAL) for _, _, chat, src, sync, *_ in rows)
 
 
+STUCK_PENDING_MIN = 15
+STUCK_WAITING_MIN = 120
+
+
+def queue_keeper(now=None):
+    """Owner 21.11 19:45: the bridge itself never leaves a message stuck in its queue. A message whose reason to wait is over
+    (its limit / stall time passed) goes back to the queue by itself; one that waits with no visible reason (pending with nobody
+    working, an old approval / budget / stall wait) gets ONE question in its conversation: send again (/תור שלח N) or take it out
+    (/תור הסר N). Returns (released, asked)."""
+    now = now or dt.datetime.now()
+    released = asked = 0
+    with adb() as db:
+        rows = db.execute("SELECT id, msg_id, at, chat_jid, status, retry_at, text, source FROM commands WHERE status IN "
+                          "('pending', 'waiting_limit', 'waiting_budget', 'waiting_approval', 'stalled', 'interrupted')").fetchall()
+    with _workers_lock:
+        busy = set(_workers) | set(_side_workers)
+    with _active_lock:
+        busy |= set(_active_runs)
+    for cid, mid, at, chat, st, retry_at, text, src in rows:
+        chat = chat or PRIMARY
+        try:
+            since = kv_get(f"queue_released:{cid}") or str(at)
+            age = (now - dt.datetime.fromisoformat(since[:19].replace(" ", "T"))).total_seconds() / 60
+        except ValueError:
+            continue
+        due = None
+        if retry_at:
+            try:
+                due = dt.datetime.fromisoformat(str(retry_at)[:19])
+            except ValueError:
+                due = None
+        if st in ("waiting_limit", "stalled") and due and now > due + dt.timedelta(minutes=10):
+            with adb() as db:  # its wait is over and nothing picked it up: back to the queue
+                db.execute("UPDATE commands SET status = 'pending', retry_at = NULL WHERE id = ? AND status = ?", (cid, st))
+            kv_set(f"queue_released:{cid}", now.isoformat(timespec="seconds"))  # its time in the queue starts again
+            log("queue keeper: released", cid, st)
+            released += 1
+            continue
+        stuck = ((st == "pending" and age >= STUCK_PENDING_MIN and chat not in busy) or
+                 (st in ("waiting_budget", "waiting_approval", "interrupted") and age >= STUCK_WAITING_MIN) or
+                 (st in ("waiting_limit", "stalled") and not due and age >= STUCK_WAITING_MIN))
+        if not stuck or kv_get(f"stuck_asked:{cid}"):
+            continue
+        kv_set(f"stuck_asked:{cid}", now.isoformat(timespec="seconds"))
+        why = {"pending": "בתור ואף אחד לא עובד עליה", "waiting_budget": "ממתינה לתקרת העלות", "waiting_approval": "ממתינה לאישור",
+               "interrupted": "נקטעה", "waiting_limit": "ממתינה למכסה", "stalled": "נעצרה כי הספק לא זז"}.get(st, st)
+        try:
+            send(chat, CFG["reply_prefix"] + f"⏳ ההודעה הזו תקועה בתור מ-{str(at)[11:16]} ({why}).\n"
+                 f"לשליחה מחדש: */תור שלח {cid}* · להסרה מהתור: */תור הסר {cid}*", quoted=mid if src == "wa" else None)
+            asked += 1
+        except Exception as e:
+            log("queue keeper ask failed", cid, e)
+    if released:
+        _command_signal.set()
+    return released, asked
+
+
 def claim_next(chat):
     """The next pending command of one conversation, atomically marked running (attempts + 1), or None."""
     with adb() as db:
@@ -12826,6 +12883,16 @@ def live_control(cj, mid, content):
     with adb() as db:
         rows = db.execute(q, (PRIMARY, cj, mid)).fetchall()
     out = []
+    qm = re.match(r"^(שלח|שלח מחדש|הסר|בטל|send|drop)\s+#?(\d+)$", rest)
+    if word in ("תור", "queue") and qm:  # owner 21.11 19:45: send a stuck message again, or take it out of the queue
+        cid, again = int(qm.group(2)), qm.group(1) in ("שלח", "שלח מחדש", "send")
+        with adb() as db:
+            n = db.execute("UPDATE commands SET status = ?, retry_at = NULL WHERE id = ? AND status NOT IN ('done', 'running')",
+                           ("pending" if again else "cancelled", cid)).rowcount
+        if n and again:
+            _command_signal.set()
+        reply(("🔁 נשלחה שוב לתור." if again else "🗑️ הוסרה מהתור.") if n else f"לא מצאתי הודעה {cid} שמחכה בתור.", quoted=mid)
+        return True
     if word in ("תור", "queue"):
         names = {"running": "▶️ רץ", "pending": "⏳ בתור", "waiting_limit": "⏸️ ממתין למכסה", "interrupted": "⚠️ נקטע",
                  "stalled": "⏸️ נעצר (תקוע), ממתין לספק"}
@@ -14342,6 +14409,8 @@ def scheduler():
                     if CFG.get("once_jobs"):
                         slow.put(once_jobs)
                     slow.put(sync_all_group_names)
+                    if dt.datetime.now().minute % 5 == 0:
+                        slow.put(queue_keeper)  # owner 21.11 19:45: nothing stays stuck in the queue
                     slow.put(lambda: refresh_checks_in_background() if time.time() - min([t for t, _ in CHECK_CACHE.values()] or [0]) > CHECK_STALE_SEC else None)  # owner 21.11: the /ספק list is shown from kept checks
                     work.put(transcribe_backfill_check)
                 # owner 11.11: the phone's data folder once a day (tools/phone_sync.py); the phone is not always
