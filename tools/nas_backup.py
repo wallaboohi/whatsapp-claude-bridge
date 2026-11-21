@@ -28,8 +28,6 @@ HOME = os.path.expanduser("~")
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 DEST_DEFAULT = r"\\10.0.0.154\YAKIR\bridge-backup"
 SKIP_DIRS = [".venv", "node_modules", "__pycache__", ".pytest_tmp", "browser_profile", "tmp", ".aider.tags.cache.v4"]
-SMALL_DIRS = ["secrets", os.path.join("agent", "home")]
-SMALL_GLOBS = [os.path.join("agent", "*.json"), os.path.join("whatsapp-bridge", "store", "*.json"), os.path.join("agent", "providers", "**", "*")]
 BACKUP_EXTRA = [os.path.join(HOME, ".codex", "config.toml"), os.path.join(HOME, ".gemini", "settings.json"),
                 os.path.join(HOME, ".qwen", "settings.json"), os.path.join(HOME, ".claude", "projects", "C--WINDOWS-system32", "memory")]
 LOG = os.path.join(ROOT, "agent", "nas_backup.log")
