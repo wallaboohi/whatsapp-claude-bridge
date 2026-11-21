@@ -841,6 +841,9 @@ def auto_release():
     code is already included (_peers_included, config release_require_peers) — else postpone, never publish half."""
     if not CFG.get("auto_release"):
         return
+    wd = CFG.get("auto_release_weekday")  # owner 22.11: GitHub once a week, Sunday 04:00 (0 = Monday … 6 = Sunday)
+    if wd is not None and dt.date.today().weekday() != int(wd):
+        return
 
     def g(*a, timeout=120):
         return subprocess.run(["git", *a], cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace",

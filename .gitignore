@@ -108,3 +108,4 @@ whatsapp-mcp-server/providers/
 agent/providers/_rules/
 agent/providers/*/exhausted.json
 outbox/
+agent/providers/INDEX.md
