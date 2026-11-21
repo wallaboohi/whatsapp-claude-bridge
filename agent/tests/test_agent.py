@@ -2224,6 +2224,7 @@ def _keys(mod, monkeypatch, *names):
 def test_auto_ladder_goes_fast_to_slow_and_skips_what_is_down(agent, monkeypatch):
     mod, _ = agent
     _keys(mod, monkeypatch, "gemini", "groq", "nvidia")
+    monkeypatch.setattr(mod, "translator_up", lambda max_age=30: True)  # not the live port 8799 (one run in three failed)
     assert mod.auto_pick() == "claude"  # the subscription first (already paid)
     mod.kv_set("limit_until", (mod.dt.datetime.now() + mod.dt.timedelta(hours=1)).isoformat(timespec="seconds"))
     assert mod.auto_pick() == "groq"  # its limit is on: the fastest free provider (owner 14.11: ladder fast to slow)
@@ -2249,6 +2250,7 @@ def test_the_switch_is_by_measurement_quota_and_fresh_failures(agent, monkeypatc
     wait behind the healthy ones, and a short message keeps the Claude subscription free for real work."""
     mod, _ = agent
     _keys(mod, monkeypatch, "gemini", "groq", "nvidia")
+    monkeypatch.setattr(mod, "translator_up", lambda max_age=30: True)  # not the live port 8799 (one run in three failed)
     now = mod.dt.datetime.now()
     mod.kv_set("limit_until", (now + mod.dt.timedelta(hours=1)).isoformat(timespec="seconds"))  # Claude is capped
     assert mod.auto_pick() == "groq"  # nothing measured: the ladder order
