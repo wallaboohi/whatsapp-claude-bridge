@@ -3758,6 +3758,25 @@ def _peer_rows(peer_brief, local):
     return out or ["💤 אין שם בינה מסוג זה"]
 
 
+def answered_lately(name, hours=24):
+    """Owner 21.11 19:35: a provider counts as working only after it really answered (the last check or a real run). Claude is
+    checked by its usage meter, not by a message."""
+    if (providers().get(name) or {}).get("kind") == "claude":
+        try:
+            return bool(provider_status(name).get("ok"))
+        except Exception:
+            return False
+    st = ai_state_get(name, hours=hours, fresh=False)
+    return bool(st and st.get("ok"))
+
+
+def silent_why(name):
+    st = ai_state_get(name, hours=24, fresh=False)
+    if not st:
+        return "לא נבדק"
+    return REASON_SHORT_HE.get(st.get("reason") or "", "לא ענה")
+
+
 def providers_text():
     """Owner 16.11 21:35: the provider list as four sections (cloud / local × this computer / the other one),
     every provider numbered and every model numbered after '=' — switch with /N and /N M.
@@ -3779,11 +3798,19 @@ def providers_text():
             peer_brief = (CHECK_CACHE.get("__peer__") or (0, None))[1]
     rem = ["auto" if "auto" in allp and auto_switch_on() else ""] + [k for k in names if k != "auto" and not provider_is_local(k)]
     loc = [k for k in names if k != "auto" and provider_is_local(k)]
+    # owner 21.11 19:35: only providers that really answered in the last check are listed ("the bridge said available and nobody
+    # answered"); the rest go to one line with why, until /בדוק מענה (or the 06:00 / 18:00 check) sees them answer
+    silent = [k for k in rem + loc if k and k != "auto" and k != cur and not answered_lately(k)]
+    rem, loc = [k for k in rem if k not in silent], [k for k in loc if k not in silent]
     lines = [checks_age_line(), "*🔌 ספק הבינה של הגשר* (כל השיחות עוברות דרכו) · מודל של ספק: /N M"]
     lines += ["", f"*{machine_tag()}* · ☁️ *בענן*"] + [_provider_row(k, cur, cm) for k in rem if k]
     lines += ["", f"*💻 {peer_name}* · ☁️ *בענן*"] + _peer_rows(peer_brief, local=False)
     lines += ["", f"*{machine_tag()}* · 🏠 *מקומי*"] + [_provider_row(k, cur, cm) for k in loc]
     lines += ["", f"*💻 {peer_name}* · 🏠 *מקומי*"] + _peer_rows(peer_brief, local=True)
+    if silent:
+        lines += ["", "⚪ *לא ענו בבדיקה האחרונה (לא מוצגים):* " + " · ".join(
+            f"/{provider_number(k)} {(allp.get(k) or {}).get('short') or k} ({silent_why(k)})" for k in silent),
+            "_לבדיקה מחדש של כולם: /בדוק מענה_"]
     words = " ".join(f"/{provider_number(k)}" for k in provider_order())
     lines += ["", f"החלפה: / ומספר ({words}) או השם · מודל: /N M (למשל /ספק 3 2) או /<שם מודל> · איפוס הקבוצה: /ספק כאן איפוס · כל המחשב: /ספק מחשב <שם> · בדיקת מענה: /בדוק מענה"]
     return "\n".join(lines)

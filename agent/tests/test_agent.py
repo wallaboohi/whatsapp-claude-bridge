@@ -2367,6 +2367,7 @@ def test_every_answer_says_where_the_model_runs(agent, monkeypatch, tmp_path):
     assert "🏠 לפטופ" in mod.ai_tag("opus")
     mod.set_provider("groq")
     assert "☁️ בענן" in mod.ai_tag("opus")
+    mod.ai_state_set("ollama", True, src="state")  # owner 21.11: only a provider that answered is listed
     t = mod.providers_text()  # owner 16.11 21:35: four sections (cloud / local × this computer / the other), remote first
     assert "בענן" in t and "מקומי" in t and "מארח מרוחק" not in t  # owner 17.11: no machine is called a remote host
     assert t.index("בענן") < t.index("מקומי") and t.index("גרוק") < t.index("מקומי") < t.index("אולמה")

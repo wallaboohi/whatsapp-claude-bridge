@@ -921,3 +921,17 @@ def test_the_answer_and_the_memory_hold_no_speaker_line_no_quote_and_no_decorati
     import bridge_direct as bd
     for part in ("מזג", "מה יקיר רוצה", "מה יקיר צריך", "נקודות שיקיר דיבר עליהן", "החלטות של יקיר", "שאלות שהבינה שאלה", "התחייבויות", "תקלות", "ממתין לאישור", "(נבדק)", "בלי אייקונים"):
         assert part in bd.SUMMARY_TEMPLATE
+
+
+def test_the_provider_list_shows_only_providers_that_really_answered(agent, monkeypatch):
+    """Owner 21.11 19:35: the bridge said "available" and nobody answered; only a provider that answered in the last check is listed."""
+    agent = agent[0]
+    monkeypatch.setattr(agent, "cached_check", lambda k: {"ok": True, "detail": "x", "models": []})
+    monkeypatch.setattr(agent, "peer_fetch", lambda *a, **k: None)
+    agent.ai_state_set("groq", True, src="state")
+    agent.ai_state_set("gemini", False, "quota", src="state")
+    t = agent.providers_text()
+    head = t.split("לא ענו בבדיקה האחרונה")[0]
+    assert "Groq" in head and "/בדוק מענה" in t
+    silent = t.split("לא ענו בבדיקה האחרונה")[1]
+    assert "Gemini" in silent and "מכסת השימוש נגמרה" in silent

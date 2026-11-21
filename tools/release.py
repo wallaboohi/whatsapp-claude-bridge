@@ -104,7 +104,10 @@ def main():
                  "2026-11-13 15:00", "2026-11-14 23:59", "2026-12-31 23:59"):
         if when:
             print("  🕒 שעון מדומה:", when)
-        run([uv, "run", "-q", "--no-sync", "--group", "dev", "pytest", "-q", "-p", "no:cacheprovider", "--basetemp", os.path.join(ROOT, ".pytest_tmp", "release"), "tests"],
+        # owner 21.11: a fresh folder for every run — pytest empties --basetemp first, and a file still held by the previous run
+        # (20.11 03:09: PermissionError in .pytest_tmp) failed the night release
+        base = os.path.join(ROOT, ".pytest_tmp", f"release-{dt.datetime.now():%Y%m%d-%H%M%S}-{len(when or 'now')}-{os.getpid()}")
+        run([uv, "run", "-q", "--no-sync", "--group", "dev", "pytest", "-q", "-p", "no:cacheprovider", "--basetemp", base, "tests"],
             cwd=os.path.join(ROOT, "agent"), env={"FAKE_NOW": when} if when else None)
     run([uv, "run", "-q", "python", "-c", "import main, extras"], cwd=os.path.join(ROOT, "whatsapp-mcp-server"))
     claude = shutil.which("claude")
