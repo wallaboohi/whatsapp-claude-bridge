@@ -354,7 +354,7 @@ def restart_now(reason):
         RESTART_REQ.clear()
         log("restart refused by the code guard: the code on disk does not load |", err)
         try:
-            send(PRIMARY, CFG["reply_prefix"] + "🛡️ *השומר עצר את ההפעלה מחדש:* הקוד בדיסק לא נטען, ולכן הגרסה שרצה נשארת.\n"
+            send(system_chat(), CFG["reply_prefix"] + "🛡️ *השומר עצר את ההפעלה מחדש:* הקוד בדיסק לא נטען, ולכן הגרסה שרצה נשארת.\n"
                  f"_שגיאה:_ `{err[:200]}`")
         except Exception:
             pass
@@ -878,6 +878,10 @@ def report_restart():
         return
     wait_bridge(300)
     reason = restart_reason_he(info["reason"]) if info.get("reason") else ""
+    if CFG.get("log_group"):  # owner 21.11: "עליתי מחדש" only in the bridge-log group
+        send_group_notice(CFG["log_group"], restart_notice_text(CFG["log_group"], reason))
+        resume_after_restart()
+        return
     for chat, g in load_groups().items():
         if not chat.endswith("@g.us") or (g or {}).get("guest"):
             continue
@@ -4079,12 +4083,39 @@ def send_group_notice(chat, text):
         log("system notice send failed", chat)
 
 
+def nas_backup_check():
+    """Owner 21.11: the TrueNAS backup is the bridge's only backup — its result is checked every morning (tools/nas_backup.py,
+    02:30) and a failure or a missing run is told in the bridge-log group."""
+    try:
+        st = json.load(open(os.path.join(HERE, "nas_backup_status.json"), encoding="utf-8"))
+        age = (dt.datetime.now() - dt.datetime.fromisoformat(st["at"])).total_seconds() / 3600
+    except Exception:
+        st, age = {}, 999
+    if st.get("ok") and age < 26:
+        log("nas backup ok", st.get("at"))
+        return
+    why = "לא רץ ב-26 השעות האחרונות" if age >= 26 else "נכשל: " + "; ".join(f"{k}: {v}" for k, v in (st.get("steps") or {}).items())[:300]
+    broadcast_system_notice(f"⚠️ הגיבוי ל-TrueNAS {why}. בדיקה: tools/nas_backup.py, המשימה \"YB bridge NAS backup\".")
+
+
+def system_chat():
+    """Owner 21.11 20:45: every system message of the bridge goes to the bridge-log group (config log_group); the other groups get
+    only the conversation, the provider / model the owner picks, and failures in the middle of a run. Without it: the control group."""
+    return CFG.get("log_group") or PRIMARY
+
+
 def broadcast_system_notice(text):
-    """Send machine-wide maintenance notices to every enabled WhatsApp group handled by this agent."""
+    """Send machine-wide maintenance notices to the bridge-log group (owner 21.11); without one, to every enabled group."""
     if len(text) > 150 and hebrew_share(text) < 0.35:  # owner 17.11: machine notices are Hebrew too, English is translated first
         text = ensure_hebrew(text)
     body = italic(text.strip()) if CFG.get("reply_italic", True) else text.strip()
     message = CFG["reply_prefix"] + body
+    if CFG.get("log_group"):
+        kv_set("last_tool_msg", json.dumps({"ts": dt.datetime.now().isoformat(timespec="seconds"), "text": text.strip()[:300]},
+                                           ensure_ascii=False))
+        if not send(CFG["log_group"], message):
+            log("system notice send failed", CFG["log_group"])
+        return
     for chat, g in load_groups().items():
         if not chat.endswith("@g.us") or (g or {}).get("guest"):
             continue  # a guest group (Rita) never gets machine notices: the bridge would turn each into an approval draft
@@ -9296,7 +9327,7 @@ def hold_restart_file():
     kv_set("restart_held", json.dumps({"at": dt.datetime.now().isoformat(timespec="seconds"), "reason": reason}, ensure_ascii=False))
     log("restart request held, only the owner's /הפעל מחדש restarts:", reason)
     try:
-        send(PRIMARY, CFG["reply_prefix"] + f"🔒 *בקשה להפעלה מחדש:* {reason or 'בלי סיבה'}\n"
+        send(system_chat(), CFG["reply_prefix"] + f"🔒 *בקשה להפעלה מחדש:* {reason or 'בלי סיבה'}\n"
              "הגשר לא מופעל מחדש בלי פקודה ממך. להפעלה מחדש שלח */הפעל מחדש*.")
     except Exception as e:
         log("restart held notice failed", e)
@@ -10521,7 +10552,7 @@ def failover_step(st, peer_st, now, fc, name, snap_at=None):
 
 
 def _fo_say(fc, text):
-    _ctx.chat = fc["group"]
+    _ctx.chat = CFG.get("log_group") or fc["group"]  # owner 21.11: the bridge's own state goes to the bridge-log group
     try:
         reply(text)
     finally:
@@ -11532,7 +11563,7 @@ def handover_request_check():
     out = handover_cmd(arg)
     log("handover request", arg, "->", out[:160])
     try:
-        send(PRIMARY, CFG["reply_prefix"] + italic("🔀 מסירה מתוכננת (סבב הפעלה מחדש): " + out))
+        send(system_chat(), CFG["reply_prefix"] + italic("🔀 מסירה מתוכננת (סבב הפעלה מחדש): " + out))
     except Exception as e:
         log("handover request: report failed", e)
 
@@ -14409,6 +14440,7 @@ def scheduler():
                          (CFG.get("signin_check_time", "09:30"), "signin_check", signin_check),
                          (CFG.get("day_sync_time", "23:15"), "day_sync", day_sync),
                          (CFG.get("auto_release_time", "23:30"), "auto_release", auto_release),
+                         (CFG.get("nas_backup_check_time", "08:05"), "nas_backup_check", nas_backup_check),
                          (CFG.get("auto_update_time", "23:50"), "auto_update", auto_update),
                          (CFG.get("monthly_jobs_time", "02:00"), "monthly_jobs", monthly_jobs),
                          (CFG.get("health_report_time", "08:00"), "weekly_health", weekly_health),

@@ -981,3 +981,32 @@ def test_the_agent_never_restarts_into_code_that_does_not_load(agent, monkeypatc
     mod.RESTART_REQ.set()
     mod.restart_now("test")
     assert not mod.RESTART_REQ.is_set() and "השומר עצר" in sent[-1] and "SyntaxError" in sent[-1]
+
+
+def test_system_messages_go_to_the_bridge_log_group_only(agent, monkeypatch):
+    """Owner 21.11 20:45: every system message goes to the bridge-log group; the other groups get the conversation."""
+    agent = agent[0]
+    sent = []
+    monkeypatch.setattr(agent, "send", lambda chat, text, **k: sent.append(chat) or True)
+    monkeypatch.setitem(agent.CFG, "log_group", "log@g.us")
+    monkeypatch.setattr(agent, "load_groups", lambda: {"a@g.us": {}, "b@g.us": {}})
+    agent.broadcast_system_notice("🔧 הגשר הופעל מחדש לבד")
+    assert sent == ["log@g.us"] and agent.system_chat() == "log@g.us"
+    monkeypatch.setitem(agent.CFG, "log_group", "")
+    sent.clear()
+    agent.broadcast_system_notice("x")
+    assert sorted(sent) == ["a@g.us", "b@g.us"], "without a log group, as before"
+
+
+def test_a_missing_or_failed_nas_backup_is_told(agent, monkeypatch, tmp_path):
+    agent = agent[0]
+    said = []
+    monkeypatch.setattr(agent, "broadcast_system_notice", lambda t: said.append(t))
+    monkeypatch.setattr(agent, "HERE", str(tmp_path))
+    agent.nas_backup_check()
+    assert "לא רץ" in said[-1]
+    import json as _j
+    (tmp_path / "nas_backup_status.json").write_text(_j.dumps({"at": agent.dt.datetime.now().isoformat(), "ok": True}), encoding="utf-8")
+    said.clear()
+    agent.nas_backup_check()
+    assert said == []
