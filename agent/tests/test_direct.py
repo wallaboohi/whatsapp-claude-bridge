@@ -153,7 +153,8 @@ def test_a_whole_exchange_contents_then_a_tool_then_the_answer(provider, box):
     assert "the answer is 42" in state["seen"][2]["messages"][-1]["content"]
     assert state["headers"][0]["Authorization"] == "Bearer KEY" and "yb-bridge" in state["headers"][0]["User-Agent"]
     prov = box / "agent" / "providers" / "gemini"
-    assert len((prov / "requests.log").read_text(encoding="utf-8").splitlines()) == 4
+    log = (prov / "requests.log").read_text(encoding="utf-8").splitlines()
+    assert sum('"status"' in l for l in log) == 4 and '"parts_chars"' in log[0], "4 requests, and what the first was made of"
     assert len((prov / "tools.log").read_text(encoding="utf-8").splitlines()) == 2 and seen_tools == ["read_file"], "the same call twice runs once"
 
 

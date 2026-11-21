@@ -476,6 +476,19 @@ def _post(name, p, key, body, timeout):
     raise DirectError(0, "no answer")
 
 
+def probe(name, p, key, model, text, max_tokens=200, timeout=90):
+    """One plain request straight to the provider (the switch checks): (answered, raw error text). Owner 21.11: these went through the
+    translator in Anthropic's format even after the conversations moved to the bridge itself."""
+    field = (p.get("upstream") or {}).get("max_tokens_field") or "max_tokens"
+    try:
+        out = _post(name, p, key, {"model": model, "messages": [{"role": "user", "content": text}], field: max_tokens}, timeout)
+    except DirectError as e:
+        return False, f"HTTP {e.code} " + e.raw[:300] if e.code else e.raw[:300]
+    m = ((out.get("choices") or [{}])[0].get("message")) or {}
+    ok = bool((m.get("content") or m.get("reasoning_content") or m.get("reasoning") or "").strip())
+    return ok, "" if ok else "the answer had no content"
+
+
 def run(name, p, key, model, system_text, user_text, on_tool=None, timeout=600, mcp=None):
     """The whole exchange with one provider: the request, every tool round, the final answer. {"text", "in", "out", "tools"}."""
     msgs = [{"role": "system", "content": connection_text(name) + "\n\n" + (system_text or "")}, {"role": "user", "content": user_text}]
@@ -483,6 +496,9 @@ def run(name, p, key, model, system_text, user_text, on_tool=None, timeout=600, 
     tin = tout = 0
     used, seen = [], {}
     end = time.time() + (timeout or 600)
+    _append(os.path.join(provider_dir(name), "requests.log"), {"at": _now(), "parts_chars": {
+        "connection": len(connection_text(name)), "rules": len(system_text or ""), "conversation_and_message": len(user_text or ""),
+        "tools": len(json.dumps(META_TOOLS, ensure_ascii=False))}})
     for _ in range(MAX_ROUNDS):
         # the answer's room: Groq counts it against its 8000 tokens a minute, so it is kept modest (providers.json "max_tokens" overrides)
         body = {"model": model, "messages": msgs, "tools": META_TOOLS, field: int(p.get("max_tokens") or 2048)}

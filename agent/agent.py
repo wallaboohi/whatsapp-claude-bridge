@@ -1647,6 +1647,10 @@ def probe_prompt(big=False):
 def _probe_http(p, big=False):
     """One real request to an API provider, through the same address and key the bridge uses; (answered, raw error text)."""
     m = p.get("model") or ""
+    if p.get("kind") == "anthropic" and p.get("upstream"):  # owner 21.11: straight to the provider, not through the translator
+        import bridge_direct as bd
+        return bd.probe(next((n for n, v in providers().items() if v is p or v == p), "probe"), p, provider_key(p) or p.get("token") or "",
+                        m, probe_prompt(big))
     h = provider_host(p, m) if (p.get("hosts") or p.get("probe") == "ollama") else None
     base = ((h or {}).get("url") or p.get("base_url") or ((p.get("hosts") or [{}])[0]).get("url") or "").rstrip("/")
     tok = p.get("token") or provider_key(p) or ""
@@ -2881,7 +2885,20 @@ def anthropic_probe(p, tok, prefer=None):
     models = list(p["models"])
     first = prefer or p.get("model") or models[0]
     why, tried = "", []
+    direct = p.get("kind") == "anthropic" and p.get("upstream")  # owner 21.11: straight to the provider, not through the translator
+    pname = next((n for n, v in providers().items() if v == p), "probe") if direct else ""
     for m in [first] + [x for x in models if x != first]:
+        if direct:
+            import bridge_direct as bd
+            ok, raw = bd.probe(pname, p, provider_key(p) or tok, m, "hi", max_tokens=16)
+            if ok:
+                return {"ok": True, "detail": f"מחובר · המפתח תקין · {len(models)} מודלים", "models": models, "working": m, "tried": tried}
+            code = int(re.search(r"HTTP (\d+)", raw).group(1)) if re.search(r"HTTP (\d+)", raw) else 0
+            why = {401: "המפתח נדחה", 403: "המפתח נדחה", 402: "אין יתרה בחשבון", 429: "הספק מגביל קצב כרגע"}.get(code, f"שגיאה {code} מהספק" if code else "לא מגיב")
+            tried.append((m, why))
+            if code in (401, 402, 403) or not code or prefer:
+                break
+            continue
         body = {"model": m, "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]}
         req = urllib.request.Request(p["base_url"].rstrip("/") + "/v1/messages", data=json.dumps(body).encode(), method="POST",
                                      headers={"x-api-key": tok, "Authorization": "Bearer " + tok, "anthropic-version": "2023-06-01",

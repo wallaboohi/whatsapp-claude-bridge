@@ -786,3 +786,20 @@ def test_a_restart_file_is_held_until_the_owner_says_restart(agent, monkeypatch)
         for f in (agent.RESTART_FILE, agent.RESTART_FILE + ".held"):
             if _os.path.exists(f):
                 _os.remove(f)
+
+
+def test_the_switch_checks_go_straight_to_the_provider_not_through_the_translator(agent, monkeypatch):
+    """Owner 21.11: after the conversations moved to the bridge itself, the two checks on a provider switch still went through the
+    translator in Anthropic's format (17:39). For a provider with an upstream both go straight to it (bridge_direct.probe)."""
+    agent = agent[0]
+    import bridge_direct as bd
+    p = {"kind": "anthropic", "upstream": {"base": "https://x/v1"}, "base_url": "http://127.0.0.1:8799/p/g", "model": "m1", "models": ["m1", "m2"], "token": "k"}
+    monkeypatch.setattr(agent, "providers", lambda: {"g": p})
+    monkeypatch.setattr(agent.urllib.request, "urlopen", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no request to the translator")))
+    calls = []
+    monkeypatch.setattr(bd, "probe", lambda name, prov, key, model, text, max_tokens=200, timeout=90: calls.append((name, model, max_tokens)) or (True, ""))
+    assert agent._probe_http(p, big=True) == (True, "") and calls[-1][0] == "g"
+    assert agent.anthropic_probe(p, "k")["ok"] and calls[-1][1] == "m1"
+    monkeypatch.setattr(bd, "probe", lambda *a, **k: (False, "HTTP 429 slow"))
+    r = agent.anthropic_probe(p, "k")
+    assert not r["ok"] and [m for m, _ in r["tried"]] == ["m1", "m2"], "a rate-limited model: the next one is tried"
