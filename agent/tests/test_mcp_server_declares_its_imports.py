@@ -23,7 +23,8 @@ def test_the_server_declares_every_third_party_package_it_imports():
 
 
 def test_the_rate_limit_is_a_real_middleware():
-    main = _read("main.py")
-    assert "RateLimitingMiddleware(" in main, "the rate limit must be a fastmcp middleware"
-    assert not re.search(r"middleware\s*=\s*\[\s*TokenBucketRateLimiter", main), \
+    # code only, not the comment that explains the old bug
+    code = "\n".join(line for line in _read("main.py").splitlines() if not line.strip().startswith("#"))
+    assert "RateLimitingMiddleware(" in code, "the rate limit must be a fastmcp middleware"
+    assert not re.search(r"middleware\s*=\s*\[\s*TokenBucketRateLimiter", code), \
         "TokenBucketRateLimiter is the internal bucket, not a middleware: the server fails on its first request"
