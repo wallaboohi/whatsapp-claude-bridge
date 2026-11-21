@@ -146,6 +146,8 @@ func main() {
 
 	fmt.Println("\n✓ Connected to WhatsApp! Type 'help' for commands.")
 
+	watchGroupNames(client, logger) // owner 21.11: the bridge itself keeps the group names right (group_names.go)
+
 	// Start REST API server
 	startRESTServer(client, messageStore, 8765)
 

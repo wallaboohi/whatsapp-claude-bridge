@@ -349,3 +349,69 @@ def test_the_dispatcher_does_not_wait_for_work_a_standby_cannot_deliver():
     i = text.index("def command_worker():")
     body = text[i:i + 2500]
     assert "handback_overdue() or lease_standby()" in body and "serve_chats(chats)" in body
+
+
+# ---- owner 21.11 02:00: the laptop renamed the groups to "LAP ..." during a hand-over; the desktop trusted its stale local database
+# ("HW ...") and never put the name back.
+
+def _name_env(mod, monkeypatch, db_name, real_name, calls):
+    chat = "120363431750792742@g.us"
+    monkeypatch.setattr(mod, "sync_group_name_enabled", True, raising=False)
+    monkeypatch.setitem(mod.CFG, "group_name_model", True)
+    monkeypatch.setattr(mod, "load_groups", lambda: {chat: {"name": "x"}, mod.PRIMARY: {"name": "4M"}})
+    monkeypatch.setattr(mod, "guest_cfg", lambda c: False)
+    monkeypatch.setattr(mod, "serves_here", lambda c: True)
+    monkeypatch.setattr(mod, "lease_standby", lambda: False)
+    monkeypatch.setattr(mod, "live_names", lambda: {chat: db_name})
+    monkeypatch.setattr(mod, "name_prefix", lambda: "HW")
+    monkeypatch.setattr(mod, "group_label", lambda model, c=None: "הייקו")
+    monkeypatch.setattr(mod, "group_name_template", lambda c: "HW {model} YB אוטומציה 4M-D")
+
+    def fake_bridge(path, body=None, timeout=180, tok=None):
+        calls.append((path, (body or {}).get("name")))
+        if path == "/group_info":
+            return {"success": True, "name": real_name}
+        return {"success": True}
+    monkeypatch.setattr(mod, "bridge", fake_bridge)
+    return chat
+
+
+def test_a_wrong_name_in_whatsapp_is_put_back_although_the_local_db_is_stale(agent, monkeypatch):
+    mod, _ = agent
+    calls = []
+    want = "HW הייקו YB אוטומציה 4M-D"
+    chat = _name_env(mod, monkeypatch, want, "LAP הייקו YB אוטומציה 4M-D", calls)  # the DB still says HW, WhatsApp says LAP
+    mod.kv_set(mod.K("name_set", chat), want)
+    mod.sync_group_name(chat, "opus")
+    assert ("/set_group", want) in calls, calls
+
+
+def test_a_correct_name_is_left_alone_and_the_check_is_cached(agent, monkeypatch):
+    mod, _ = agent
+    calls = []
+    want = "HW הייקו YB אוטומציה 4M-D"
+    chat = _name_env(mod, monkeypatch, want, want, calls)
+    mod.kv_set(mod.K("name_set", chat), want)
+    mod.sync_group_name(chat, "opus")
+    mod.sync_group_name(chat, "opus")
+    assert [c for c in calls if c[0] == "/set_group"] == [], "nothing to fix"
+    assert len([c for c in calls if c[0] == "/group_info"]) == 1, "WhatsApp is asked at most every 5 minutes per group"
+
+
+def test_a_failed_check_is_asked_again_at_the_next_sync(agent, monkeypatch):
+    mod, _ = agent
+    chat = "120363431750792742@g.us"
+    monkeypatch.setattr(mod, "bridge", lambda *a, **k: {"success": False, "error": "connecting"})
+    assert mod._verified_live_name(chat) == ""
+    assert not mod.kv_get(mod.K("name_verified_at", chat)), "no answer: not marked as verified"
+
+
+def test_the_grant_forces_every_group_to_be_verified_again(agent, monkeypatch, tmp_path):
+    mod, _ = agent
+    _lease_env(mod, monkeypatch, tmp_path)
+    (tmp_path / "send_policy.json").write_text('{"control_group": "x"}', encoding="utf-8")
+    chat = "120363431750792742@g.us"
+    monkeypatch.setattr(mod, "load_groups", lambda: {chat: {}})
+    mod.kv_set(mod.K("name_verified_at", chat), str(mod.time.time()))
+    assert mod.lease_grant("test") is True
+    assert mod.kv_get(mod.K("name_verified_at", chat)) == "0", "a bridge that was offline may have missed a rename"

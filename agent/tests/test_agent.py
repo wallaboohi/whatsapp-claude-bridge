@@ -1311,7 +1311,8 @@ def test_group_name_single_source_and_owner_rename(agent, monkeypatch):
     assert mod.name_prefix() == "LAP"
     assert mod.name_core("LP גשר אופוס דב") == "גשר דב"
     sent = []
-    monkeypatch.setattr(mod, "bridge", lambda path, body, timeout=0: sent.append(body) or {"success": True})
+    # owner 21.11: sync_group_name now also asks WhatsApp for the real name (/group_info); the test counts only the renames
+    monkeypatch.setattr(mod, "bridge", lambda path, body, timeout=0: (sent.append(body) if path == "/set_group" else None) or {"success": True})
     mod.kv_set(mod.K("name_tpl", g), "גשר {model} ויוי")  # an old template (no prefix) is upgraded
     mod.kv_set(mod.K("name_set", g), "גשר אופוס ויוי")
     mod.sync_group_name(g, "opus")
@@ -1682,7 +1683,7 @@ def test_a_name_overwritten_by_the_other_computer_is_put_back(agent, monkeypatch
     mod.CFG["group_name_model"] = True
     g = mod.PRIMARY
     sent = []
-    monkeypatch.setattr(mod, "bridge", lambda path, body=None, **k: sent.append(body) or {"success": True})
+    monkeypatch.setattr(mod, "bridge", lambda path, body=None, **k: (sent.append(body) if path == "/set_group" else None) or {"success": True})
     monkeypatch.setattr(mod, "group_label", lambda model, chat=None: "אופוס")
     mod.kv_set(mod.K("name_tpl", g), "HW {model} YB אוטומציה 4M-D")
     mod.kv_set(mod.K("name_set", g), "HW אופוס YB אוטומציה 4M-D")

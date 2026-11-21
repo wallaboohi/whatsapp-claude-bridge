@@ -6899,6 +6899,22 @@ def group_label(model, chat=None):
     return model_he(model)
 
 
+def _verified_live_name(chat, max_age=300):
+    """Owner 21.11 02:00: the group name as WhatsApp itself reports it ("/group_info"), at most every max_age seconds per group.
+    live_names() reads the bridge's local database, and that database stays stale while the bridge is disconnected: the laptop
+    renamed the groups to "LAP ..." during a hand-over (21:38), the desktop's database still said "HW ...", so it never put the name
+    back. "" = not asked now (cache) or no answer; the caller then uses the database value. verified_at is set only on an answer,
+    so a bridge that is still connecting is asked again at the next sync."""
+    last = float(kv_get(K("name_verified_at", chat)) or 0)
+    if time.time() - last < max_age:
+        return ""
+    res = bridge("/group_info", {"jid": chat}, timeout=30)
+    name = (res.get("name") or "").strip() if res.get("success") else ""
+    if name:
+        kv_set(K("name_verified_at", chat), str(time.time()))
+    return name
+
+
 def sync_group_name(chat, model, label=None, force=False):
     """Owner request 08.11: every connected WhatsApp group shows the model that talks in it ("גשר אופוס ווצאפ").
     Called when a run starts (auto = the model actually working) and every minute (a model chosen in WhatsApp or the
@@ -6920,6 +6936,7 @@ def sync_group_name(chat, model, label=None, force=False):
             if not tpl:
                 return
             live = live_names().get(chat) or ""
+            live = _verified_live_name(chat) or live  # owner 21.11: WhatsApp's own answer beats a stale local database
             # the owner renamed the group in WhatsApp: learn the new name. The name we wrote ourselves is never "the owner's"
             # (18.11: our own name learned back as a template doubled the provider words every minute)
             if live and live != kv_get(K("name_set", chat)) and name_core(live) != name_core(tpl):
@@ -10298,6 +10315,11 @@ def lease_grant(why=""):
     with open(LEASE_GRANT, "w", encoding="utf-8") as f:
         f.write(f"{socket.gethostname()} {dt.datetime.now().isoformat(timespec='seconds')} {why}\n")
     log("session lease granted:", why)
+    try:  # owner 21.11: another PC may have renamed the groups while this bridge was offline: verify every name against WhatsApp again
+        for chat in list(load_groups()):
+            kv_set(K("name_verified_at", chat), "0")
+    except Exception:
+        log("name re-verify flag failed", traceback.format_exc())
     return True
 
 
