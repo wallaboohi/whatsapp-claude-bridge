@@ -480,3 +480,25 @@ def test_a_fence_that_was_not_undone_leaves_no_backoff(agent, monkeypatch, tmp_p
     monkeypatch.setattr(mod, "chain_pass_marker", lambda h: "")
     mod.chain_backup_step(FC, "נייח", {}, _view())
     assert mod._chain_recent_unfence == {}, "no unfence happened, so no backoff is recorded"
+
+
+def test_an_interrupted_run_marker_is_closed_at_start_and_does_not_block_a_round(agent):
+    mod, _ = agent
+    mod.kv_set(mod.K("live_steps", "120363412798748056@g.us"), json.dumps({"model": "x", "started": "2026-11-21T02:22:03", "done": False, "secs": 5, "steps": []}))
+    mod.kv_set(mod.K("live_steps", "local"), json.dumps({"model": "x", "started": "2026-11-12T07:49:29", "done": True, "secs": 5, "steps": []}))
+    assert mod.close_interrupted_runs() == 1
+    d = json.loads(mod.kv_get(mod.K("live_steps", "120363412798748056@g.us")))
+    assert d["done"] is True and d["interrupted"] == "restart"
+    assert mod.close_interrupted_runs() == 0, "nothing left to close"
+
+
+def test_the_relay_state_ignores_an_old_marker_with_nothing_running():
+    import importlib.util, os, sys
+    tools = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "tools")
+    sys.path.insert(0, tools)
+    spec = importlib.util.spec_from_file_location("chain_relay_t3", os.path.join(tools, "chain_relay.py"))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    import ast
+    ast.parse(m.STATE)
+    assert "commands WHERE status = 'running'" in m.STATE and "< 180" in m.STATE, "an unfinished marker blocks only with a command running or when it is young"

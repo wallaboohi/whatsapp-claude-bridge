@@ -110,6 +110,7 @@ def test_opencode_check_does_not_ask_for_a_key(agent, monkeypatch):
 def test_switch_message_gives_reason_code_and_groups_every_ai(agent, monkeypatch):
     mod, _ = agent
     monkeypatch.setattr(mod, "provider_ready", lambda n: n not in ("opencode", "nvidia"))
+    monkeypatch.setattr(mod, "provider_key", lambda p: "test-key")  # owner 21.11: a provider with a key file but no key is "needs setup"; the test must not depend on this PC having a Gemini key
     mod.ai_state_set("gemini", True)
     mod.ai_state_set("codex", False, "quota", FAULTS["codex"][0])
     mod.ai_state_set("cloudflare", False, "rate", "HTTP 429 rate limit")

@@ -30,7 +30,7 @@ BY_NAME = {p["name"]: p for p in PCS}
 LOG = os.path.join(ROOT, "agent", "chain_relay.log")
 
 STATE = r"""
-import json, os, sqlite3, subprocess
+import datetime, json, os, sqlite3, subprocess
 R = "C:/Users/walla/whatsapp-mcp"
 out = {}
 try:
@@ -43,10 +43,18 @@ out["policy"] = os.path.exists(R + "/whatsapp-bridge/store/send_policy.json")  #
 busy = []
 try:
     db = sqlite3.connect("file:" + R + "/agent/agent.db?mode=ro", uri=True, timeout=10)
+    running = db.execute("SELECT count(*) FROM commands WHERE status = 'running'").fetchone()[0]
     for k, v in db.execute("SELECT k, v FROM kv WHERE k LIKE 'live_steps%'"):
         try:
-            if not json.loads(v).get("done"):
-                busy.append(k)
+            d = json.loads(v)
+            if not d.get("done"):
+                # owner 21.11: a marker older than 3 minutes with no command running is a run a restart interrupted, not an active run
+                try:
+                    young = (datetime.datetime.now() - datetime.datetime.fromisoformat(d.get("started"))).total_seconds() < 180
+                except (TypeError, ValueError):
+                    young = True
+                if running or young:
+                    busy.append(k)
         except ValueError:
             pass
     hb = db.execute("SELECT v FROM kv WHERE k = 'heartbeat'").fetchone()

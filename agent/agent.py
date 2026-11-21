@@ -8112,6 +8112,28 @@ def park_stalled(cid, chat, mid, src):
 _stall_probe = {"busy": set(), "at": 0.0}
 
 
+def close_interrupted_runs():
+    """Owner 21.11 02:45 (live round 5): the laptop handed the bridge over and its agent restarted in the middle of a run, so a
+    live_steps marker stayed "not done" for ever and every later restart round was refused ("an AI run is active"). At start-up no
+    run can be active yet: any unfinished marker belongs to a run the restart interrupted. Returns how many were closed."""
+    n = 0
+    try:
+        with adb() as db:
+            rows = list(db.execute("SELECT k, v FROM kv WHERE k LIKE 'live_steps%'"))
+        for k, v in rows:
+            try:
+                d = json.loads(v)
+            except ValueError:
+                continue
+            if not d.get("done"):
+                d["done"], d["interrupted"] = True, "restart"
+                kv_set(k, json.dumps(d, ensure_ascii=False))
+                n += 1
+    except Exception:
+        log("close_interrupted_runs failed", traceback.format_exc())
+    return n
+
+
 def release_stalled():
     """Stalled runs go back to the queue once their provider answers again: after its quota reset when the bridge knows it,
     else after a one-word probe (at most every 5 minutes per run)."""
@@ -13947,6 +13969,9 @@ if __name__ == "__main__":
         _manual[sys.argv[1]]()
         sys.exit()
     log("agent starting")
+    _closed = close_interrupted_runs()
+    if _closed:
+        log("interrupted runs closed after the restart:", _closed)
     try:
         _down_since = dt.datetime.fromisoformat(kv_get("heartbeat")) if kv_get("heartbeat") else None
     except ValueError:
