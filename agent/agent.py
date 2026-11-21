@@ -428,6 +428,22 @@ def missing_local_imports():
     return sorted(missing)
 
 
+KEY_RX = re.compile(r"AIza[0-9A-Za-z_\-]{30,}|gsk_[0-9A-Za-z]{30,}|nvapi-[0-9A-Za-z_\-]{30,}|sk-[0-9A-Za-z_\-]{30,}|ghp_[0-9A-Za-z]{30,}"
+                    r"|(?:api_?key|token|secret|password)\s*[=:]\s*[\"'][0-9A-Za-z_\-\.]{24,}[\"']", re.I)
+
+
+def holds_key(path):
+    """Owner 21.11: a new file whose text holds an API key / token is never committed by the daily sync (a name check missed
+    whatsapp-mcp-server/providers/*.toml on 20.11, and GitHub's secret scanning refused the 1.2.2 release)."""
+    try:
+        if not os.path.isfile(path) or os.path.getsize(path) > 2_000_000:
+            return False
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            return bool(KEY_RX.search(f.read()))
+    except OSError:
+        return False
+
+
 def day_sync_plan(changed):
     """What a set of changed paths (repo-relative, '/'-separated) requires: (run_go_tests, run_py_tests, rebuild_bridge)."""
     go = any(p.startswith("whatsapp-bridge/") and p.endswith(".go") for p in changed)
@@ -685,6 +701,7 @@ def day_sync():
                                            ".pre-failover-", ".pre-handback-", ".own-", "provider.json", "model_override.json"))
         # owner 19.11 23:25: runtime backups of personal config and stray empty files are never saved
         secretish = secretish or os.path.basename(f).startswith(("'", '"')) or (os.path.isfile(full) and os.path.getsize(full) == 0)
+        secretish = secretish or holds_key(full)  # owner 21.11: cloudflare2.toml / groq.toml went in by their names; GitHub refused
         big = os.path.isfile(full) and os.path.getsize(full) > 5 * 1024 * 1024
         (held if secretish or big or low.endswith((".db", ".db-wal", ".db-shm")) else new_ok).append(f)
     if new_ok:

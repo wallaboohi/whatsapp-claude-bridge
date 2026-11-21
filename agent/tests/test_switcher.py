@@ -1010,3 +1010,13 @@ def test_a_missing_or_failed_nas_backup_is_told(agent, monkeypatch, tmp_path):
     said.clear()
     agent.nas_backup_check()
     assert said == []
+
+
+def test_the_daily_sync_never_commits_a_file_holding_a_key(agent, tmp_path):
+    """Owner 21.11: providers/*.toml with API keys went into git by the daily sync; GitHub refused the release."""
+    agent = agent[0]
+    k = tmp_path / "groq.toml"
+    k.write_text('name = "groq"\napi_key = "' + "gsk_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7" + '"\n', encoding="utf-8")
+    plain = tmp_path / "notes.md"
+    plain.write_text("api_key = read it from secrets/groq.key\n", encoding="utf-8")
+    assert agent.holds_key(str(k)) and not agent.holds_key(str(plain))

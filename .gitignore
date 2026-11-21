@@ -100,3 +100,6 @@ agent/*.pre-*
 tools/*.local-*
 agent/nas_backup.log
 agent/nas_backup_status.json
+
+# provider definitions with API keys (owner 21.11: never in git; backed up to the NAS)
+whatsapp-mcp-server/providers/
