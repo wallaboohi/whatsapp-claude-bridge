@@ -83,11 +83,14 @@ def test_availability_command_uses_quota_free_inventory(agent, monkeypatch):
     mod, _ = agent
     monkeypatch.setattr(mod, "provider_status", lambda n: {"ok": True, "detail": "בדיקה זולה"})
     monkeypatch.setattr(mod, "provider_check", lambda *a, **k: pytest.fail("בדיקת הזמינות לא צריכה לקרוא למודל"))
+    refreshed = []
+    monkeypatch.setattr(mod, "refresh_provider_checks", lambda: refreshed.append(1))  # owner 21.11: the check of the /ספק list is kept here
     monkeypatch.setattr(mod, "engine_ready", lambda n: n == "claude")
     monkeypatch.setattr(mod, "probe_mcp_server", lambda: (True, "בדיקה תקינה"))
     monkeypatch.setattr(mod, "mcp_registration_status", lambda: {"בדיקה": True})
     report = mod.owner_command("/בדוק זמינות")
     assert "מנועים במחשב הזה" in report and "ספקים" in report and "שרת MCP" in report
+    assert refreshed == [1]
 
 
 def test_daily_engine_probe_uses_one_configured_model(agent, monkeypatch):

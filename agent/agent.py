@@ -3599,6 +3599,79 @@ def _model_words_line(ms, cap=6):
     return " ".join(f"{i + 1}) {_model_name_he(m)}" for i, m in enumerate(ms))
 
 
+CHECK_CACHE = {}  # provider name -> (time, provider_check result); "__peer__" -> (time, the other computer's /brief or None)
+CHECK_LOCK = threading.Lock()
+CHECK_STALE_SEC = 90
+CHECK_REFRESHING = threading.Event()
+
+
+def refresh_provider_checks():
+    """Owner 21.11: /ספק took 8-15 s because it ran a live check of every provider one after the other (ssh to the laptop, the desktop apps,
+    the CLIs). The checks now run side by side (4 at a time), their results are kept with the time, and the list is shown from them."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def one(k):
+        try:
+            r = provider_check(k)
+        except Exception as e:
+            r = {"ok": False, "detail": f"הבדיקה נכשלה: {str(e)[:40]}", "models": []}
+        with CHECK_LOCK:
+            CHECK_CACHE[k] = (time.time(), r)
+
+    def peer_one():
+        peer = (CFG.get("peers") or [None])[0]
+        if not peer:
+            return
+        try:
+            brief = peer_fetch(peer, timeout=8) or None
+        except Exception:
+            brief = None
+        with CHECK_LOCK:
+            CHECK_CACHE["__peer__"] = (time.time(), brief)
+
+    jobs = [lambda k=k: one(k) for k in provider_order() if k in providers()] + [peer_one]
+    with ThreadPoolExecutor(4) as ex:
+        list(ex.map(lambda f: f(), jobs))
+
+
+def refresh_checks_in_background():
+    if CHECK_REFRESHING.is_set():
+        return False
+    CHECK_REFRESHING.set()
+
+    def run():
+        try:
+            refresh_provider_checks()
+        finally:
+            CHECK_REFRESHING.clear()
+    threading.Thread(target=run, daemon=True, name="provider-checks").start()
+    return True
+
+
+def cached_check(k):
+    """The kept provider_check of k; a provider that was never checked is checked now."""
+    with CHECK_LOCK:
+        hit = CHECK_CACHE.get(k)
+    if hit:
+        return hit[1]
+    r = provider_check(k)
+    with CHECK_LOCK:
+        CHECK_CACHE[k] = (time.time(), r)
+    return r
+
+
+def checks_age_line():
+    """The first line of the /ספק list: when the availability below was last checked, and whether a new check is running."""
+    with CHECK_LOCK:
+        times = [t for k, (t, _) in CHECK_CACHE.items() if k != "__peer__"]
+    if not times:
+        return ""
+    oldest = min(times)
+    ago = int(time.time() - oldest)
+    ago_he = f"לפני {ago} שנ׳" if ago < 90 else f"לפני {ago // 60} דק׳"
+    return f"🕐 *הזמינות עודכנה לאחרונה:* {time.strftime('%H:%M:%S', time.localtime(oldest))} ({ago_he})" + (" · בודק מחדש ברקע" if CHECK_REFRESHING.is_set() else " · לבדיקה עכשיו: /בדוק זמינות")
+
+
 def _provider_row(k, cur, cm, ok=None, detail="", models=None):
     """One provider in the /ספק list: one header line (commands included), then its models, each starting with its command."""
     p = providers()[k]
@@ -3609,7 +3682,7 @@ def _provider_row(k, cur, cm, ok=None, detail="", models=None):
     elif models is not None:
         lines = _model_lines(models, provider_number(k))
     else:
-        c = provider_check(k)
+        c = cached_check(k)
         ms = [x for x in MODELS if x != "auto"] if k == "claude" else c["models"]
         lines = _model_lines(ms, provider_number(k))
         ok, detail = c["ok"], c["detail"]
@@ -3651,14 +3724,19 @@ def providers_text():
     peer = (CFG.get("peers") or [None])[0]
     peer_name = (peer or {}).get("name") or "הנייד"
     peer_brief = None
+    with CHECK_LOCK:
+        have = bool(CHECK_CACHE)
+        stale = time.time() - min([t for t, _ in CHECK_CACHE.values()] or [0]) > CHECK_STALE_SEC
+    if not have:
+        refresh_provider_checks()  # the first list after a start: all the checks side by side, once
+    elif stale:
+        refresh_checks_in_background()  # the list below is shown at once from the kept results
     if peer:
-        try:
-            peer_brief = peer_fetch(peer, timeout=8) or None
-        except Exception:
-            peer_brief = None
+        with CHECK_LOCK:
+            peer_brief = (CHECK_CACHE.get("__peer__") or (0, None))[1]
     rem = ["auto" if "auto" in allp and auto_switch_on() else ""] + [k for k in names if k != "auto" and not provider_is_local(k)]
     loc = [k for k in names if k != "auto" and provider_is_local(k)]
-    lines = ["*🔌 ספק הבינה של הגשר* (כל השיחות עוברות דרכו) · מודל של ספק: /N M"]
+    lines = [checks_age_line(), "*🔌 ספק הבינה של הגשר* (כל השיחות עוברות דרכו) · מודל של ספק: /N M"]
     lines += ["", f"*{machine_tag()}* · ☁️ *בענן*"] + [_provider_row(k, cur, cm) for k in rem if k]
     lines += ["", f"*💻 {peer_name}* · ☁️ *בענן*"] + _peer_rows(peer_brief, local=False)
     lines += ["", f"*{machine_tag()}* · 🏠 *מקומי*"] + [_provider_row(k, cur, cm) for k in loc]
@@ -7609,8 +7687,10 @@ def routing_report():
 def owner_command(text, chat=None):
     """Slash commands answered locally (no Claude run, no cost), for this conversation. Returns reply text or None."""
     if re.match(r"^/\s*(בדוק\s+זמינות|זמינות)\s*$", text.strip()):
+        refresh_provider_checks()  # owner 21.11: the availability check runs here, so that the /ספק list can be shown at once
         return engine_status_report(live=False)
     if re.match(r"^/\s*(בדוק\s+מענה|בדיקת\s+בינות|מענה)\s*$", text.strip()):  # owner 16.11: availability + a real answer from every AI
+        refresh_checks_in_background()
         return probe_report(live=True, progress=(lambda m: reply(m)) if getattr(_ctx, "chat", None) else None)
     if re.match(r"^/\s*(רמות|מורכבות|routing)\s*$", text.strip()):  # owner 17.11 07:33: what the automatic model does in every provider
         return routing_report()
@@ -13992,6 +14072,7 @@ def scheduler():
                     if CFG.get("once_jobs"):
                         slow.put(once_jobs)
                     slow.put(sync_all_group_names)
+                    slow.put(lambda: refresh_checks_in_background() if time.time() - min([t for t, _ in CHECK_CACHE.values()] or [0]) > CHECK_STALE_SEC else None)  # owner 21.11: the /ספק list is shown from kept checks
                     work.put(transcribe_backfill_check)
                 # owner 11.11: the phone's data folder once a day (tools/phone_sync.py); the phone is not always
                 # reachable or on Wi-Fi, so it is tried every hour until a full sync succeeded today

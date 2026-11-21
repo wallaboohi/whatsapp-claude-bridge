@@ -673,3 +673,28 @@ def test_the_tunnel_keeper_cannot_block_on_a_dead_tunnels_stderr_and_a_watchdog_
     assert "proc.stderr.read()" not in body, "an unbounded read blocked the bedroom's keeper for hours"
     assert "communicate(timeout=3)" in body and "_tunnel_beat[0] = time.time()" in body
     assert "def tunnel_watchdog" in text and "tunnel_watchdog," in text, "the watchdog is started with the other threads"
+
+
+def test_provider_list_is_shown_from_kept_checks_with_the_time_on_top(agent, monkeypatch):
+    agent = agent[0]
+    """Owner 21.11: /ספק took 8-15 s (a live check of every provider, one after the other). Now: the checks run side by side and are kept;
+    the list is built from them at once and opens with the time of the last check."""
+    import time as _t
+    calls = []
+    monkeypatch.setattr(agent, "provider_check", lambda name, prefer=None: calls.append(name) or {"ok": True, "detail": "x", "models": []})
+    monkeypatch.setattr(agent, "peer_fetch", lambda *a, **k: None)
+    agent.CHECK_CACHE.clear()
+    first = agent.providers_text()
+    n = len(calls)
+    assert n >= 1 and first.splitlines()[0].startswith("🕐 *הזמינות עודכנה לאחרונה:*")
+    agent.providers_text()
+    assert len(calls) == n, "the second list does not check again"
+    agent.CHECK_CACHE.update({k: (_t.time() - 500, v[1]) for k, v in agent.CHECK_CACHE.items()})
+    stale = agent.providers_text()
+    assert "לפני" in stale.splitlines()[0], "an old result is shown at once, with its age"
+    for _ in range(100):
+        if not agent.CHECK_REFRESHING.is_set():
+            break
+        _t.sleep(0.05)
+    assert len(calls) > n, "and a new check ran in the background"
+    agent.CHECK_CACHE.clear()
