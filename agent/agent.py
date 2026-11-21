@@ -8064,7 +8064,7 @@ def owner_command(text, chat=None):
         if m.group(4):
             return "פורמט: /ספק <שם> [מודל]"
         return switch_provider(hit[0], m.group(3) or hit[1], chat=cur_chat())
-    if re.match(r"^/(הפעל מחדש|אתחל|restart)\s*$", text.strip()):
+    if re.match(r"^/(הפעל מחדש|הפעלה מחדש|אתחל|restart)\s*$", text.strip()):  # owner 21.11 20:39: "/הפעלה מחדש" went to the AI as a message
         RESTART_REQ.set()
         return "🔄 מפעיל את הסוכן מחדש. אכתוב כאן כשאעלה (בערך 20 שניות)."
     m = re.match(r"^/\s*([^\s/]+)\s*$", text.strip())

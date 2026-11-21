@@ -960,3 +960,13 @@ def test_the_bridge_never_leaves_a_message_stuck_in_its_queue(agent, monkeypatch
     assert agent.live_control("g@g.us", "m9", f"/תור הסר {ids['a2']}")
     with agent.adb() as db:
         assert db.execute("SELECT status FROM commands WHERE id = ?", (ids["a2"],)).fetchone()[0] == "cancelled"
+
+
+def test_the_restart_command_has_its_common_spelling_too(agent, monkeypatch):
+    """Owner 21.11 20:39: "/הפעלה מחדש" was sent to OpenCode as a message; it answered as if it restarted, and nothing happened."""
+    agent = agent[0]
+    agent.RESTART_REQ.clear()
+    try:
+        assert "מפעיל את הסוכן מחדש" in agent.owner_command("/הפעלה מחדש", agent.PRIMARY) and agent.RESTART_REQ.is_set()
+    finally:
+        agent.RESTART_REQ.clear()
