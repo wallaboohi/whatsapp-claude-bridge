@@ -72,6 +72,8 @@ def test_handover_request_file_runs_the_command_once(agent, monkeypatch, tmp_pat
     mod.handover_request_check()
     assert calls == []
     req.write_text("סלון", encoding="utf-8")
+    import os
+    os.utime(req, (mod.time.time(), mod.time.time()))  # the release gate runs the suite with a shifted clock (FAKE_NOW): the request file must be as young as that clock says
     mod.handover_request_check()
     mod.handover_request_check()
     assert calls == ["סלון"] and not req.exists() and len(sent) == 1

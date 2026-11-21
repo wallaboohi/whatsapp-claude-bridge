@@ -128,7 +128,7 @@ def test_a_handover_the_target_holds_stays(agent, monkeypatch, tmp_path):
 
 def test_a_young_handover_is_left_alone(agent, monkeypatch, tmp_path):
     mod, _ = agent
-    at = time.strftime("%Y-%m-%dT%H:%M:%S")
+    at = mod.dt.datetime.now().isoformat(timespec="seconds")  # the module's clock (the release gate shifts it with FAKE_NOW), not the real one
     f = _env(mod, monkeypatch, tmp_path, {"to": "לפטופ", "at": at, "by": "x"})
     monkeypatch.setattr(mod, "failover_cfg", lambda: FC)
     assert mod.handover_expire({"לפטופ": {"status": "up", "data": {"lease": {"held": False}}}}) is False and f.exists()

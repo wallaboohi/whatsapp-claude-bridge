@@ -67,6 +67,7 @@ def test_a_stale_hand_over_request_is_ignored(agent, monkeypatch, tmp_path):
     mod.handover_request_check()
     assert moved == [] and not req.exists()
     req.write_text("חדר שינה", encoding="utf-8")
+    os.utime(req, (mod.time.time(), mod.time.time()))  # the release gate runs the suite with a shifted clock (FAKE_NOW): the request file must be as young as that clock says
     monkeypatch.setattr(mod, "send", lambda *a, **k: None)
     mod.handover_request_check()
     assert moved == ["חדר שינה"]
