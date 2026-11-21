@@ -484,6 +484,47 @@ def _retry_seconds(headers, body):
     return int(float(m.group(1))) if m else None
 
 
+BUSY_RETRY_SEC = 10  # owner 21.11 18:45: a 503 "high demand" passes a little later; one more try after this many seconds
+
+
+def _daily_until(raw):
+    """When a used-up DAILY quota comes back, from the provider's own words (quotaId ...PerDay / "per day" + retryDelay / "retry in");
+    None for anything else (a per-minute limit, a busy model)."""
+    if not re.search(r"(?i)PerDay|per day|requests per day|daily", raw or ""):
+        return None
+    secs = _retry_seconds({}, raw)
+    if secs is None:
+        m = re.search(r"(?i)retry in (?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?", raw or "")
+        secs = (int(m.group(1) or 0) * 3600 + int(m.group(2) or 0) * 60 + int(float(m.group(3) or 0))) if m and any(m.groups()) else None
+    return time.time() + secs if secs else None
+
+
+def _exhausted_file(name):
+    return os.path.join(provider_dir(name), "exhausted.json")
+
+
+def exhausted_until(name, model):
+    """Owner 21.11 18:45: a model whose daily quota the provider said is used up is skipped only until the time the provider gave
+    (never removed). 0 = usable."""
+    try:
+        until = float(json.load(open(_exhausted_file(name), encoding="utf-8")).get(model) or 0)
+    except (OSError, ValueError):
+        return 0
+    return until if until > time.time() else 0
+
+
+def _note_exhausted(name, model, until):
+    try:
+        d = json.load(open(_exhausted_file(name), encoding="utf-8"))
+    except (OSError, ValueError):
+        d = {}
+    d = {k: v for k, v in d.items() if float(v or 0) > time.time()}
+    d[model] = until
+    os.makedirs(os.path.dirname(_exhausted_file(name)), exist_ok=True)
+    with open(_exhausted_file(name), "w", encoding="utf-8") as f:
+        json.dump(d, f)
+
+
 def _post(name, p, key, body, timeout):
     """One request; one more only when the provider itself says when (retry-after / retryDelay up to 60 s)."""
     url = _base(p) + "/chat/completions"
@@ -505,6 +546,13 @@ def _post(name, p, key, body, timeout):
             _append(os.path.join(provider_dir(name), "requests.log"), {"at": _now(), "model": body.get("model"), "status": e.code,
                     "seconds": round(time.time() - t0, 1), "error": " ".join(raw.split())[:500]})
             wait = _retry_seconds(dict(e.headers.items()), raw) if e.code in (429, 503) else None
+            if e.code == 429:
+                until = _daily_until(raw)
+                if until:
+                    _note_exhausted(name, body.get("model"), until)
+                    raise DirectError(e.code, raw)
+            if e.code == 503 and wait is None:
+                wait = BUSY_RETRY_SEC
             if attempt == 1 and wait is not None and wait <= 60:
                 time.sleep(max(1, wait))
                 continue

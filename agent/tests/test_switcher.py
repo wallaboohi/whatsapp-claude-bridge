@@ -835,3 +835,17 @@ def test_a_failed_model_goes_once_to_the_last_model_that_answered(agent, monkeyp
     with _pt.raises(agent.ProviderDown):
         agent._run_direct("g", p, "q", "pro", agent.PRIMARY, None, 60)
     assert tried == ["pro", "flash"], "once, not more"
+
+
+def test_a_model_whose_daily_quota_is_out_is_skipped_until_its_reset(agent, monkeypatch):
+    agent = agent[0]
+    import bridge_direct as bd
+    p = {"kind": "anthropic", "upstream": {"base": "https://x/v1"}, "model": "lite", "short": "G"}
+    monkeypatch.setattr(agent, "providers", lambda: {"g": p})
+    monkeypatch.setattr(agent, "live_valid_model", lambda n, m, force=False: m)
+    monkeypatch.setattr(agent, "group_prompt", lambda chat: "")
+    monkeypatch.setattr(bd, "exhausted_until", lambda name, model: 9e9 if model == "pro3" else 0)
+    agent.kv_set("last_good_model:g", "lite")
+    tried = []
+    monkeypatch.setattr(bd, "run", lambda name, prov, key, model, *a, **k: tried.append(model) or {"text": "ok", "in": 1, "out": 1, "tools": []})
+    assert agent._run_direct("g", p, "q", "pro3", agent.PRIMARY, None, 60)["model"] == "lite" and tried == ["lite"], "no request to the used-up model"

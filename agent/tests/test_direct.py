@@ -188,3 +188,29 @@ def test_the_rules_go_as_a_table_of_contents_and_a_rule_is_read_when_needed(prov
     system = state["seen"][0]["messages"][0]["content"]
     assert "כל תשובה בעברית" in system and "1. שמות, לא מספרים" in system and "לא כותבים מספר טלפון" not in system
     assert "לא כותבים מספר טלפון" in state["seen"][1]["messages"][-1]["content"], "the rule in full when asked"
+
+
+def test_a_busy_model_is_asked_once_more_after_ten_seconds(provider, monkeypatch):
+    """Owner 21.11 18:45: three 503 "high demand" on flash-lite passed when the owner sent again; the bridge asks once more itself."""
+    p, state = provider
+    waits = []
+    monkeypatch.setattr(bd.time, "sleep", lambda s: waits.append(s))
+    state["replies"] = [(503, {"error": {"message": "This model is currently experiencing high demand"}}, {}), (200, _answer("ok"), {})]
+    assert bd.run("gemini", p, "", "m1", "", "hi", mcp=FakeMcp())["text"] == "ok" and waits == [bd.BUSY_RETRY_SEC]
+
+
+def test_a_used_up_daily_quota_is_skipped_until_the_providers_own_reset(provider, box, monkeypatch):
+    """Owner 21.11 18:45: gemini-3-flash 429 "requests per day, limit 20" four times; the model is never removed, only skipped until
+    the time Google gave, and no second request is spent on it."""
+    p, state = provider
+    raw = {"error": {"code": 429, "message": "Quota exceeded for metric: generate_content_free_tier_requests, limit: 20, model: gemini-3-flash, "
+                     "description: Generate content requests per day limit exceeded", "details": [{"retryDelay": "3600s"}]}}
+    state["replies"] = [(429, raw, {})]
+    with pytest.raises(bd.DirectError):
+        bd.run("gemini", p, "", "m3", "", "hi", mcp=FakeMcp())
+    assert len(state["seen"]) == 1 and 3500 < bd.exhausted_until("gemini", "m3") - __import__("time").time() <= 3600
+    assert bd.exhausted_until("gemini", "m1") == 0
+    state["replies"] = [(429, {"error": {"message": "Rate limit: tokens per minute"}}, {})]
+    with pytest.raises(bd.DirectError):
+        bd.run("gemini", p, "", "m1", "", "hi", mcp=FakeMcp())
+    assert bd.exhausted_until("gemini", "m1") == 0, "a per-minute limit is not a daily quota"
