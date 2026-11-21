@@ -433,15 +433,30 @@ KEY_RX = re.compile(r"AIza[0-9A-Za-z_\-]{30,}|gsk_[0-9A-Za-z]{30,}|nvapi-[0-9A-Z
 
 
 def holds_key(path):
-    """Owner 21.11: a new file whose text holds an API key / token is never committed by the daily sync (a name check missed
-    whatsapp-mcp-server/providers/*.toml on 20.11, and GitHub's secret scanning refused the 1.2.2 release)."""
+    """Owner 21.11: a new file whose text holds an API key / token or personal data is never committed by the daily sync (a name
+    check missed whatsapp-mcp-server/providers/*.toml on 20.11, and GitHub's secret scanning refused the 1.2.2 release)."""
     try:
         if not os.path.isfile(path) or os.path.getsize(path) > 2_000_000:
             return False
         with open(path, encoding="utf-8", errors="ignore") as f:
-            return bool(KEY_RX.search(f.read()))
+            text = f.read()
     except OSError:
         return False
+    # owner 21.11 23:20: the same personal marks the release refuses (tools/release.py) — the sync had committed a group's rules
+    # file with the home path in it; a release would have stopped on it
+    return bool(KEY_RX.search(text)) or any(m in text for m in personal_marks())
+
+
+def personal_marks():
+    """The home path (both slash forms), the owner's numbers and the control group: what never goes into git."""
+    home = os.path.expanduser("~")
+    marks = [home, home.replace("\\", "/"), CFG.get("claude_group") or ""]
+    try:
+        pol = json.load(open(os.path.join(ROOT, "whatsapp-bridge", "store", "send_policy.json"), encoding="utf-8"))
+        marks += [str(o).split("@")[0] for o in pol.get("owner") or []]
+    except (OSError, ValueError):
+        pass
+    return [m for m in marks if len(m) > 6]
 
 
 def day_sync_plan(changed):

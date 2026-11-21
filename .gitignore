@@ -103,3 +103,8 @@ agent/nas_backup_status.json
 
 # provider definitions with API keys (owner 21.11: never in git; backed up to the NAS)
 whatsapp-mcp-server/providers/
+
+# the bridge's live state, not code (owner 21.11: the daily sync had committed them; group rules hold personal data)
+agent/providers/_rules/
+agent/providers/*/exhausted.json
+outbox/

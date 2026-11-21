@@ -206,9 +206,18 @@ def test_the_hand_over_carries_the_policy_and_never_overwrites_the_receivers(age
     assert "holder" in mod._session_handback_payload("")["send_policy"]
     store = tmp_path / "target"
     store.mkdir()
+    # owner 21.11 (v1.2.3's GitHub build): the script asks tasklist whether a bridge runs on this PC — here one always does, on
+    # GitHub never. "waiting" makes it the same path on both, and the session is a real (empty) database it can copy aside.
+    (store / "lease_status").write_text("waiting", encoding="utf-8")
+    import sqlite3
+    empty = tmp_path / "empty.db"
+    con = sqlite3.connect(empty)
+    con.execute("CREATE TABLE t (x)")
+    con.commit()
+    con.close()
     C = {"store": str(store).replace("\\", "/"), "session": "", "mode": "host", "send_policy": '{"control_group": "holder"}', "agent_db": ""}
     import base64
-    C["session"] = base64.b64encode(b"x").decode()
+    C["session"] = base64.b64encode(empty.read_bytes()).decode()
     run = lambda: exec(compile(mod.SESSION_HANDBACK, "hb", "exec"), {"C": dict(C)})
     run()
     assert "holder" in (store / "send_policy.json").read_text(encoding="utf-8")
@@ -1020,3 +1029,13 @@ def test_the_daily_sync_never_commits_a_file_holding_a_key(agent, tmp_path):
     plain = tmp_path / "notes.md"
     plain.write_text("api_key = read it from secrets/groq.key\n", encoding="utf-8")
     assert agent.holds_key(str(k)) and not agent.holds_key(str(plain))
+
+
+def test_the_daily_sync_never_commits_personal_data(agent, tmp_path):
+    """Owner 21.11 23:20: a group's rules file with the home path went into git by the daily sync."""
+    agent = agent[0]
+    f = tmp_path / "rules.md"
+    f.write_text("read " + agent.os.path.expanduser("~").replace("\\", "/") + "/ppe-tracker/MAP.md first\n", encoding="utf-8")
+    assert agent.holds_key(str(f))
+    f.write_text("just rules\n", encoding="utf-8")
+    assert not agent.holds_key(str(f))
