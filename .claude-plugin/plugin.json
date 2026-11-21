@@ -1,7 +1,7 @@
 {
   "name": "whatsapp-bridge",
   "displayName": "YB AI Bridge for WhatsApp",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "WhatsApp for Claude: read, search and manage your personal WhatsApp from Claude Code, and chat with Claude from WhatsApp. Hardened whatsmeow bridge with drafts-first sending, anti-ban pacing, voice-note transcription, polls, media backup and a desktop dashboard (Windows).",
   "author": {
     "name": "WallaBoohi",
