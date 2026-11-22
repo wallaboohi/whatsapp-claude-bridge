@@ -552,5 +552,28 @@
   "cost": "חינם",
   "where": "remote",
   "keyless": true
+ },
+ "gonka": {
+  "label": "Gonka Broker · חינמי (6 בקשות לדקה)",
+  "short": "Gonka",
+  "kind": "anthropic",
+  "base_url": "http://127.0.0.1:8799/p/gonka",
+  "key_file": "gonka.key",
+  "model": "zai-org/GLM-5.3-Flash",
+  "models": [
+   "zai-org/GLM-5.3-Flash",
+   "deepseek-ai/DeepSeek-V4-Flash-0731",
+   "MiniMaxAI/MiniMax-M2.7"
+  ],
+  "upstream": {
+   "base": "https://proxy.gonkabroker.com/v1"
+  },
+  "aliases": [
+   "gonka",
+   "גונקה"
+  ],
+  "how": "Gonka Broker (docs.gonkabroker.com): מפתח gnk-prx- מ-app.gonkabroker.com/api-keys, נשמר ב-secrets/gonka.key. המסלול החינמי: 6 בקשות לדקה (לפי הודעת השגיאה שלהם, 22.11).",
+  "cost": "חינם",
+  "where": "remote"
  }
 }
