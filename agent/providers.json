@@ -605,5 +605,31 @@
   "how": "Kilo Gateway (docs.openclaw.ai/providers/kilocode): מפתח מ-kilo.ai, נשמר ב-secrets/kilo.key. 17 מודלים חינמיים מתוך 470 (22.11); kilo-auto/free בוחר מודל חינמי בעצמו.",
   "cost": "חינם",
   "where": "remote"
+ },
+ "aionlabs": {
+  "label": "AionLabs · מודלי Aion",
+  "short": "AionLabs",
+  "kind": "anthropic",
+  "base_url": "http://127.0.0.1:8799/p/aionlabs",
+  "key_file": "aionlabs.key",
+  "model": "aion-labs/aion-3.5-mini",
+  "models": [
+   "aion-labs/aion-3.5-mini",
+   "aion-labs/aion-3.5",
+   "aion-labs/aion-3.0",
+   "aion-labs/aion-3.0-mini",
+   "aion-labs/aion-2.0"
+  ],
+  "upstream": {
+   "base": "https://api.aionlabs.ai/v1"
+  },
+  "aliases": [
+   "aion",
+   "aionlabs",
+   "איון"
+  ],
+  "how": "AionLabs (aionlabs.ai/docs/quickstart): מפתח alv2_ מ-aionlabs.ai/app/api-keys, נשמר ב-secrets/aionlabs.key. 22.11: כל 5 המודלים ענו; לא נבדק אם זה חינמי קבוע או קרדיט הרשמה.",
+  "cost": "חינם (לא אומת)",
+  "where": "remote"
  }
 }
