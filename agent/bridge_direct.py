@@ -515,7 +515,9 @@ def keys_for(p, token=""):
                 continue
             if k and k not in out:
                 out.append(k)
-    if token and token not in out:
+    # owner 22.11: "local-proxy" is the old translator's placeholder, never a key — it came last after the real keys, was refused, and
+    # the owner saw "key refused" instead of "quota used up". A key written in the provider's settings is used only without key files.
+    if token and token != "local-proxy" and not out:
         out.append(token)
     return out or [""]
 

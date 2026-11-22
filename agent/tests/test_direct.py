@@ -250,3 +250,15 @@ def test_cloudflare_daily_allocation_moves_to_the_next_account(tmp_path, monkeyp
     monkeypatch.setattr(bd, "ROOT", str(tmp_path))
     p = {"upstream": {"base": "https://x/accounts/{account_id}/ai/v1", "account_file": "cf.account"}}
     assert bd._base(p).endswith("/AAA/ai/v1") and bd._base(p, 1).endswith("/BBB/ai/v1") and bd._base(p, 2).endswith("/AAA/ai/v1")
+
+
+def test_the_translator_placeholder_is_never_a_key(tmp_path, monkeypatch):
+    """Owner 22.11: "local-proxy" came last after the real keys and was refused: "key refused" instead of "quota used up"."""
+    import bridge_direct as bd
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "secrets" / "g.key").write_text("K1", encoding="utf-8")
+    (tmp_path / "secrets" / "g.key2").write_text("K2", encoding="utf-8")
+    monkeypatch.setattr(bd, "ROOT", str(tmp_path))
+    assert bd.keys_for({"key_file": "g.key"}, "local-proxy") == ["K1", "K2"]
+    assert bd.keys_for({"key_file": "none.key"}, "real-token") == ["real-token"], "a written key only without key files"
+    assert bd.keys_for({}, "local-proxy") == [""]
