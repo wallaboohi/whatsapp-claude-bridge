@@ -1972,7 +1972,14 @@ def _probe_model(name, p, model, timeout=120):
         return False, round(time.time() - t0, 1), f"408 timed out: no answer within {timeout} seconds"
     except Exception as e:
         return False, round(time.time() - t0, 1), str(e)
-    return True, round(time.time() - t0, 1), ""
+    secs = round(time.time() - t0, 1)
+    # owner 22.11: a real answer in a check counts as "answered lately" — Gonka, Kilo and AionLabs answered every check and were still
+    # hidden from /ספק, which lists only providers with a recorded answer
+    try:
+        ai_state_set(name, True, "", seconds=secs, model=model, src="probe")
+    except Exception:
+        log("probe answer not recorded", name, traceback.format_exc()[-200:])
+    return True, secs, ""
 
 
 def model_answer_matrix(timeout=120):
