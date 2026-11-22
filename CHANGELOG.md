@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.2.4 — 2026-11-22
+- Daily sync YB-PC-HW 2026-11-22: 4 new files
+- A provider that answers a check counts as answered; the phone helper plan (owner 22.11)
+- A provider can be switched off and keep its number; LM Studio switched off (owner 22.11)
+- The translator placeholder 'local-proxy' is never a key (owner 22.11)
+- OpenRouter through the bridge's own path: all 6 account keys in turn (owner 22.11)
+- AionLabs as a provider (owner 22.11)
+- Kilo Gateway as a free provider (owner 22.11)
+- Gonka Broker as a free provider (owner 22.11)
+- OWNER-SPEC: what was done 22.11 00:00-01:35
+- Providers not really connected moved out of the bridge (owner 22.11)
+- OVHcloud AI Endpoints as a free provider, keyless for now (owner 22.11)
+- Auto picks only models that answer (owner 22.11)
+- Cloudflare: a daily allocation used up moves to the next account; each key its own account number (owner 22.11)
+- Test: the provider check once a day (owner 22.11)
+- The daily provider check once a day, 06:00 (owner 22.11: the 18:00 run removed)
+- A silent usage meter never blocks entering a provider; the meter is read only on entering; the 80% push is cancelled (owner 22.11)
+- GitHub release once a week, Sunday 04:00 (owner 22.11); INDEX.md out of git (the agent rewrites it at every start)
+- Auto-update: a failure is never undone by itself and is told in the bridge-log group (owner 22.11)
+- TrueNAS: clean code every 12 hours kept 30 days, ONE full image updated in place every 7 days (owner 22.11)
+- release.py: one test run, and the tag only after GitHub's build of the code passed (owner 21.11 23:50)
+
 ## 1.2.3 — 2026-11-21
 - תיקון לבנייה של 1.2.2 ב-GitHub: שתי בדיקות משכו בטעות את תיקיית הקוד האמיתית מה-hub
 - כלי השחרור בודק לפני התג: מפתחות בקומיטים שעוד לא עלו, והרצת בדיקות בלי hub ו-NAS כמו בשרת של GitHub
