@@ -526,7 +526,9 @@
   ],
   "cost": "מקומי",
   "where": "local",
-  "how": "מודלים מקומיים ב-LM Studio (רץ בפורט 1234 או דרך lms server start)."
+  "how": "מודלים מקומיים ב-LM Studio (רץ בפורט 1234 או דרך lms server start).",
+  "disabled": true,
+  "disabled_why": "טוען מודל של 6GB ותוקע את המחשב (22.11)"
  },
  "ovhcloud": {
   "label": "OVHcloud AI Endpoints · חינמי (בלי מפתח)",

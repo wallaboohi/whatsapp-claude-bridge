@@ -1653,7 +1653,7 @@ def remote_claude_account(p):
 def provider_ready(name):
     """Cheap readiness (no network): not cooling down, a key is saved where one is needed, the subscription's limit is not on."""
     p = providers().get(name) or {}
-    if not p or provider_cooled(name):
+    if not p or provider_cooled(name) or p.get("disabled"):  # owner 22.11: a provider switched off keeps its number, gets nothing
         return False
     if p.get("kind") == "claude":
         return limit_raw() is None and not meter_full()
@@ -1942,6 +1942,8 @@ def daily_engine_probe():
 
 def _probe_model(name, p, model, timeout=120):
     """Owner 16.11: a real one-word answer from one model of one provider, through the bridge's own path; (answered, seconds, raw)."""
+    if p.get("disabled"):  # owner 22.11: the daily check sends nothing to a provider switched off (LM Studio filled the memory)
+        return False, 0.0, "כבוי זמנית"
     p2 = dict(p, model=model)
     t0 = time.time()
     try:
@@ -3002,6 +3004,8 @@ def provider_check(name, prefer=None):
     p = providers().get(name)
     if not p:
         return {"ok": False, "detail": "ספק לא מוכר", "models": []}
+    if p.get("disabled"):  # owner 22.11: LM Studio loaded a 6 GB model and the PC ran out of memory — off until the owner turns it on
+        return {"ok": False, "detail": "כבוי זמנית: " + str(p.get("disabled_why") or "לפי הוראת יקיר"), "models": []}
     if p["kind"] == "auto":  # no network: which rungs of the ladder are ready now
         cost = {"claude": "מנוי", "ollama": "מקומי"}
         rows = [f"{'✅' if provider_ready(n) else '⚪'} {providers()[n].get('short') or n} ({providers()[n].get('cost') or cost.get(n, '')})" for n in auto_ladder()]
@@ -5748,6 +5752,8 @@ def _run_direct(name, p, prompt, model, chat, on_stage, timeout):
     how to reach its tools), the bridge rules, the last 10 messages and this message; the provider reaches every bridge tool through
     bridge_tools / bridge_call and keeps its own tools with save_tool. Returns a Claude-shaped result like the CLI runs."""
     import bridge_direct as bd
+    if p.get("disabled"):  # owner 22.11: not one request to a provider switched off (the daily check included)
+        raise ProviderDown(name, "disabled", 60, raw="כבוי זמנית")
     m = live_valid_model(name, model or last_good_model(name, p))
     probe = getattr(_ctx, "probe", False)
     keys = bd.keys_for(p, p.get("token") or "")  # owner 21.11: every account of the provider, one after the other
