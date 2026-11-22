@@ -575,5 +575,35 @@
   "how": "Gonka Broker (docs.gonkabroker.com): מפתח gnk-prx- מ-app.gonkabroker.com/api-keys, נשמר ב-secrets/gonka.key. המסלול החינמי: 6 בקשות לדקה (לפי הודעת השגיאה שלהם, 22.11).",
   "cost": "חינם",
   "where": "remote"
+ },
+ "kilo": {
+  "label": "Kilo Gateway · מודלים חינמיים",
+  "short": "Kilo",
+  "kind": "anthropic",
+  "base_url": "http://127.0.0.1:8799/p/kilo",
+  "key_file": "kilo.key",
+  "model": "kilo-auto/free",
+  "models": [
+   "kilo-auto/free",
+   "nvidia/nemotron-3-ultra-550b-a55b:free",
+   "nvidia/nemotron-3.5-super-vl:free",
+   "nvidia/nemotron-3.5-lightning:free",
+   "baidu/ernie-5.5-flash-preview:free",
+   "recursive/flint-v1.0:free",
+   "inclusionai/ling-3.2-flash:free",
+   "reflection/beam-free",
+   "openrouter/free"
+  ],
+  "upstream": {
+   "base": "https://api.kilo.ai/api/gateway"
+  },
+  "aliases": [
+   "kilo",
+   "kilocode",
+   "קילו"
+  ],
+  "how": "Kilo Gateway (docs.openclaw.ai/providers/kilocode): מפתח מ-kilo.ai, נשמר ב-secrets/kilo.key. 17 מודלים חינמיים מתוך 470 (22.11); kilo-auto/free בוחר מודל חינמי בעצמו.",
+  "cost": "חינם",
+  "where": "remote"
  }
 }
